@@ -1,6 +1,6 @@
 """Command line entry point.
 
-Eight verbs, and the shape of a Phase 1 session is meant to be obvious from
+Ten verbs, and the shape of a Phase 1 session is meant to be obvious from
 them: `demo` proves the pipeline works with no scan at all, `ingest` turns your
 export -- or a video of the room -- into a twin, `inspect` tells you whether to
 trust it, `view` lets you look at it, `measure` checks it against a tape
@@ -8,6 +8,10 @@ measure, `export` gets the geometry back out, `fixtures` lists the synthetic
 rooms the accuracy claims are tested against, and `studio` puts a drop target in
 front of `ingest` for when the input is a video and the audience is a person
 rather than a shell.
+
+The last two are Phase 2 and are the point of the whole exercise: `scout`
+surveys a twin the way a location manager would survey the room, and `move`
+walks a camera through it and reports where the shot breaks.
 """
 
 from __future__ import annotations
@@ -185,6 +189,38 @@ def _build_parser() -> argparse.ArgumentParser:
     dm.add_argument("--view", action="store_true")
     dm.set_defaults(func=cmd_demo)
 
+    sc = sub.add_parser(
+        "scout",
+        help="survey a twin as a location: space, camera, grip and sound",
+    )
+    sc.add_argument("twin", type=Path)
+    sc.add_argument("--json", action="store_true", help="machine-readable output")
+    sc.add_argument("--cell", type=float, default=0.10, help="floor raster size in m")
+    sc.set_defaults(func=cmd_scout)
+
+    mv = sub.add_parser(
+        "move",
+        help="simulate a camera move through a twin and report where it breaks",
+    )
+    mv.add_argument("twin", type=Path)
+    mv.add_argument("--from", dest="start", required=True, metavar="X,Y,Z",
+                    help="where the camera starts")
+    mv.add_argument("--to", dest="end", required=True, metavar="X,Y,Z",
+                    help="where the camera ends")
+    mv.add_argument("--subject", metavar="X,Y,Z",
+                    help="where the actor stands (feet); omit for a move with no subject")
+    mv.add_argument("--subject-to", metavar="X,Y,Z",
+                    help="where the actor walks to, if they move")
+    mv.add_argument("--height", type=float, default=1.75, help="actor's height in m")
+    mv.add_argument("--lens", type=float, default=32.0, help="focal length in mm")
+    mv.add_argument("--stop", type=float, default=2.8, help="aperture, f/T number")
+    mv.add_argument("--sensor", default="super35", help="sensor format key")
+    mv.add_argument("--gear", help="equipment key the camera rides on, e.g. super-peewee")
+    mv.add_argument("--track", action="store_true",
+                    help="check the floor is level enough to lay dolly track")
+    mv.add_argument("--json", action="store_true")
+    mv.set_defaults(func=cmd_move)
+
     st = sub.add_parser(
         "studio",
         help="a local page you can drop a video onto and watch it reconstruct",
@@ -264,6 +300,93 @@ def cmd_ingest(args) -> int:
     if args.view:
         _view(twin, None, open_browser=True)
     return 0 if twin.qa.verdict != "fail" else 2
+
+
+def cmd_scout(args) -> int:
+    from .film import report as reportmod
+    from .types import Twin
+
+    twin = Twin.load(args.twin)
+    built = reportmod.build(twin, cell=args.cell)
+    if args.json:
+        print(json.dumps(built.to_dict(), indent=2, default=_jsonable))
+    else:
+        print(reportmod.render_text(built))
+    return 0
+
+
+def cmd_move(args) -> int:
+    from .film import equipment as equipmod
+    from .film import moves as movesmod
+    from .film import space as spacemod
+    from .types import Twin
+
+    twin = Twin.load(args.twin)
+    maps = spacemod.floor_maps(twin)
+    occ = spacemod.occupancy(twin)
+
+    subject_path = None
+    if args.subject:
+        first = _xyz(args.subject)
+        subject_path = (
+            np.stack([first, _xyz(args.subject_to)]) if args.subject_to else first[None, :]
+        )
+
+    gear = equipmod.get(args.gear) if args.gear else None
+    result = movesmod.simulate(
+        maps,
+        occ,
+        movesmod.straight(_xyz(args.start), _xyz(args.end)),
+        name="move",
+        subject_path=subject_path,
+        subject_height_m=args.height,
+        focal_mm=args.lens,
+        aperture_f=args.stop,
+        sensor=args.sensor,
+        gear=gear,
+        on_track=args.track,
+    )
+
+    if args.json:
+        print(json.dumps(result.summary(), indent=2, default=_jsonable))
+        return 0 if result.feasible else 2
+
+    print(_move_text(result, args))
+    return 0 if result.feasible else 2
+
+
+def _move_text(result, args) -> str:
+    from .film import optics as opticsmod
+
+    s = result.summary()
+    lines = [
+        f"MOVE  {s['length_m']} m on a {args.lens:g} mm"
+        + (f", riding a {args.gear}" if args.gear else ""),
+        f"  verdict: {'WORKS' if s['feasible'] else 'DOES NOT WORK'}",
+    ]
+    if s["shot_range"]:
+        lines.append(f"  framing: {s['shot_range']}   subject {s['distance_m'][0]}"
+                     f"-{s['distance_m'][1]} m away")
+    if s["track_level_range_m"] is not None:
+        lines.append(f"  floor under the run varies by "
+                     f"{s['track_level_range_m'] * 1000:.0f} mm")
+    if not s["feasible"]:
+        lines.append(f"  breaks {s['fails_at_m']} m into the move:")
+        for p in s["problems"]:
+            lines.append(f"    - {p}")
+    for note in s["notes"]:
+        lines.append(f"  note: {note}")
+
+    lines.append("")
+    lines.append("  beat      dist   framing              in frame  sightline  clearance")
+    step = max(1, len(result.beats) // 8)
+    for b in result.beats[::step]:
+        lines.append(
+            f"  {b.t * result.length_m:5.2f} m  {b.distance_m:5.2f}  {b.shot:<20s} "
+            f"{'yes' if b.subject_in_frame else 'NO ':<9s} "
+            f"{'clear' if b.clear_sightline else 'BLOCKED':<10s} {b.clearance_m:.2f} m"
+        )
+    return "\n".join(lines)
 
 
 def cmd_studio(args) -> int:
