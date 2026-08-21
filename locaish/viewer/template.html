@@ -1,0 +1,1588 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__LOCAISH_TITLE__ — Locaish twin</title>
+<style>
+/* ------------------------------------------------------------------ *
+ * Instrument, not brochure. One accent, no gradients, no glow, and a
+ * monospace face wherever a number appears so digits line up in columns
+ * and a changing readout does not reflow.
+ * ------------------------------------------------------------------ */
+:root {
+  --bg: #0b0c0d;
+  --panel: #131517;
+  --panel-2: #191c1f;
+  --line: #24282c;
+  --ink: #d8dbdf;
+  --ink-dim: #8b929a;
+  --ink-faint: #5d646b;
+  --accent: #56b4e9;
+  --pass: #009e73;
+  --warn: #e69f00;
+  --fail: #d55e00;
+  --info: #8b929a;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font: 13px/1.5 var(--sans);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+canvas#gl { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+canvas#gl.measuring { cursor: crosshair; }
+
+/* label layer: projected 3D annotations, pointer-transparent */
+#labels { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+.lbl {
+  position: absolute; left: 0; top: 0;
+  transform: translate(-50%, -50%);
+  font: 11px/1.2 var(--mono);
+  color: var(--ink);
+  background: rgba(11,12,13,0.82);
+  border: 1px solid var(--line);
+  padding: 2px 5px;
+  white-space: nowrap;
+  border-radius: 2px;
+}
+.lbl.dim { color: var(--ink-faint); background: rgba(11,12,13,0.6); border-color: transparent; padding: 0 3px; }
+.lbl.accent { color: var(--accent); border-color: var(--accent); }
+.lbl.hidden { display: none; }
+
+/* toolbar */
+#toolbar {
+  position: fixed; top: 12px; left: 12px; z-index: 5;
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+  background: rgba(19,21,23,0.92);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 6px;
+}
+#toolbar .sep { width: 1px; height: 20px; background: var(--line); margin: 0 2px; }
+button.tool {
+  font: 11px/1 var(--sans); letter-spacing: .04em; text-transform: uppercase;
+  color: var(--ink-dim); background: transparent;
+  border: 1px solid transparent; border-radius: 2px;
+  padding: 6px 8px; cursor: pointer;
+}
+button.tool:hover { color: var(--ink); background: var(--panel-2); }
+button.tool[aria-pressed="true"] { color: var(--bg); background: var(--accent); border-color: var(--accent); }
+button.tool .k { color: inherit; opacity: .55; margin-left: 5px; font-family: var(--mono); }
+
+/* side panel */
+#panel {
+  position: fixed; top: 12px; right: 12px; bottom: 12px; width: 330px; z-index: 5;
+  background: rgba(19,21,23,0.94);
+  border: 1px solid var(--line); border-radius: 3px;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+#panel.collapsed { display: none; }
+#panel header {
+  padding: 12px 14px 10px; border-bottom: 1px solid var(--line);
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 8px;
+}
+#panel header h1 { font-size: 14px; font-weight: 600; margin: 0 0 2px; letter-spacing: .01em; word-break: break-word; }
+#panel header .sub { font: 10px/1.4 var(--mono); color: var(--ink-faint); }
+#panel .body { overflow-y: auto; padding: 0 0 16px; }
+#panel .body::-webkit-scrollbar { width: 8px; }
+#panel .body::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+
+section.blk { border-bottom: 1px solid var(--line); padding: 11px 14px 13px; }
+section.blk:last-child { border-bottom: 0; }
+section.blk > h2 {
+  font: 10px/1 var(--sans); letter-spacing: .12em; text-transform: uppercase;
+  color: var(--ink-faint); margin: 0 0 9px; font-weight: 600;
+}
+dl.kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; margin: 0; }
+dl.kv dt { color: var(--ink-dim); font-size: 12px; }
+dl.kv dd { margin: 0; font-family: var(--mono); font-size: 12px; text-align: right; }
+dl.kv dd.na { color: var(--ink-faint); }
+
+table.rows { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+table.rows th {
+  text-align: left; font-weight: 500; color: var(--ink-faint);
+  font-size: 10px; letter-spacing: .06em; text-transform: uppercase;
+  padding: 0 6px 4px 0; border-bottom: 1px solid var(--line);
+}
+table.rows td { padding: 4px 6px 4px 0; border-bottom: 1px solid rgba(36,40,44,0.5); vertical-align: top; }
+table.rows td.num { font-family: var(--mono); text-align: right; padding-right: 0; }
+table.rows tr:last-child td { border-bottom: 0; }
+.swatch { display: inline-block; width: 8px; height: 8px; border-radius: 1px; margin-right: 6px; vertical-align: baseline; }
+
+.verdict {
+  font: 10px/1 var(--sans); letter-spacing: .1em; text-transform: uppercase; font-weight: 600;
+  border: 1px solid currentColor; border-radius: 2px; padding: 4px 7px; white-space: nowrap;
+}
+.v-pass { color: var(--pass); }
+.v-warn { color: var(--warn); }
+.v-fail { color: var(--fail); }
+.v-unknown, .v-info { color: var(--ink-faint); }
+
+ul.checks { list-style: none; margin: 0; padding: 0; }
+ul.checks li { display: flex; gap: 8px; padding: 5px 0; border-bottom: 1px solid rgba(36,40,44,0.5); }
+ul.checks li:last-child { border-bottom: 0; }
+ul.checks .dot { flex: 0 0 6px; width: 6px; height: 6px; border-radius: 50%; margin-top: 6px; background: currentColor; }
+ul.checks .txt { flex: 1 1 auto; min-width: 0; }
+ul.checks .nm { font-family: var(--mono); font-size: 11px; color: var(--ink); }
+ul.checks .msg { color: var(--ink-dim); font-size: 11.5px; }
+.empty { color: var(--ink-faint); font-size: 12px; font-style: italic; }
+
+label.slider { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--ink-dim); }
+label.slider input { flex: 1 1 auto; accent-color: var(--accent); }
+label.slider .val { font-family: var(--mono); color: var(--ink); min-width: 34px; text-align: right; }
+
+/* readout + legend */
+#readout {
+  position: fixed; left: 12px; bottom: 12px; z-index: 5;
+  background: rgba(19,21,23,0.94); border: 1px solid var(--line); border-radius: 3px;
+  padding: 9px 11px; font: 11px/1.5 var(--mono); color: var(--ink-dim);
+  max-width: 380px;
+}
+#readout .big { font-size: 17px; color: var(--accent); letter-spacing: .01em; }
+#readout .hint { color: var(--ink-faint); }
+#legend {
+  position: fixed; right: 12px; bottom: 12px; z-index: 4;
+  background: rgba(19,21,23,0.86); border: 1px solid var(--line); border-radius: 3px;
+  padding: 8px 10px; font: 10.5px/1.7 var(--mono); color: var(--ink-faint);
+  display: grid; grid-template-columns: auto auto; gap: 0 10px;
+}
+#legend.shifted { right: 356px; }
+#legend b { color: var(--ink-dim); font-weight: 500; }
+#fallback {
+  position: fixed; inset: 0; display: none; place-items: center; padding: 40px;
+  text-align: center; color: var(--ink-dim); font-size: 14px; line-height: 1.7;
+}
+@media (max-width: 820px) {
+  #panel { width: auto; left: 12px; top: auto; height: 45%; }
+  #legend { display: none; }
+}
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<div id="labels"></div>
+
+<div id="toolbar">
+  <button class="tool" id="btn-points" aria-pressed="false">Points<span class="k">1</span></button>
+  <button class="tool" id="btn-mesh" aria-pressed="false">Mesh<span class="k">2</span></button>
+  <button class="tool" id="btn-both" aria-pressed="true">Both<span class="k">3</span></button>
+  <span class="sep"></span>
+  <button class="tool" id="btn-grid" aria-pressed="true">Grid<span class="k">G</span></button>
+  <button class="tool" id="btn-planes" aria-pressed="false">Planes<span class="k">P</span></button>
+  <button class="tool" id="btn-openings" aria-pressed="true">Openings<span class="k">O</span></button>
+  <button class="tool" id="btn-bounds" aria-pressed="false">Capture<span class="k">B</span></button>
+  <button class="tool" id="btn-extents" aria-pressed="true">Extents<span class="k">E</span></button>
+  <span class="sep"></span>
+  <button class="tool" id="btn-measure" aria-pressed="false">Measure<span class="k">M</span></button>
+  <button class="tool" id="btn-frame">Frame<span class="k">F</span></button>
+  <button class="tool" id="btn-panel" aria-pressed="true">Panel<span class="k">H</span></button>
+</div>
+
+<aside id="panel">
+  <header>
+    <div>
+      <h1 id="twin-name">—</h1>
+      <div class="sub" id="twin-sub">—</div>
+    </div>
+    <span class="verdict v-unknown" id="verdict-pill">unknown</span>
+  </header>
+  <div class="body" id="panel-body"></div>
+</aside>
+
+<div id="readout"><span class="hint">Drag to orbit · right-drag or shift-drag to pan · scroll to zoom · WASD/QE to fly</span></div>
+
+<div id="legend">
+  <b>1/2/3</b><span>points / mesh / both</span>
+  <b>G</b><span>ground grid</span>
+  <b>P O B E</b><span>planes openings capture extents</span>
+  <b>M</b><span>measure two points</span>
+  <b>R</b><span>reset camera</span>
+  <b>F</b><span>frame geometry</span>
+  <b>H</b><span>hide panel</span>
+</div>
+
+<div id="fallback"></div>
+
+<script>
+"use strict";
+/* =====================================================================
+ * Locaish twin viewer. Hand-written WebGL2 because the page has to open
+ * from file:// with no network: no three.js, no CDN, no import map.
+ * Everything below reads from PAYLOAD; nothing about the room is baked
+ * into this file.
+ * ===================================================================== */
+
+const PAYLOAD = __LOCAISH_PAYLOAD__;
+
+/* ------------------------------------------------------------------ *
+ * decoding
+ * ------------------------------------------------------------------ */
+
+// One atob plus one byte copy, then reinterpret. Decoding a million
+// positions this way costs a few milliseconds; the same data as a JSON
+// array of numbers would be tens of megabytes of text and a full parse.
+function b64Bytes(s) {
+  if (!s) return new Uint8Array(0);
+  const bin = atob(s);
+  const n = bin.length;
+  const out = new Uint8Array(n);
+  for (let i = 0; i < n; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+function b64F32(s) { const b = b64Bytes(s); return new Float32Array(b.buffer, 0, b.byteLength >> 2); }
+function b64U32(s) { const b = b64Bytes(s); return new Uint32Array(b.buffer, 0, b.byteLength >> 2); }
+function b64U8(s) { return b64Bytes(s); }
+
+/* ------------------------------------------------------------------ *
+ * small numeric helpers
+ * ------------------------------------------------------------------ */
+
+const clamp = (v, a, b) => v < a ? a : (v > b ? b : v);
+// Rounding before formatting kills the "-0.000" that toFixed happily prints
+// for a tiny negative: a measurement of zero must not look like a sign error.
+function fmt(v, d) {
+  if (v === null || v === undefined || !isFinite(v)) return "—";
+  const p = d === undefined ? 3 : d;
+  const r = +v.toFixed(p);
+  return (r === 0 ? 0 : r).toFixed(p);
+}
+function hexToRgb(hex) {
+  const h = (hex || "#888888").replace("#", "");
+  return [parseInt(h.slice(0, 2), 16) / 255, parseInt(h.slice(2, 4), 16) / 255, parseInt(h.slice(4, 6), 16) / 255];
+}
+function sub3(a, b) { return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]; }
+function len3(a) { return Math.hypot(a[0], a[1], a[2]); }
+function norm3(a) { const l = len3(a) || 1; return [a[0] / l, a[1] / l, a[2] / l]; }
+function cross3(a, b) {
+  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+}
+
+/* Column-major 4x4, laid out exactly as GLSL expects so the uniform can
+ * be uploaded without a transpose (WebGL2 rejects transpose=true). */
+function mat4() { const m = new Float32Array(16); m[0] = m[5] = m[10] = m[15] = 1; return m; }
+function mat4Perspective(out, fovy, aspect, near, far) {
+  const f = 1 / Math.tan(fovy / 2), nf = 1 / (near - far);
+  out.fill(0);
+  out[0] = f / aspect; out[5] = f; out[10] = (far + near) * nf; out[11] = -1; out[14] = 2 * far * near * nf;
+  return out;
+}
+function mat4LookAt(out, eye, center, up) {
+  const z = norm3(sub3(eye, center));
+  let x = cross3(up, z);
+  if (len3(x) < 1e-8) x = cross3([0, 1, 0], z);     // gimbal guard: looking straight down
+  x = norm3(x);
+  const y = cross3(z, x);
+  out[0] = x[0]; out[1] = y[0]; out[2] = z[0]; out[3] = 0;
+  out[4] = x[1]; out[5] = y[1]; out[6] = z[1]; out[7] = 0;
+  out[8] = x[2]; out[9] = y[2]; out[10] = z[2]; out[11] = 0;
+  out[12] = -(x[0] * eye[0] + x[1] * eye[1] + x[2] * eye[2]);
+  out[13] = -(y[0] * eye[0] + y[1] * eye[1] + y[2] * eye[2]);
+  out[14] = -(z[0] * eye[0] + z[1] * eye[1] + z[2] * eye[2]);
+  out[15] = 1;
+  return out;
+}
+function mat4Mul(out, a, b) {           // out = a * b
+  for (let c = 0; c < 4; c++) {
+    const b0 = b[c * 4], b1 = b[c * 4 + 1], b2 = b[c * 4 + 2], b3 = b[c * 4 + 3];
+    out[c * 4] = a[0] * b0 + a[4] * b1 + a[8] * b2 + a[12] * b3;
+    out[c * 4 + 1] = a[1] * b0 + a[5] * b1 + a[9] * b2 + a[13] * b3;
+    out[c * 4 + 2] = a[2] * b0 + a[6] * b1 + a[10] * b2 + a[14] * b3;
+    out[c * 4 + 3] = a[3] * b0 + a[7] * b1 + a[11] * b2 + a[15] * b3;
+  }
+  return out;
+}
+function mat4Invert(out, m) {
+  const a00 = m[0], a01 = m[1], a02 = m[2], a03 = m[3],
+        a10 = m[4], a11 = m[5], a12 = m[6], a13 = m[7],
+        a20 = m[8], a21 = m[9], a22 = m[10], a23 = m[11],
+        a30 = m[12], a31 = m[13], a32 = m[14], a33 = m[15];
+  const b00 = a00 * a11 - a01 * a10, b01 = a00 * a12 - a02 * a10, b02 = a00 * a13 - a03 * a10,
+        b03 = a01 * a12 - a02 * a11, b04 = a01 * a13 - a03 * a11, b05 = a02 * a13 - a03 * a12,
+        b06 = a20 * a31 - a21 * a30, b07 = a20 * a32 - a22 * a30, b08 = a20 * a33 - a23 * a30,
+        b09 = a21 * a32 - a22 * a31, b10 = a21 * a33 - a23 * a31, b11 = a22 * a33 - a23 * a32;
+  let det = b00 * b11 - b01 * b10 + b02 * b09 + b03 * b08 - b04 * b07 + b05 * b06;
+  if (!det) return null;
+  det = 1 / det;
+  out[0] = (a11 * b11 - a12 * b10 + a13 * b09) * det;
+  out[1] = (a02 * b10 - a01 * b11 - a03 * b09) * det;
+  out[2] = (a31 * b05 - a32 * b04 + a33 * b03) * det;
+  out[3] = (a22 * b04 - a21 * b05 - a23 * b03) * det;
+  out[4] = (a12 * b08 - a10 * b11 - a13 * b07) * det;
+  out[5] = (a00 * b11 - a02 * b08 + a03 * b07) * det;
+  out[6] = (a32 * b02 - a30 * b05 - a33 * b01) * det;
+  out[7] = (a20 * b05 - a22 * b02 + a23 * b01) * det;
+  out[8] = (a10 * b10 - a11 * b08 + a13 * b06) * det;
+  out[9] = (a01 * b08 - a00 * b10 - a03 * b06) * det;
+  out[10] = (a30 * b04 - a31 * b02 + a33 * b00) * det;
+  out[11] = (a21 * b02 - a20 * b04 - a23 * b00) * det;
+  out[12] = (a11 * b07 - a10 * b09 - a12 * b06) * det;
+  out[13] = (a00 * b09 - a01 * b07 + a02 * b06) * det;
+  out[14] = (a31 * b01 - a30 * b03 - a32 * b00) * det;
+  out[15] = (a20 * b03 - a21 * b01 + a22 * b00) * det;
+  return out;
+}
+function unproject(invVP, ndcX, ndcY, ndcZ) {
+  const x = invVP[0] * ndcX + invVP[4] * ndcY + invVP[8] * ndcZ + invVP[12];
+  const y = invVP[1] * ndcX + invVP[5] * ndcY + invVP[9] * ndcZ + invVP[13];
+  const z = invVP[2] * ndcX + invVP[6] * ndcY + invVP[10] * ndcZ + invVP[14];
+  const w = invVP[3] * ndcX + invVP[7] * ndcY + invVP[11] * ndcZ + invVP[15];
+  const iw = w === 0 ? 1 : 1 / w;
+  return [x * iw, y * iw, z * iw];
+}
+
+/* ------------------------------------------------------------------ *
+ * GL bootstrap
+ * ------------------------------------------------------------------ */
+
+const canvas = document.getElementById("gl");
+const gl = canvas.getContext("webgl2", { antialias: true, alpha: false, depth: true, powerPreference: "high-performance" });
+if (!gl) {
+  const fb = document.getElementById("fallback");
+  fb.style.display = "grid";
+  fb.textContent = "This viewer needs WebGL2. The twin data is still embedded in this file.";
+  canvas.style.display = "none";
+}
+
+function compile(type, src) {
+  const sh = gl.createShader(type);
+  gl.shaderSource(sh, src);
+  gl.compileShader(sh);
+  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh) + "\n" + src);
+  return sh;
+}
+function program(vsSrc, fsSrc, uniformNames) {
+  const p = gl.createProgram();
+  gl.attachShader(p, compile(gl.VERTEX_SHADER, vsSrc));
+  gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fsSrc));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  const u = {};
+  for (const n of uniformNames) u[n] = gl.getUniformLocation(p, n);
+  return { prog: p, u };
+}
+
+const VS_POINTS = `#version 300 es
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec3 aRgb;
+uniform mat4 uVP;
+uniform float uPointScale;   // pixels * metres at unit depth
+uniform float uMaxSize;
+uniform int uColorMode;      // 0 = per-point rgb, 1 = height ramp
+uniform vec2 uZSpan;
+out vec3 vCol;
+void main() {
+  vec4 clip = uVP * vec4(aPos, 1.0);
+  gl_Position = clip;
+  // Attenuate with clip.w, i.e. with view depth, so a splat covers a
+  // constant patch of the world: up close the cloud closes into a
+  // surface, far away it thins instead of turning into a solid block.
+  gl_PointSize = clamp(uPointScale / max(clip.w, 1e-3), 1.0, uMaxSize);
+  if (uColorMode == 0) {
+    vCol = aRgb;
+  } else {
+    float t = clamp((aPos.z - uZSpan.x) / max(uZSpan.y - uZSpan.x, 1e-3), 0.0, 1.0);
+    vCol = mix(vec3(0.24, 0.29, 0.34), vec3(0.84, 0.86, 0.89), t);
+  }
+}`;
+
+const FS_POINTS = `#version 300 es
+precision highp float;
+in vec3 vCol;
+out vec4 fragColor;
+void main() {
+  // Round splats: square ones read as confetti at any size above 3 px.
+  vec2 d = gl_PointCoord * 2.0 - 1.0;
+  if (dot(d, d) > 1.0) discard;
+  fragColor = vec4(vCol, 1.0);
+}`;
+
+const VS_MESH = `#version 300 es
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec3 aNrm;
+layout(location = 2) in vec3 aRgb;
+layout(location = 3) in vec2 aUv;
+uniform mat4 uVP;
+out vec3 vNrm;
+out vec3 vPos;
+out vec3 vRgb;
+out vec2 vUv;
+void main() {
+  gl_Position = uVP * vec4(aPos, 1.0);
+  vNrm = aNrm; vPos = aPos; vRgb = aRgb; vUv = aUv;
+}`;
+
+const FS_MESH = `#version 300 es
+precision highp float;
+in vec3 vNrm;
+in vec3 vPos;
+in vec3 vRgb;
+in vec2 vUv;
+uniform vec3 uEye;
+uniform int uUseVertexColor;
+uniform int uUseTexture;
+uniform sampler2D uTex;
+uniform float uAlpha;
+out vec4 fragColor;
+void main() {
+  vec3 base = vec3(0.55, 0.57, 0.60);
+  if (uUseVertexColor == 1) base = vRgb;
+  if (uUseTexture == 1) base = texture(uTex, vUv).rgb;
+  vec3 n = normalize(vNrm);
+  vec3 v = normalize(uEye - vPos);
+  // abs() on the headlight term: a room shell is wound with its normals
+  // pointing inwards, so a signed lambert would render the whole interior
+  // black the moment the camera is inside the room.
+  float lam = abs(dot(n, v));
+  float shade = 0.32 + 0.68 * lam;
+  fragColor = vec4(base * shade, uAlpha);
+}`;
+
+const VS_FLAT = `#version 300 es
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec4 aCol;
+uniform mat4 uVP;
+uniform vec3 uEye;
+// Metres to pull a vertex towards the eye before projecting it. A crosshair
+// drawn on the surface it was picked from otherwise fights with the splats of
+// that very surface and comes out stippled; pulling it forward by about one
+// splat radius makes it win against the surface it belongs to while still
+// losing to anything genuinely in front, which is the only distinction the
+// depth test is there to make.
+uniform float uPull;
+out vec4 vCol;
+void main() {
+  vec3 d = uEye - aPos;
+  float l = length(d);
+  vec3 p = (uPull > 0.0 && l > 1e-6) ? aPos + d * (min(uPull, l * 0.5) / l) : aPos;
+  gl_Position = uVP * vec4(p, 1.0);
+  vCol = aCol;
+}`;
+
+const FS_FLAT = `#version 300 es
+precision highp float;
+in vec4 vCol;
+uniform float uAlphaMul;
+out vec4 fragColor;
+void main() { fragColor = vec4(vCol.rgb, vCol.a * uAlphaMul); }`;
+
+// Declared up here rather than beside the render loop because the camera
+// setup and the toggle handlers below both mark the scene dirty during
+// module initialisation, and a `let` referenced before its declaration is
+// a TDZ error rather than an undefined.
+let needsRedraw = true;
+const view = mat4(), proj = mat4(), viewProj = mat4();
+let meshTexReady = false;
+
+let progPoints = null, progMesh = null, progFlat = null;
+if (gl) {
+  progPoints = program(VS_POINTS, FS_POINTS, ["uVP", "uPointScale", "uMaxSize", "uColorMode", "uZSpan"]);
+  progMesh = program(VS_MESH, FS_MESH, ["uVP", "uEye", "uUseVertexColor", "uUseTexture", "uTex", "uAlpha"]);
+  progFlat = program(VS_FLAT, FS_FLAT, ["uVP", "uAlphaMul", "uEye", "uPull"]);
+  gl.enable(gl.DEPTH_TEST);
+  gl.depthFunc(gl.LEQUAL);
+  gl.clearColor(0.043, 0.047, 0.051, 1.0);
+}
+
+/* ------------------------------------------------------------------ *
+ * buffers
+ * ------------------------------------------------------------------ */
+
+// A "flat batch" is a set of coloured lines or triangles built on the CPU
+// from the payload's polygons. Positions are vec3, colours vec4 with the
+// alpha baked in, so a batch can mix opaque outlines and translucent fill
+// without extra draw state.
+function flatBatch(mode) {
+  const vao = gl.createVertexArray();
+  const pb = gl.createBuffer(), cb = gl.createBuffer();
+  gl.bindVertexArray(vao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, pb);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, cb);
+  gl.enableVertexAttribArray(1);
+  gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 0, 0);
+  gl.bindVertexArray(null);
+  return {
+    vao, mode, count: 0,
+    upload(pos, col) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, pb);
+      gl.bufferData(gl.ARRAY_BUFFER, pos, gl.STATIC_DRAW);
+      gl.bindBuffer(gl.ARRAY_BUFFER, cb);
+      gl.bufferData(gl.ARRAY_BUFFER, col, gl.STATIC_DRAW);
+      this.count = pos.length / 3;
+    }
+  };
+}
+
+// Accumulator so batch construction reads like geometry rather than like
+// index arithmetic.
+function Builder() { return { p: [], c: [] }; }
+function push(b, pt, col) { b.p.push(pt[0], pt[1], pt[2]); b.c.push(col[0], col[1], col[2], col[3]); }
+function seg(b, a, z, col, col2) { push(b, a, col); push(b, z, col2 || col); }
+function tri(b, a, z, c, col) { push(b, a, col); push(b, z, col); push(b, c, col); }
+function commit(batch, b) { batch.upload(new Float32Array(b.p), new Float32Array(b.c)); }
+
+/* ------------------------------------------------------------------ *
+ * scene assembly from the payload
+ * ------------------------------------------------------------------ */
+
+const P = PAYLOAD;
+const ORIGIN = P.origin || [0, 0, 0];
+const BV = P.bounds_view || [[0, 0, 0], [0, 0, 0]];
+const LO = BV[0], HI = BV[1];
+// Every span is floored: a twin with no geometry, or a degenerate one that
+// is a single plane, must not divide by zero anywhere downstream.
+const EXT = [Math.max(HI[0] - LO[0], 1e-6), Math.max(HI[1] - LO[1], 1e-6), Math.max(HI[2] - LO[2], 1e-6)];
+const HAS_GEOM = !P.empty && (P.points.count > 0 || (P.mesh && P.mesh.face_count > 0));
+const CENTER = [(LO[0] + HI[0]) / 2, (LO[1] + HI[1]) / 2, (LO[2] + HI[2]) / 2];
+const RADIUS = HAS_GEOM ? Math.max(0.5 * Math.hypot(EXT[0], EXT[1], EXT[2]), 0.5) : 3.0;
+
+const ACCENT = hexToRgb("#56b4e9");
+const TINTS = P.plane_tints || {};
+
+// The cloud's own sampling pitch, measured by the builder as the median
+// nearest-neighbour distance of the points as drawn. It is the only length on
+// this page that says how far apart the measurements really are, which makes
+// it the natural unit for both the splat size and the pick tolerance.
+const PT_SPACING = Math.max(P.points.spacing_m || 0.02, 1e-4);
+
+let ptsVAO = null, ptsCount = 0, ptsXYZ = null, ptsHasRgb = false;
+let meshVAO = null, meshIndexCount = 0, meshTex = null, meshHasRgb = false, meshHasUv = false;
+let meshPos = null, meshIdx = null;
+
+if (gl) {
+  // --- point cloud ---
+  ptsXYZ = b64F32(P.points.xyz);
+  ptsCount = P.points.count | 0;
+  ptsVAO = gl.createVertexArray();
+  gl.bindVertexArray(ptsVAO);
+  const pb = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, pb);
+  gl.bufferData(gl.ARRAY_BUFFER, ptsXYZ, gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+  if (P.points.rgb) {
+    ptsHasRgb = true;
+    const cb = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, cb);
+    gl.bufferData(gl.ARRAY_BUFFER, b64U8(P.points.rgb), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(1);
+    // normalized = true: uint8 0..255 arrives in the shader as 0..1.
+    gl.vertexAttribPointer(1, 3, gl.UNSIGNED_BYTE, true, 0, 0);
+  }
+  gl.bindVertexArray(null);
+
+  // --- mesh ---
+  if (P.mesh && P.mesh.index_count > 0) {
+    meshPos = b64F32(P.mesh.xyz);
+    meshIdx = b64U32(P.mesh.index);
+    meshIndexCount = P.mesh.index_count | 0;
+    meshVAO = gl.createVertexArray();
+    gl.bindVertexArray(meshVAO);
+    const vb = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, vb);
+    gl.bufferData(gl.ARRAY_BUFFER, meshPos, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    const nb = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, nb);
+    gl.bufferData(gl.ARRAY_BUFFER, b64F32(P.mesh.normal), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
+    if (P.mesh.rgb) {
+      meshHasRgb = true;
+      const cb = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, cb);
+      gl.bufferData(gl.ARRAY_BUFFER, b64U8(P.mesh.rgb), gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(2);
+      gl.vertexAttribPointer(2, 3, gl.UNSIGNED_BYTE, true, 0, 0);
+    }
+    if (P.mesh.uv && P.mesh.texture) {
+      meshHasUv = true;
+      const ub = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, ub);
+      gl.bufferData(gl.ARRAY_BUFFER, b64F32(P.mesh.uv), gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(3);
+      gl.vertexAttribPointer(3, 2, gl.FLOAT, false, 0, 0);
+    }
+    // The element buffer must be bound while the VAO is bound; a VAO
+    // captures ELEMENT_ARRAY_BUFFER, and forgetting that is the classic
+    // "drawElements renders nothing" bug.
+    const ib = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, meshIdx, gl.STATIC_DRAW);
+    gl.bindVertexArray(null);
+
+    if (meshHasUv) {
+      meshTex = gl.createTexture();
+      const img = new Image();
+      img.onload = () => {
+        gl.bindTexture(gl.TEXTURE_2D, meshTex);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+        gl.generateMipmap(gl.TEXTURE_2D);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+        meshTexReady = true;
+        needsRedraw = true;
+      };
+      img.onerror = () => { meshHasUv = false; };   // fall back to shaded grey
+      img.src = P.mesh.texture;
+    }
+  }
+}
+
+/* --- ground grid: the scale reference the whole claim rests on ------- */
+
+const gridLabels = [];
+let gridBatch = null;
+function buildGrid() {
+  gridBatch = flatBatch(gl.LINES);
+  const b = Builder();
+  const reach = Math.max(Math.ceil(Math.max(EXT[0], EXT[1]) / 2) + 4, 6);
+  const minor = [0.32, 0.35, 0.38, 0.55];
+  const major = [0.44, 0.48, 0.52, 0.95];
+  const axisX = [ACCENT[0], ACCENT[1], ACCENT[2], 0.7];
+  const axisY = [0.85, 0.55, 0.30, 0.7];
+  for (let i = -reach; i <= reach; i++) {
+    const isMajor = (i % 5) === 0;
+    const cx = i === 0 ? axisY : (isMajor ? major : minor);
+    const cy = i === 0 ? axisX : (isMajor ? major : minor);
+    seg(b, [i, -reach, 0], [i, reach, 0], cx);
+    seg(b, [-reach, i, 0], [reach, i, 0], cy);
+    if (isMajor && i !== 0) {
+      gridLabels.push({ p: [i, -reach, 0], text: i + " m", cls: "lbl dim", group: "grid" });
+      gridLabels.push({ p: [-reach, i, 0], text: i + " m", cls: "lbl dim", group: "grid" });
+    }
+  }
+  // One explicit 1 m square, drawn brighter: it is the legend for the whole
+  // grid, the thing a viewer holds the room up against without counting
+  // lines. It sits outside the footprint rather than at the origin, because
+  // at the origin it would be buried under the floor and its label — an HTML
+  // overlay, so never occluded — would float in the middle of the room.
+  const ux = Math.round(LO[0]), uy = Math.round(LO[1]) - 2;
+  const unit = [ACCENT[0], ACCENT[1], ACCENT[2], 0.9];
+  seg(b, [ux, uy, 0.002], [ux + 1, uy, 0.002], unit);
+  seg(b, [ux + 1, uy, 0.002], [ux + 1, uy + 1, 0.002], unit);
+  seg(b, [ux + 1, uy + 1, 0.002], [ux, uy + 1, 0.002], unit);
+  seg(b, [ux, uy + 1, 0.002], [ux, uy, 0.002], unit);
+  gridLabels.push({ p: [ux + 0.5, uy + 0.5, 0], text: "1 m", cls: "lbl accent", group: "grid" });
+  commit(gridBatch, b);
+}
+
+/* --- detected planes ------------------------------------------------ */
+
+let planeFill = null, planeEdge = null;
+function buildPlanes() {
+  planeFill = flatBatch(gl.TRIANGLES);
+  planeEdge = flatBatch(gl.LINES);
+  const bf = Builder(), be = Builder();
+  for (const pl of (P.structure.planes || [])) {
+    const poly = pl.polygon || [];
+    if (poly.length < 3) continue;
+    const rgb = hexToRgb(pl.tint || TINTS.other || "#f0e442");
+    const fill = [rgb[0], rgb[1], rgb[2], 0.13];
+    const edge = [rgb[0], rgb[1], rgb[2], 0.75];
+    for (let i = 1; i + 1 < poly.length; i++) tri(bf, poly[0], poly[i], poly[i + 1], fill);
+    for (let i = 0; i < poly.length; i++) seg(be, poly[i], poly[(i + 1) % poly.length], edge);
+  }
+  commit(planeFill, bf);
+  commit(planeEdge, be);
+}
+
+/* --- openings ------------------------------------------------------- */
+
+const openingLabels = [];
+let openingBatch = null;
+function buildOpenings() {
+  openingBatch = flatBatch(gl.LINES);
+  const b = Builder();
+  for (const op of (P.structure.openings || [])) {
+    const c = op.corners || [];
+    if (c.length !== 4) continue;
+    const isDoor = op.kind === "door";
+    const rgb = isDoor ? hexToRgb("#e69f00") : ACCENT;
+    const col = [rgb[0], rgb[1], rgb[2], 0.95];
+    for (let i = 0; i < 4; i++) seg(b, c[i], c[(i + 1) % 4], col);
+    // a short stub along the wall normal, so which side is "into the room"
+    // is legible from any angle
+    const n = op.normal || [0, 0, 1];
+    const ctr = op.center;
+    seg(b, ctr, [ctr[0] + n[0] * 0.25, ctr[1] + n[1] * 0.25, ctr[2] + n[2] * 0.25], [rgb[0], rgb[1], rgb[2], 0.45]);
+    const top = [(c[2][0] + c[3][0]) / 2, (c[2][1] + c[3][1]) / 2, (c[2][2] + c[3][2]) / 2 + 0.10];
+    openingLabels.push({
+      p: top, group: "openings", cls: "lbl",
+      text: op.kind + "  " + fmt(op.width_m, 3) + " × " + fmt(op.height_m, 3) + " m"
+    });
+  }
+  commit(openingBatch, b);
+}
+
+/* --- capture bounds and footprint ----------------------------------- */
+
+let boundsFill = null, boundsEdge = null;
+function buildBounds() {
+  boundsFill = flatBatch(gl.TRIANGLES);
+  boundsEdge = flatBatch(gl.LINES);
+  const bf = Builder(), be = Builder();
+  const cb = P.capture_bounds;
+  if (cb && cb.hull_xy && cb.hull_xy.length >= 3) {
+    const hull = cb.hull_xy;
+    const zTop = Math.max(cb.z_range[1], 0.05);
+    const rgb = hexToRgb("#0072b2");
+    const wall = [rgb[0], rgb[1], rgb[2], 0.10];
+    const line = [rgb[0], rgb[1], rgb[2], 0.55];
+    for (let i = 0; i < hull.length; i++) {
+      const a = hull[i], d = hull[(i + 1) % hull.length];
+      const a0 = [a[0], a[1], 0], a1 = [a[0], a[1], zTop];
+      const d0 = [d[0], d[1], 0], d1 = [d[0], d[1], zTop];
+      tri(bf, a0, d0, d1, wall);
+      tri(bf, a0, d1, a1, wall);
+      seg(be, a0, d0, line);
+      seg(be, a1, d1, line);
+      seg(be, a0, a1, [rgb[0], rgb[1], rgb[2], 0.25]);
+    }
+  }
+  const fp = P.structure.footprint;
+  if (fp && fp.length >= 3) {
+    const rgb = hexToRgb("#009e73");
+    const line = [rgb[0], rgb[1], rgb[2], 0.8];
+    for (let i = 0; i < fp.length; i++) {
+      const a = fp[i], d = fp[(i + 1) % fp.length];
+      seg(be, [a[0], a[1], 0.004], [d[0], d[1], 0.004], line);
+    }
+  }
+  commit(boundsFill, bf);
+  commit(boundsEdge, be);
+}
+
+/* --- bounding extents, labelled ------------------------------------- */
+
+const extentLabels = [];
+let extentBatch = null;
+function buildExtents() {
+  extentBatch = flatBatch(gl.LINES);
+  const b = Builder();
+  if (HAS_GEOM) {
+    const col = [0.72, 0.75, 0.78, 0.85];
+    const tick = [0.72, 0.75, 0.78, 0.5];
+    const pad = 0.3;
+    const y0 = LO[1] - pad, x1 = HI[0] + pad;
+    // width along X, at the near edge of the floor
+    seg(b, [LO[0], y0, 0], [HI[0], y0, 0], col);
+    seg(b, [LO[0], y0 - 0.1, 0], [LO[0], y0 + 0.1, 0], tick);
+    seg(b, [HI[0], y0 - 0.1, 0], [HI[0], y0 + 0.1, 0], tick);
+    extentLabels.push({ p: [(LO[0] + HI[0]) / 2, y0, 0], text: "X  " + fmt(EXT[0], 3) + " m", cls: "lbl", group: "extents" });
+    // depth along Y
+    seg(b, [x1, LO[1], 0], [x1, HI[1], 0], col);
+    seg(b, [x1 - 0.1, LO[1], 0], [x1 + 0.1, LO[1], 0], tick);
+    seg(b, [x1 - 0.1, HI[1], 0], [x1 + 0.1, HI[1], 0], tick);
+    extentLabels.push({ p: [x1, (LO[1] + HI[1]) / 2, 0], text: "Y  " + fmt(EXT[1], 3) + " m", cls: "lbl", group: "extents" });
+    // height along Z at the corner
+    const cx = LO[0] - pad, cy = LO[1] - pad;
+    seg(b, [cx, cy, LO[2]], [cx, cy, HI[2]], col);
+    seg(b, [cx - 0.1, cy, LO[2]], [cx + 0.1, cy, LO[2]], tick);
+    seg(b, [cx - 0.1, cy, HI[2]], [cx + 0.1, cy, HI[2]], tick);
+    extentLabels.push({ p: [cx, cy, (LO[2] + HI[2]) / 2], text: "Z  " + fmt(EXT[2], 3) + " m", cls: "lbl", group: "extents" });
+  }
+  commit(extentBatch, b);
+}
+
+/* --- measure annotation (rebuilt on every pick) ---------------------- */
+
+let measureBatch = null;
+
+if (gl) { buildGrid(); buildPlanes(); buildOpenings(); buildBounds(); buildExtents(); measureBatch = flatBatch(gl.LINES); }
+
+/* ------------------------------------------------------------------ *
+ * camera: damped orbit with fly controls
+ * ------------------------------------------------------------------ */
+
+const FOV = 50 * Math.PI / 180;
+const DEFAULT_YAW = -2.3, DEFAULT_PITCH = 0.42;
+
+const cam = {
+  yaw: DEFAULT_YAW, pitch: DEFAULT_PITCH, dist: 1, target: CENTER.slice(),
+  gYaw: DEFAULT_YAW, gPitch: DEFAULT_PITCH, gDist: 1, gTarget: CENTER.slice(),
+  eye: [0, 0, 0]
+};
+function frameGeometry(instant) {
+  // Fit the bounding sphere into the vertical field of view with a small
+  // margin. RADIUS is already floored, so an empty twin frames a sensible
+  // 3 m of empty grid rather than collapsing to distance zero.
+  const d = RADIUS / Math.sin(FOV / 2) * 0.95;
+  cam.gTarget = HAS_GEOM ? [CENTER[0], CENTER[1], CENTER[2] * 0.85] : [0, 0, 1.2];
+  cam.gDist = Math.max(d, 1.2);
+  if (instant) { cam.target = cam.gTarget.slice(); cam.dist = cam.gDist; }
+  needsRedraw = true;
+}
+function resetCamera() {
+  cam.gYaw = DEFAULT_YAW; cam.gPitch = DEFAULT_PITCH;
+  frameGeometry(false);
+}
+frameGeometry(true);
+
+function camEye() {
+  const cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
+  return [
+    cam.target[0] + cam.dist * cp * Math.cos(cam.yaw),
+    cam.target[1] + cam.dist * cp * Math.sin(cam.yaw),
+    cam.target[2] + cam.dist * sp
+  ];
+}
+function camBasis() {
+  const fwd = norm3(sub3(cam.target, camEye()));
+  const right = norm3(cross3(fwd, [0, 0, 1]));
+  const up = cross3(right, fwd);
+  return { fwd, right, up };
+}
+
+/* --- pointer --------------------------------------------------------- */
+
+const keys = new Set();
+let dragging = null, lastX = 0, lastY = 0, downX = 0, downY = 0, downT = 0, moved = 0;
+
+canvas.addEventListener("contextmenu", e => e.preventDefault());
+canvas.addEventListener("pointerdown", e => {
+  canvas.setPointerCapture(e.pointerId);
+  dragging = (e.button === 2 || e.button === 1 || e.shiftKey) ? "pan" : "orbit";
+  lastX = downX = e.clientX; lastY = downY = e.clientY; downT = performance.now(); moved = 0;
+});
+canvas.addEventListener("pointermove", e => {
+  if (!dragging) return;
+  const dx = e.clientX - lastX, dy = e.clientY - lastY;
+  lastX = e.clientX; lastY = e.clientY;
+  moved += Math.abs(dx) + Math.abs(dy);
+  if (dragging === "orbit") {
+    cam.gYaw -= dx * 0.006;
+    cam.gPitch = clamp(cam.gPitch + dy * 0.006, -1.53, 1.53);
+  } else {
+    const { right, up } = camBasis();
+    // Pan speed tracks the metres-per-pixel at the target distance, so the
+    // point under the cursor stays under the cursor at any zoom level.
+    const k = 2 * Math.tan(FOV / 2) * cam.dist / Math.max(canvas.clientHeight, 1);
+    for (let i = 0; i < 3; i++) cam.gTarget[i] += (-right[i] * dx + up[i] * dy) * k;
+  }
+  needsRedraw = true;
+});
+function endDrag(e) {
+  if (dragging && measureMode && moved < 6 && performance.now() - downT < 500) onMeasureClick(e.clientX, e.clientY);
+  dragging = null;
+}
+canvas.addEventListener("pointerup", endDrag);
+canvas.addEventListener("pointercancel", () => { dragging = null; });
+canvas.addEventListener("wheel", e => {
+  e.preventDefault();
+  cam.gDist = clamp(cam.gDist * Math.exp(clamp(e.deltaY, -240, 240) * 0.0016), 0.05, RADIUS * 200);
+  needsRedraw = true;
+}, { passive: false });
+
+/* ------------------------------------------------------------------ *
+ * picking: a CPU ray against the real geometry
+ * ------------------------------------------------------------------ */
+
+// Depth-buffer readback would need a float render target and an extension
+// that is not guaranteed; a ray query is exact, needs no extra GL state,
+// and — crucially — is checkable, because the number it returns is a
+// coordinate from the buffer we shipped and not a decoded depth value.
+function rayFromPixel(px, py, invVP, eye) {
+  const w = Math.max(canvas.clientWidth, 1), h = Math.max(canvas.clientHeight, 1);
+  const ndcX = (px / w) * 2 - 1;
+  const ndcY = 1 - (py / h) * 2;
+  const far = unproject(invVP, ndcX, ndcY, 1);
+  return { o: eye, d: norm3(sub3(far, eye)) };
+}
+
+// How far off the ray a point may sit and still count as evidence that the ray
+// crossed that surface, measured in sample pitches. `PT_SPACING` is a median
+// nearest-neighbour distance, which on a randomly sampled surface is about
+// half the pitch — the same factor the splat sizing below relies on — so a
+// pitch is 2 * PT_SPACING. A disc of radius n pitches catches pi * n^2 samples
+// on average, so n = 2 misses a surface it crossed about three times in a
+// million, and a miss is precisely what lets a pick fall through to whatever
+// is behind. n = 1 would miss one crossing in twenty-three, which measured on
+// a 14 mm cloud is most of the tunnelling this constant exists to stop.
+const PICK_PITCHES = 2.0;
+
+function pickPoints(ray) {
+  if (!ptsXYZ || ptsCount === 0) return null;
+  const ox = ray.o[0], oy = ray.o[1], oz = ray.o[2];
+  const rx = ray.d[0], ry = ray.d[1], rz = ray.d[2];
+  // The tolerance is 6 px of screen — the click slop a person expects, and it
+  // grows with depth exactly as the splats do — but it is floored at a couple
+  // of sample pitches, and that floor is the whole fix. A disc of constant
+  // angular size covers a patch of surface whose sample count falls as 1/t^2,
+  // so with the floor removed a wall 8 m away offered hundreds of candidates
+  // while the wall 1.5 m in front of it, drawn as solid splats, offered none:
+  // the pick then returned the far wall and the measure tool reported a
+  // distance to a surface the operator could not even see. Tying the floor to
+  // the cloud's own pitch makes every surface equally findable whatever its
+  // depth, which is what makes "nearest wins" mean the nearest *surface*.
+  const k = 6 * 2 * Math.tan(FOV / 2) / Math.max(canvas.clientHeight, 1);
+  const rFloor = PICK_PITCHES * 2.0 * PT_SPACING;
+  const A = ptsXYZ;
+
+  // Pass one asks only how deep the first surface is.
+  let bestT = Infinity;
+  for (let i = 0, j = 0; i < ptsCount; i++, j += 3) {
+    const dx = A[j] - ox, dy = A[j + 1] - oy, dz = A[j + 2] - oz;
+    const t = dx * rx + dy * ry + dz * rz;
+    if (t <= 0.02 || t >= bestT) continue;
+    const perp2 = dx * dx + dy * dy + dz * dz - t * t;
+    const r = Math.max(k * t, rFloor);
+    if (perp2 <= r * r) bestT = t;
+  }
+  if (!isFinite(bestT)) return null;
+
+  // Pass two asks which point on that surface the ray actually passes closest
+  // to. The two questions have to be separated: the sample with the smallest t
+  // is merely the one that pokes furthest towards the eye, which on an oblique
+  // wall is centimetres to the side of the crosshair, and the coordinate the
+  // operator reads has to be the one under the crosshair. The window is the
+  // depth a single surface can occupy — sample pitch, range noise and
+  // obliquity — plus a little proportional slack for a pick tens of metres out.
+  const window = Math.max(4 * PT_SPACING, 0.004 * bestT);
+  const tMax = bestT + window;
+  let bi = -1, bestPerp2 = Infinity, hitT = bestT;
+  for (let i = 0, j = 0; i < ptsCount; i++, j += 3) {
+    const dx = A[j] - ox, dy = A[j + 1] - oy, dz = A[j + 2] - oz;
+    const t = dx * rx + dy * ry + dz * rz;
+    if (t <= 0.02 || t > tMax) continue;
+    const perp2 = dx * dx + dy * dy + dz * dz - t * t;
+    if (perp2 >= bestPerp2) continue;
+    const r = Math.max(k * t, rFloor);
+    if (perp2 <= r * r) { bestPerp2 = perp2; bi = i; hitT = t; }
+  }
+  if (bi < 0) return null;
+  return { t: hitT, p: [A[bi * 3], A[bi * 3 + 1], A[bi * 3 + 2]], src: "point" };
+}
+
+function pickMesh(ray) {
+  if (!meshPos || !meshIdx) return null;
+  const ox = ray.o[0], oy = ray.o[1], oz = ray.o[2];
+  const dx = ray.d[0], dy = ray.d[1], dz = ray.d[2];
+  let bestT = Infinity;
+  // Moller-Trumbore, double-sided: a room shell is viewed from the inside
+  // and a back-face cull here would make every wall unclickable.
+  for (let f = 0; f < meshIndexCount; f += 3) {
+    const i0 = meshIdx[f] * 3, i1 = meshIdx[f + 1] * 3, i2 = meshIdx[f + 2] * 3;
+    const e1x = meshPos[i1] - meshPos[i0], e1y = meshPos[i1 + 1] - meshPos[i0 + 1], e1z = meshPos[i1 + 2] - meshPos[i0 + 2];
+    const e2x = meshPos[i2] - meshPos[i0], e2y = meshPos[i2 + 1] - meshPos[i0 + 1], e2z = meshPos[i2 + 2] - meshPos[i0 + 2];
+    const px = dy * e2z - dz * e2y, py = dz * e2x - dx * e2z, pz = dx * e2y - dy * e2x;
+    const det = e1x * px + e1y * py + e1z * pz;
+    if (Math.abs(det) < 1e-12) continue;
+    const inv = 1 / det;
+    const tx = ox - meshPos[i0], ty = oy - meshPos[i0 + 1], tz = oz - meshPos[i0 + 2];
+    const u = (tx * px + ty * py + tz * pz) * inv;
+    if (u < -1e-6 || u > 1 + 1e-6) continue;
+    const qx = ty * e1z - tz * e1y, qy = tz * e1x - tx * e1z, qz = tx * e1y - ty * e1x;
+    const v = (dx * qx + dy * qy + dz * qz) * inv;
+    if (v < -1e-6 || u + v > 1 + 1e-6) continue;
+    const t = (e2x * qx + e2y * qy + e2z * qz) * inv;
+    if (t > 0.02 && t < bestT) bestT = t;
+  }
+  if (!isFinite(bestT)) return null;
+  return { t: bestT, p: [ox + dx * bestT, oy + dy * bestT, oz + dz * bestT], src: "mesh" };
+}
+
+function pick(px, py) {
+  const invVP = mat4Invert(mat4(), viewProj);
+  if (!invVP) return null;
+  const ray = rayFromPixel(px, py, invVP, cam.eye);
+  let best = null;
+  if (viewMode !== "mesh") best = pickPoints(ray);
+  if (viewMode !== "points") {
+    const m = pickMesh(ray);
+    if (m && (!best || m.t < best.t)) best = m;
+  }
+  return best;
+}
+
+/* ------------------------------------------------------------------ *
+ * measure tool
+ * ------------------------------------------------------------------ */
+
+let measureMode = false;
+const measurePts = [];
+const measureLabels = [];
+
+function onMeasureClick(px, py) {
+  const rect = canvas.getBoundingClientRect();
+  const hit = pick(px - rect.left, py - rect.top);
+  if (!hit) { setReadout('<span class="hint">no surface under the cursor — aim at points or mesh</span>'); return; }
+  if (measurePts.length >= 2) measurePts.length = 0;
+  measurePts.push(hit.p);
+  rebuildMeasure();
+}
+function twinCoord(p) { return [p[0] + ORIGIN[0], p[1] + ORIGIN[1], p[2] + ORIGIN[2]]; }
+
+function rebuildMeasure() {
+  const b = Builder();
+  measureLabels.length = 0;
+  const col = [ACCENT[0], ACCENT[1], ACCENT[2], 1.0];
+  const dim = [ACCENT[0], ACCENT[1], ACCENT[2], 0.35];
+  for (const p of measurePts) {
+    const s = 0.06;
+    seg(b, [p[0] - s, p[1], p[2]], [p[0] + s, p[1], p[2]], col);
+    seg(b, [p[0], p[1] - s, p[2]], [p[0], p[1] + s, p[2]], col);
+    seg(b, [p[0], p[1], p[2] - s], [p[0], p[1], p[2] + s], col);
+  }
+  if (measurePts.length === 2) {
+    const a = measurePts[0], z = measurePts[1];
+    seg(b, a, z, col);
+    // the axis-aligned decomposition, faint: it turns one number into a
+    // check you can repeat with a tape measure along a wall
+    seg(b, a, [z[0], a[1], a[2]], dim);
+    seg(b, [z[0], a[1], a[2]], [z[0], z[1], a[2]], dim);
+    seg(b, [z[0], z[1], a[2]], z, dim);
+    const d = sub3(z, a);
+    const dist = len3(d);
+    measureLabels.push({
+      p: [(a[0] + z[0]) / 2, (a[1] + z[1]) / 2, (a[2] + z[2]) / 2],
+      text: fmt(dist, 3) + " m", cls: "lbl accent", group: "measure"
+    });
+    const ta = twinCoord(a), tz = twinCoord(z);
+    setReadout(
+      '<div class="big">' + fmt(dist, 3) + " m</div>" +
+      "<div>Δ " + fmt(d[0], 3) + ", " + fmt(d[1], 3) + ", " + fmt(d[2], 3) + " m</div>" +
+      "<div>A " + fmt(ta[0], 3) + ", " + fmt(ta[1], 3) + ", " + fmt(ta[2], 3) + "</div>" +
+      "<div>B " + fmt(tz[0], 3) + ", " + fmt(tz[1], 3) + ", " + fmt(tz[2], 3) + "</div>" +
+      '<div class="hint">twin coordinates, metres · click again to start over</div>'
+    );
+  } else if (measurePts.length === 1) {
+    const ta = twinCoord(measurePts[0]);
+    setReadout(
+      "<div>A " + fmt(ta[0], 3) + ", " + fmt(ta[1], 3) + ", " + fmt(ta[2], 3) + "</div>" +
+      '<div class="hint">click a second point</div>'
+    );
+  }
+  commit(measureBatch, b);
+  syncLabels();
+  needsRedraw = true;
+}
+function setReadout(html) { document.getElementById("readout").innerHTML = html; }
+function setMeasureMode(on) {
+  measureMode = on;
+  canvas.classList.toggle("measuring", on);
+  document.getElementById("btn-measure").setAttribute("aria-pressed", String(on));
+  if (!on) { measurePts.length = 0; rebuildMeasure(); setReadout('<span class="hint">Drag to orbit · right-drag or shift-drag to pan · scroll to zoom · WASD/QE to fly</span>'); }
+  else setReadout('<span class="hint">click two points on the geometry</span>');
+}
+
+/* ------------------------------------------------------------------ *
+ * projected labels
+ * ------------------------------------------------------------------ */
+
+const labelLayer = document.getElementById("labels");
+let liveLabels = [];
+function syncLabels() {
+  labelLayer.textContent = "";
+  liveLabels = [];
+  const groups = [];
+  if (show.grid) groups.push(gridLabels);
+  if (show.openings) groups.push(openingLabels);
+  if (show.extents) groups.push(extentLabels);
+  groups.push(measureLabels);
+  for (const g of groups) {
+    for (const l of g) {
+      const el = document.createElement("div");
+      el.className = l.cls;
+      el.textContent = l.text;
+      labelLayer.appendChild(el);
+      liveLabels.push({ p: l.p, el });
+    }
+  }
+}
+function positionLabels() {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  for (const l of liveLabels) {
+    const p = l.p;
+    const cw = viewProj[3] * p[0] + viewProj[7] * p[1] + viewProj[11] * p[2] + viewProj[15];
+    if (cw <= 1e-4) { l.el.classList.add("hidden"); continue; }
+    const cx = viewProj[0] * p[0] + viewProj[4] * p[1] + viewProj[8] * p[2] + viewProj[12];
+    const cy = viewProj[1] * p[0] + viewProj[5] * p[1] + viewProj[9] * p[2] + viewProj[13];
+    const sx = (cx / cw * 0.5 + 0.5) * w;
+    const sy = (0.5 - cy / cw * 0.5) * h;
+    if (sx < -160 || sy < -40 || sx > w + 160 || sy > h + 40) { l.el.classList.add("hidden"); continue; }
+    l.el.classList.remove("hidden");
+    l.el.style.transform = "translate(" + Math.round(sx) + "px," + Math.round(sy) + "px) translate(-50%,-50%)";
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * toggles and keyboard
+ * ------------------------------------------------------------------ */
+
+// Points by default even when a mesh exists: the cloud is the measurement
+// and the mesh is an interpretation of it, so the instrument opens on the
+// evidence. "Both" is one keypress away and is where the two get compared.
+let viewMode = (P.points.count > 0) ? "points" : "mesh";
+const show = { grid: true, planes: false, openings: true, bounds: false, extents: true, panel: true };
+let pointBoost = 1.0;
+
+function syncToolbar() {
+  document.getElementById("btn-points").setAttribute("aria-pressed", String(viewMode === "points"));
+  document.getElementById("btn-mesh").setAttribute("aria-pressed", String(viewMode === "mesh"));
+  document.getElementById("btn-both").setAttribute("aria-pressed", String(viewMode === "both"));
+  for (const k of ["grid", "planes", "openings", "bounds", "extents", "panel"]) {
+    document.getElementById("btn-" + k).setAttribute("aria-pressed", String(show[k]));
+  }
+  document.getElementById("panel").classList.toggle("collapsed", !show.panel);
+  document.getElementById("legend").classList.toggle("shifted", show.panel);
+  needsRedraw = true;
+}
+function setViewMode(m) { viewMode = m; syncToolbar(); }
+function toggle(k) { show[k] = !show[k]; syncToolbar(); syncLabels(); }
+
+document.getElementById("btn-points").onclick = () => setViewMode("points");
+document.getElementById("btn-mesh").onclick = () => setViewMode("mesh");
+document.getElementById("btn-both").onclick = () => setViewMode("both");
+for (const k of ["grid", "planes", "openings", "bounds", "extents", "panel"]) {
+  document.getElementById("btn-" + k).onclick = () => toggle(k);
+}
+document.getElementById("btn-measure").onclick = () => setMeasureMode(!measureMode);
+document.getElementById("btn-frame").onclick = () => frameGeometry(false);
+
+addEventListener("keydown", e => {
+  if (!e.key) return;
+  if (e.target && /^(input|textarea|select)$/i.test(e.target.tagName)) return;
+  const k = e.key.toLowerCase();
+  if (k === "1") setViewMode("points");
+  else if (k === "2") setViewMode("mesh");
+  else if (k === "3") setViewMode("both");
+  else if (k === "g") toggle("grid");
+  else if (k === "p") toggle("planes");
+  else if (k === "o") toggle("openings");
+  else if (k === "b") toggle("bounds");
+  else if (k === "e") toggle("extents");
+  else if (k === "h") toggle("panel");
+  else if (k === "m") setMeasureMode(!measureMode);
+  else if (k === "r") resetCamera();
+  else if (k === "f") frameGeometry(false);
+  else if (k === "escape") setMeasureMode(false);
+  else if ("wasdqe".includes(k) || k === "shift") { keys.add(k); return; }
+  else return;
+  e.preventDefault();
+});
+addEventListener("keyup", e => { if (e.key) keys.delete(e.key.toLowerCase()); });
+addEventListener("blur", () => keys.clear());
+
+/* ------------------------------------------------------------------ *
+ * side panel, built from the payload
+ * ------------------------------------------------------------------ */
+
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = text;
+  return n;
+}
+function kv(pairs) {
+  const dl = el("dl", "kv");
+  for (const [k, v] of pairs) {
+    dl.appendChild(el("dt", null, k));
+    const dd = el("dd", (v === null || v === undefined || v === "—") ? "na" : null, (v === null || v === undefined) ? "—" : String(v));
+    dl.appendChild(dd);
+  }
+  return dl;
+}
+function block(title) {
+  const s = el("section", "blk");
+  s.appendChild(el("h2", null, title));
+  return s;
+}
+
+function buildPanel() {
+  const s = P.structure, sum = P.summary || {};
+  document.getElementById("twin-name").textContent = P.name || "untitled";
+  document.getElementById("twin-sub").textContent =
+    (P.points.source_count || 0).toLocaleString() + " pts · " +
+    ((P.mesh && P.mesh.face_count) ? P.mesh.face_count.toLocaleString() + " faces · " : "") +
+    P.generated_utc;
+  const pill = document.getElementById("verdict-pill");
+  const verdict = (P.qa && P.qa.verdict) || "unknown";
+  pill.textContent = verdict;
+  pill.className = "verdict v-" + verdict;
+
+  const body = document.getElementById("panel-body");
+  body.textContent = "";
+
+  // what the builder had to throw away, first in the panel because every
+  // number below it was computed from a cloud that is missing those rows
+  const warn = P.warnings || [];
+  if (warn.length) {
+    const wb = block("Data dropped");
+    const ul = el("ul", "checks");
+    for (const w of warn) {
+      const li = el("li", "v-warn");
+      li.appendChild(el("span", "dot"));
+      const txt = el("div", "txt");
+      txt.appendChild(el("div", "msg", w));
+      li.appendChild(txt);
+      ul.appendChild(li);
+    }
+    wb.appendChild(ul);
+    body.appendChild(wb);
+  }
+
+  // dimensions
+  const dims = block("Dimensions");
+  // The reported extents come from the payload, not from the floored EXT
+  // used for camera framing: a degenerate twin should read 0.000 m here
+  // rather than the epsilon that keeps the renderer from dividing by zero.
+  const ex = P.extent_m || [0, 0, 0];
+  dims.appendChild(kv([
+    ["Extent X", fmt(ex[0], 3) + " m"],
+    ["Extent Y", fmt(ex[1], 3) + " m"],
+    ["Extent Z", fmt(ex[2], 3) + " m"],
+    ["Ceiling height", s.ceiling_height_m === null || s.ceiling_height_m === undefined ? null : fmt(s.ceiling_height_m, 3) + " m"],
+    ["Floor area", s.floor_area_m2 ? fmt(s.floor_area_m2, 2) + " m²" : null],
+    ["Floor z", fmt(s.floor_z, 3) + " m"],
+    ["Walls detected", s.wall_count],
+    ["Twin origin", ORIGIN.map(v => fmt(v, 2)).join(", ")]
+  ]));
+  body.appendChild(dims);
+
+  // display
+  const disp = block("Display");
+  const lab = el("label", "slider");
+  lab.appendChild(el("span", null, "Point size"));
+  const range = document.createElement("input");
+  range.type = "range"; range.min = "0.3"; range.max = "4"; range.step = "0.1"; range.value = "1";
+  const val = el("span", "val", "1.0×");
+  range.oninput = () => { pointBoost = parseFloat(range.value); val.textContent = pointBoost.toFixed(1) + "×"; needsRedraw = true; };
+  lab.appendChild(range); lab.appendChild(val);
+  disp.appendChild(lab);
+  const dispRows = [
+    ["Points drawn", (P.points.count || 0).toLocaleString() + (P.points.decimated ? " (decimated)" : "")],
+    ["Point spacing", fmt(P.points.spacing_m, 4) + " m"],
+    ["Colour", P.points.rgb ? "per-point RGB" : "height ramp"]
+  ];
+  // Spelt out next to the count it was subtracted from, because "points drawn"
+  // and "points in the twin" differing by a few hundred is the kind of thing
+  // an operator should be able to explain rather than discover.
+  if (P.points.dropped_nonfinite) {
+    dispRows.push(["Non-finite dropped", P.points.dropped_nonfinite.toLocaleString()]);
+  }
+  disp.appendChild(kv(dispRows));
+  body.appendChild(disp);
+
+  // openings
+  const ops = block("Openings (" + (s.openings || []).length + ")");
+  if (!(s.openings || []).length) ops.appendChild(el("div", "empty", "none detected"));
+  else {
+    const t = el("table", "rows");
+    const hr = el("tr");
+    for (const h of ["Kind", "W × H", "Sill", "Conf"]) {
+      const th = el("th", null, h);
+      if (h !== "Kind") th.style.textAlign = "right";
+      hr.appendChild(th);
+    }
+    t.appendChild(hr);
+    for (const o of s.openings) {
+      const tr = el("tr");
+      const kindCell = el("td");
+      const sw = el("span", "swatch");
+      sw.style.background = o.kind === "door" ? "#e69f00" : "#56b4e9";
+      kindCell.appendChild(sw);
+      kindCell.appendChild(document.createTextNode(o.kind));
+      tr.appendChild(kindCell);
+      tr.appendChild(el("td", "num", fmt(o.width_m, 3) + " × " + fmt(o.height_m, 3)));
+      tr.appendChild(el("td", "num", fmt(o.sill_height_m, 2)));
+      tr.appendChild(el("td", "num", fmt(o.confidence, 2)));
+      t.appendChild(tr);
+    }
+    ops.appendChild(t);
+  }
+  body.appendChild(ops);
+
+  // planes
+  const pls = block("Planes (" + (s.planes || []).length + ")");
+  if (!(s.planes || []).length) pls.appendChild(el("div", "empty", "none detected"));
+  else {
+    const counts = {};
+    for (const pl of s.planes) counts[pl.kind] = (counts[pl.kind] || 0) + 1;
+    const t = el("table", "rows");
+    const hr = el("tr");
+    for (const h of ["Kind", "Count", "Area m²", "Inliers"]) {
+      const th = el("th", null, h);
+      if (h !== "Kind") th.style.textAlign = "right";
+      hr.appendChild(th);
+    }
+    t.appendChild(hr);
+    for (const kind of Object.keys(counts)) {
+      const group = s.planes.filter(p => p.kind === kind);
+      const tr = el("tr");
+      const c = el("td");
+      const sw = el("span", "swatch");
+      sw.style.background = (P.plane_tints || {})[kind] || "#f0e442";
+      c.appendChild(sw);
+      c.appendChild(document.createTextNode(kind));
+      tr.appendChild(c);
+      tr.appendChild(el("td", "num", String(counts[kind])));
+      tr.appendChild(el("td", "num", fmt(group.reduce((a, p) => a + (p.area_m2 || 0), 0), 1)));
+      tr.appendChild(el("td", "num", group.reduce((a, p) => a + (p.inlier_count || 0), 0).toLocaleString()));
+      t.appendChild(tr);
+    }
+    pls.appendChild(t);
+  }
+  body.appendChild(pls);
+
+  // capture bounds
+  if (P.capture_bounds) {
+    const cbBlk = block("Capture bounds");
+    cbBlk.appendChild(kv([
+      ["Traversed area", fmt(P.capture_bounds.area_m2, 2) + " m²"],
+      ["Camera z range", fmt(P.capture_bounds.z_range[0], 2) + " – " + fmt(P.capture_bounds.z_range[1], 2) + " m"],
+      ["Source", P.capture_bounds.source],
+      ["Poses kept", P.capture_bounds.has_camera_positions ? "yes" : "no"]
+    ]));
+    body.appendChild(cbBlk);
+  }
+
+  // QA
+  const qa = P.qa || {};
+  const qaBlk = block("QA — " + ((qa.verdict || "unknown").toUpperCase()));
+  const checks = qa.checks || [];
+  if (!checks.length) qaBlk.appendChild(el("div", "empty", "no checks recorded"));
+  else {
+    const ul = el("ul", "checks");
+    for (const c of checks) {
+      const li = el("li", "v-" + (c.status || "info"));
+      li.appendChild(el("span", "dot"));
+      const txt = el("div", "txt");
+      const nm = el("div", "nm");
+      nm.appendChild(document.createTextNode(c.name || "check"));
+      const st = el("span");
+      st.textContent = "  " + (c.status || "");
+      st.style.opacity = "0.75";
+      nm.appendChild(st);
+      txt.appendChild(nm);
+      txt.appendChild(el("div", "msg", c.message || ""));
+      li.appendChild(txt);
+      ul.appendChild(li);
+    }
+    qaBlk.appendChild(ul);
+  }
+  const metrics = qa.metrics || {};
+  const mk = Object.keys(metrics);
+  if (mk.length) {
+    qaBlk.appendChild(el("h2", null, "Metrics")).style.marginTop = "12px";
+    qaBlk.appendChild(kv(mk.map(k => [k, metrics[k] === null ? "—" : fmt(metrics[k], 4)])));
+  }
+  body.appendChild(qaBlk);
+
+  // georeference
+  if (P.georeference) {
+    const g = P.georeference;
+    const gb = block("Georeference");
+    gb.appendChild(kv([
+      ["Latitude", fmt(g.latitude, 6)],
+      ["Longitude", fmt(g.longitude, 6)],
+      ["+X heading", fmt(g.heading_deg, 2) + "° true"],
+      ["Heading source", g.heading_source],
+      ["Elevation", fmt(g.elevation_m, 1) + " m"]
+    ]));
+    body.appendChild(gb);
+  }
+
+  // provenance
+  const prov = P.provenance || {};
+  const pk = Object.keys(prov);
+  if (pk.length) {
+    const pb = block("Provenance");
+    pb.appendChild(kv(pk.map(k => [k, prov[k] === null ? "—" : (typeof prov[k] === "number" ? fmt(prov[k], 4) : String(prov[k]))])));
+    body.appendChild(pb);
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * render loop
+ * ------------------------------------------------------------------ */
+
+let lastFrame = performance.now();
+
+function resize() {
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  const w = Math.max(1, Math.round(canvas.clientWidth * dpr));
+  const h = Math.max(1, Math.round(canvas.clientHeight * dpr));
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w; canvas.height = h;
+    needsRedraw = true;
+  }
+}
+addEventListener("resize", () => { resize(); needsRedraw = true; });
+
+function drawFlat(batch, depthTest, depthWrite, alphaMul, pull) {
+  if (!batch || !batch.count) return;
+  gl.useProgram(progFlat.prog);
+  gl.uniformMatrix4fv(progFlat.u.uVP, false, viewProj);
+  gl.uniform1f(progFlat.u.uAlphaMul, alphaMul === undefined ? 1.0 : alphaMul);
+  gl.uniform3f(progFlat.u.uEye, cam.eye[0], cam.eye[1], cam.eye[2]);
+  gl.uniform1f(progFlat.u.uPull, pull || 0.0);
+  if (depthTest) gl.enable(gl.DEPTH_TEST); else gl.disable(gl.DEPTH_TEST);
+  gl.depthMask(!!depthWrite);
+  gl.bindVertexArray(batch.vao);
+  gl.drawArrays(batch.mode, 0, batch.count);
+  gl.bindVertexArray(null);
+  gl.enable(gl.DEPTH_TEST);
+  gl.depthMask(true);
+}
+
+function step() {
+  requestAnimationFrame(step);
+  const now = performance.now();
+  const dt = Math.min((now - lastFrame) / 1000, 0.1);
+  lastFrame = now;
+
+  // fly controls act on the orbit target, so orbiting still works after
+  // walking somewhere
+  if (keys.size) {
+    const { fwd, right } = camBasis();
+    const flat = norm3([fwd[0], fwd[1], 0]);
+    const speed = (keys.has("shift") ? 9 : 3) * dt * Math.max(1, cam.dist / 6);
+    const move = [0, 0, 0];
+    if (keys.has("w")) for (let i = 0; i < 3; i++) move[i] += flat[i];
+    if (keys.has("s")) for (let i = 0; i < 3; i++) move[i] -= flat[i];
+    if (keys.has("d")) for (let i = 0; i < 3; i++) move[i] += right[i];
+    if (keys.has("a")) for (let i = 0; i < 3; i++) move[i] -= right[i];
+    if (keys.has("e")) move[2] += 1;
+    if (keys.has("q")) move[2] -= 1;
+    const l = len3(move);
+    if (l > 0) {
+      for (let i = 0; i < 3; i++) cam.gTarget[i] += move[i] / l * speed;
+      needsRedraw = true;
+    }
+  }
+
+  // critically damped-ish exponential smoothing, frame-rate independent
+  const k = 1 - Math.exp(-dt * 14);
+  const before = cam.yaw + cam.pitch + cam.dist + cam.target[0] + cam.target[1] + cam.target[2];
+  cam.yaw += (cam.gYaw - cam.yaw) * k;
+  cam.pitch += (cam.gPitch - cam.pitch) * k;
+  cam.dist += (cam.gDist - cam.dist) * k;
+  for (let i = 0; i < 3; i++) cam.target[i] += (cam.gTarget[i] - cam.target[i]) * k;
+  const after = cam.yaw + cam.pitch + cam.dist + cam.target[0] + cam.target[1] + cam.target[2];
+  if (Math.abs(after - before) > 1e-7) needsRedraw = true;
+
+  if (!needsRedraw || !gl) return;
+  needsRedraw = false;
+  resize();
+  render();
+}
+
+function render() {
+  const w = canvas.width, h = canvas.height;
+  gl.viewport(0, 0, w, h);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+  cam.eye = camEye();
+  // Near plane scales with the scene so a 3 m room does not waste depth
+  // precision, but is floored so flying right up to a wall does not clip.
+  const near = Math.max(0.01, cam.dist * 0.002);
+  const far = Math.max(near * 100, cam.dist * 12 + RADIUS * 12);
+  mat4Perspective(proj, FOV, w / Math.max(h, 1), near, far);
+  mat4LookAt(view, cam.eye, cam.target, [0, 0, 1]);
+  mat4Mul(viewProj, proj, view);
+
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+  // 1. grid, depth-tested, so geometry occludes it correctly
+  if (show.grid) drawFlat(gridBatch, true, true, 1.0);
+
+  // 2. opaque geometry
+  if (viewMode !== "mesh" && ptsCount > 0) {
+    gl.useProgram(progPoints.prog);
+    gl.uniformMatrix4fv(progPoints.u.uVP, false, viewProj);
+    // pixels per metre at one metre of depth, from the vertical FOV
+    const pxPerMetre = h / (2 * Math.tan(FOV / 2));
+    // spacing_m is the *median* nearest-neighbour distance, which for a
+    // surface sampled at random is roughly half the mean sample pitch, so a
+    // splat has to be about twice it before neighbours touch and the cloud
+    // stops showing holes it does not have.
+    gl.uniform1f(progPoints.u.uPointScale, Math.max(P.points.spacing_m, 1e-4) * pxPerMetre * 2.0 * pointBoost);
+    // Cap the splat: without it a point half a metre from the eye becomes a
+    // dinner plate, and standing inside a room turns the near wall into a
+    // field of overlapping discs.
+    gl.uniform1f(progPoints.u.uMaxSize, 18.0);
+    gl.uniform1i(progPoints.u.uColorMode, ptsHasRgb ? 0 : 1);
+    gl.uniform2f(progPoints.u.uZSpan, LO[2], HI[2]);
+    gl.depthMask(true);
+    gl.bindVertexArray(ptsVAO);
+    gl.drawArrays(gl.POINTS, 0, ptsCount);
+    gl.bindVertexArray(null);
+  }
+  if (viewMode !== "points" && meshIndexCount > 0) {
+    gl.useProgram(progMesh.prog);
+    gl.uniformMatrix4fv(progMesh.u.uVP, false, viewProj);
+    gl.uniform3f(progMesh.u.uEye, cam.eye[0], cam.eye[1], cam.eye[2]);
+    gl.uniform1i(progMesh.u.uUseVertexColor, meshHasRgb ? 1 : 0);
+    const useTex = (meshHasUv && meshTexReady) ? 1 : 0;
+    gl.uniform1i(progMesh.u.uUseTexture, useTex);
+    if (useTex) {
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, meshTex);
+      gl.uniform1i(progMesh.u.uTex, 0);
+    }
+    // In "both" mode the mesh is drawn semi-transparent so the cloud it was
+    // built from stays visible; the two disagreeing is exactly what an
+    // operator needs to see.
+    const alpha = (viewMode === "both" && ptsCount > 0) ? 0.4 : 1.0;
+    gl.uniform1f(progMesh.u.uAlpha, alpha);
+    gl.depthMask(alpha >= 1.0);
+    gl.bindVertexArray(meshVAO);
+    gl.drawElements(gl.TRIANGLES, meshIndexCount, gl.UNSIGNED_INT, 0);
+    gl.bindVertexArray(null);
+    gl.depthMask(true);
+  }
+
+  // 3. translucent overlays: depth-tested but not depth-writing, so they
+  //    layer over each other without punching holes in one another
+  if (show.planes) { drawFlat(planeFill, true, false, 1.0); drawFlat(planeEdge, true, false, 1.0); }
+  if (show.bounds) { drawFlat(boundsFill, true, false, 1.0); drawFlat(boundsEdge, true, false, 1.0); }
+  if (show.openings) drawFlat(openingBatch, true, false, 1.0);
+  if (show.extents) drawFlat(extentBatch, true, false, 1.0);
+
+  // 4. the grid again, very faint and without depth test, so the scale
+  //    reference stays legible through the floor it is buried under
+  if (show.grid) drawFlat(gridBatch, false, false, 0.16);
+
+  // 5. the measurement, in two passes. The faint pass ignores depth so a
+  //    marker that has gone behind a wall can still be found rather than
+  //    vanishing; the solid pass is depth-tested so it only paints where the
+  //    measurement really is in front. Drawing the whole annotation on top
+  //    unconditionally, as this used to, means a pick that landed on the far
+  //    wall is painted over the near one — the picker's mistake rendered as a
+  //    crosshair sitting exactly where the operator aimed. A readout is
+  //    allowed to be wrong; it is not allowed to hide that it is wrong, and
+  //    the difference between a solid crosshair and a ghost of one is the
+  //    operator's only cue that the depth is not what they assumed.
+  drawFlat(measureBatch, false, false, 0.18, 0.0);
+  drawFlat(measureBatch, true, false, 1.0, 2.0 * PT_SPACING);
+
+  gl.disable(gl.BLEND);
+  positionLabels();
+}
+
+/* ------------------------------------------------------------------ *
+ * go
+ * ------------------------------------------------------------------ */
+
+buildPanel();
+syncToolbar();
+syncLabels();
+resize();
+if (gl) requestAnimationFrame(step);
+if (!HAS_GEOM) setReadout('<span class="hint">this twin carries no geometry — the grid is all there is to see</span>');
+</script>
+</body>
+</html>
