@@ -206,13 +206,24 @@ def _build_parser() -> argparse.ArgumentParser:
 
     st = sub.add_parser(
         "studio",
-        help="a local page you can drop a video onto and watch it reconstruct",
+        help="the product: drop a room on a page, get a twin, ask the scout",
     )
     st.add_argument("--port", type=int, default=8765)
+    st.add_argument("--host", help="bind address (default 127.0.0.1; 0.0.0.0 for hosting)")
     st.add_argument("--root", type=Path, default=Path("twins/studio"), help="where jobs land")
     st.add_argument("--max-points", type=int, default=1_500_000, dest="studio_max_points")
     st.add_argument("--no-open", action="store_true", help="do not open a browser")
     st.set_defaults(func=cmd_studio)
+
+    sw = sub.add_parser(
+        "sweep",
+        help="sweep every camera setup a twin allows and load it into ClickHouse",
+    )
+    sw.add_argument("twin", type=Path)
+    sw.add_argument("--no-load", action="store_true",
+                    help="compute and summarise the sweep without touching ClickHouse")
+    sw.add_argument("--json", action="store_true")
+    sw.set_defaults(func=cmd_sweep)
 
     fx = sub.add_parser("fixtures", help="list the synthetic rooms used to validate accuracy")
     fx.set_defaults(func=cmd_fixtures)
@@ -373,9 +384,40 @@ def cmd_studio(args) -> int:
     serve(
         args.root,
         port=args.port,
+        host=args.host,
         max_points=args.studio_max_points,
         open_browser=not args.no_open,
     )
+    return 0
+
+
+def cmd_sweep(args) -> int:
+    from . import warehouse
+    from .film import sweep as sweepmod
+    from .types import Twin
+
+    twin = Twin.load(args.twin)
+    sw = sweepmod.sweep(twin, progress=None if args.json else _progress)
+    summary = sw.summary()
+
+    if not args.no_load:
+        if warehouse.configured():
+            summary["loaded_rows"] = warehouse.load_sweep(
+                sw, progress=None if args.json else _progress
+            )
+            summary["clickhouse"] = warehouse.connection_env()["CLICKHOUSE_HOST"]
+        else:
+            summary["clickhouse"] = None
+            if not args.json:
+                print("CLICKHOUSE_HOST is not set; computed the sweep but loaded nothing")
+
+    if args.json:
+        print(json.dumps(summary, indent=2))
+    else:
+        print(f"{summary['rows']:,} setups over {summary['subject_marks']} subject marks "
+              f"and {summary['camera_cells']} camera positions")
+        if summary.get("loaded_rows"):
+            print(f"loaded into ClickHouse at {summary['clickhouse']}")
     return 0
 
 
