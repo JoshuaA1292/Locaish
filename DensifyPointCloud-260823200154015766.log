@@ -1,0 +1,7 @@
+20:01:54 [App     ] OpenMVS x64 v2.4.0 (e2f38b4)
+20:01:54 [App     ] Build date: Aug 23 2026, 19:40:33
+20:01:54 [App     ] CPU: Apple M4 (10 cores)
+20:01:54 [App     ] RAM: 32.00GB Physical Memory 0B Virtual Memory
+20:01:54 [App     ] OS: macOS 15.7.7 (Sequoia) (arm64)
+20:01:54 [App     ] Disk: 464.07GB (926.35GB) space
+20:01:54 [App     ] Command line: DensifyPointCloud --help

@@ -28,6 +28,7 @@ similarities, with no trained parameters anywhere.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -175,7 +176,7 @@ def densify_openmvs(
     work_dir: str | Path,
     *,
     binary: str | None = None,
-    resolution_level: int = 1,
+    resolution_level: int | None = None,
     progress=None,
 ) -> np.ndarray:
     """OpenMVS patch-match stereo over the COLMAP model. Returns (N, 6) xyz+rgb.
@@ -191,6 +192,11 @@ def densify_openmvs(
     binary = binary or openmvs_binary()
     if binary is None:
         raise ColmapError("OpenMVS's DensifyPointCloud is not installed")
+    if resolution_level is None:
+        # Each level halves the matching resolution and quarters the work.
+        # Level 1 (half of the 2400 px frames) is right on a laptop; a small
+        # cloud CPU can set LOCAISH_MVS_LEVEL=2 and still beat block matching.
+        resolution_level = int(os.environ.get("LOCAISH_MVS_LEVEL", "1"))
     interface = str(Path(binary).parent / "InterfaceCOLMAP")
 
     exe = executable()

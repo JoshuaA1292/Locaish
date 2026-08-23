@@ -393,7 +393,10 @@ def _cache_key(src: Path, fps, max_points, scale_factor, start_s, end_s) -> dict
     """
     st = src.stat()
     return {
-        "version": 3,
+        # Bumped whenever the reconstruction itself changes behaviour, so a
+        # cache written by an older pipeline cannot masquerade as this one's
+        # output. 4: single-model SfM chain + OpenMVS-preferred dense stage.
+        "version": 4,
         "source": str(src.resolve()),
         "size": st.st_size,
         "mtime": int(st.st_mtime),
