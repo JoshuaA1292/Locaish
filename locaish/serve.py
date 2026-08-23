@@ -53,6 +53,8 @@ class Job:
     viewer_path: Path | None = None
     scout_path: Path | None = None
     location: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
     summary: dict = field(default_factory=dict)
 
     def emit(self, kind: str, text: str, **extra) -> None:
@@ -107,6 +109,8 @@ class Studio:
                     name=Path(job.name).stem,
                     video_workdir=job.workdir / "recon",
                     max_points=self.max_points,
+                    latitude=job.latitude,
+                    longitude=job.longitude,
                     progress=lambda m: job.emit("stage", m),
                 )
                 result = ingest(job.source, opts)
@@ -299,6 +303,12 @@ class _Handler(BaseHTTPRequestHandler):
 
         params = parse_qs(url.query)
         name = (params.get("name") or ["upload.mov"])[0]
+        lat = lon = None
+        try:
+            if params.get("lat") and params.get("lon"):
+                lat, lon = float(params["lat"][0]), float(params["lon"][0])
+        except ValueError:
+            lat = lon = None
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
@@ -309,6 +319,7 @@ class _Handler(BaseHTTPRequestHandler):
             return self._json({"error": "upload too large"}, 413)
 
         job = self.studio.create(name)
+        job.latitude, job.longitude = lat, lon
         remaining = length
         try:
             with open(job.source, "wb") as fh:
@@ -461,6 +472,9 @@ PAGE = """<!doctype html>
   #drop.hot { border-color: var(--accent); background: #1b2432; }
   #drop b { display: block; font-size: 17px; margin-bottom: 6px; font-weight: 600; }
   #drop span { color: var(--dim); font-size: 13px; }
+  #geo { display: flex; gap: 8px; align-items: center; margin-top: 12px;
+         color: var(--dim); font-size: 13px; cursor: pointer; }
+  #geo input { accent-color: var(--accent); }
   .hidden { display: none !important; }
 
   /* -- state 2: working -- */
@@ -544,6 +558,8 @@ PAGE = """<!doctype html>
     <input id="file" type="file" accept="video/*,.ply,.obj,.glb,.gltf,.stl,.mov,.mp4,.mkv"
            class="hidden">
   </div>
+  <label id="geo"><input type="checkbox" id="usegeo" checked>
+    use my location, so the scout knows where the sun is</label>
 
   <div id="working" class="hidden">
     <div class="bar"><i id="bar"></i></div>
@@ -585,6 +601,7 @@ const CHIPS = [
   'Find the cleanest close-up in this room',
   'Where can a doorway dolly actually track?',
   'A 75mm medium shot with no window behind the subject',
+  'When does golden hour hit the glass?',
   'How live is this room for dialogue?',
 ];
 
@@ -607,16 +624,30 @@ function line(text, cls) {
 }
 
 function send(f) {
+  if ($('usegeo').checked && navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(
+      p => upload(f, p.coords.latitude, p.coords.longitude),
+      () => upload(f, null, null),
+      {timeout: 6000, maximumAge: 600000});
+  } else {
+    upload(f, null, null);
+  }
+}
+
+function upload(f, lat, lon) {
   t0 = Date.now();
   drop.classList.add('hidden');
+  $('geo').classList.add('hidden');
   working.classList.remove('hidden');
   log.innerHTML = '';
   bar.style.width = '2%';
   stage.textContent = 'uploading ' + f.name + ' (' + (f.size/1e6).toFixed(0) + ' MB)';
   line(stage.textContent);
+  if (lat != null) line('georeferenced to your position; sun schedule unlocked');
 
   const xhr = new XMLHttpRequest();
-  xhr.open('POST', '/upload?name=' + encodeURIComponent(f.name));
+  xhr.open('POST', '/upload?name=' + encodeURIComponent(f.name)
+    + (lat != null ? '&lat=' + lat + '&lon=' + lon : ''));
   xhr.setRequestHeader('Content-Type', 'application/octet-stream');
   xhr.upload.onprogress = e => {
     if (e.lengthComputable) bar.style.width = (2 + 8 * e.loaded / e.total) + '%';

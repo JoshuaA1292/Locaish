@@ -33,15 +33,23 @@ photo and a guess.
 ## Hackathon alignment
 
 - **Partner (ClickHouse):** the shot-search sweep is a genuine ClickHouse
-  workload — selective filters (light phase, height band) plus top-N ranking
-  across hundreds of thousands of scored candidates. Schema, sort key, and
-  indexes are chosen for that access pattern, not decorative.
-- **Google Cloud:** the agent runs on Gemini through Vertex AI / Agent
-  Builder, not a bare AI Studio key — this has to be true in the demo, not
-  just "supported."
-- **Agentic, not scripted:** the model is given a tool surface (search,
-  diagnose, study daylight, render) and decides what to call. It never
-  touches geometry directly; every claim it makes traces to a tool result.
+  workload — selective filters (shot size, lens, sightline, backlight) plus
+  top-N ranking across hundreds of thousands of scored candidates per room.
+  Schema, sort key and partitioning are chosen for that access pattern
+  (`locaish/warehouse.py`). The agent's *only* database access is the
+  official ClickHouse MCP server (`mcp-clickhouse`), spawned at runtime,
+  read-only as it ships; bulk loading goes around it over
+  `clickhouse-connect`, column-oriented.
+- **Google Cloud:** the agent is a `google-adk` `LlmAgent` running Gemini
+  through Vertex AI (`GOOGLE_GENAI_USE_VERTEXAI=TRUE` + application-default
+  credentials), not a bare AI Studio key — see `locaish/agent/core.py`.
+- **Agentic, not scripted:** the model is given a tool surface — SQL over the
+  shot table via MCP, the scout report, a tape measure, a dolly simulator, a
+  frame renderer — and decides what to call. It never touches geometry
+  directly; every claim it makes traces to a tool result.
+- **No other AI models, anywhere.** The reconstruction is classical
+  structure-from-motion (COLMAP) and photometric stereo. Gemini is the only
+  model in the system.
 
 ## Non-negotiable constraint
 
@@ -60,16 +68,17 @@ gravity-aligned, yaw-normalised twin** with a report that says how far to trust
 it. See [CAPTURE.md](CAPTURE.md) for how to take the scan.
 
 ```bash
-pip install -e .
+pip install -e ".[video]"              # plus: brew install colmap ffmpeg
 
+locaish studio                          # the product: drop a room, ask the scout
 locaish demo clean                     # whole pipeline on a room with known truth
 locaish ingest room.ply --lat 51.5074 --lon -0.1278 --heading 212
 locaish ingest sweep.mov --view         # a video of the room, reconstructed
 locaish inspect twins/room.twin        # summary and QA report
 locaish view twins/room.twin           # self-contained WebGL viewer, no build step
 locaish measure twins/room.twin --from -1,0,1 --to 1,0,1
+locaish sweep twins/room.twin          # every camera setup, scored, into ClickHouse
 locaish export twins/room.twin -o room.glb
-locaish studio                          # drop a video on a page instead
 ```
 
 Reads PLY (binary LE/BE and ASCII, including gaussian-splat exports), OBJ+MTL,
@@ -274,3 +283,114 @@ and then hands them over deliberately broken — tilted, rotated, in the wrong
 unit, occluded, drifting — so "1:1" is a measurement against a known number
 rather than an assertion.
 
+
+---
+
+# Phase 2 — Insight (built)
+
+One command turns a twin into the report a location manager charges for
+(`locaish/film/`). It is structured by department because that is how a tech
+scout is run: **space** (dimensions, standable area, what the capture actually
+surveyed), **camera** (longest sightlines, which framings the room physically
+allows), **grip** (which dollies, sliders and jibs fit, from a catalogue of
+real equipment dimensions, and where), **sound** (an RT60 estimate from the
+room's surfaces and volume), **light** (sunrise, golden hours and per-window
+direct-sun intervals from real solar ephemeris — `locaish/film/daylight.py`,
+pure astronomy, requires a georeference and says so when the heading was
+assumed rather than measured). Every figure is measured from the twin or
+labelled as an assumption, and the report opens with how far to trust it —
+the QA verdict and scale confidence travel with every number downstream.
+
+The report deliberately refuses to summarise itself into a score out of ten.
+A location is right or wrong *for a particular scene*, and collapsing
+"3.2 m of headroom, 1.4 s of reverb" into "7/10" throws away the only part
+anyone can act on.
+
+---
+
+# Phase 3 — Search (built)
+
+The shot brief — "a clean close-up, longer lens, nothing hot behind her" — is
+answered in three parts.
+
+**The sweep** (`locaish/film/sweep.py`). Every standable camera position, at
+three working heights, on six primes, against every plausible subject mark:
+each combination is checked against the twin's real geometry — sightline
+marched through the occupancy grid, clearance and headroom read from the floor
+maps, framing and depth of field from thin-lens arithmetic, backlight risk
+from the detected windows. A room comes out as 30,000–300,000 scored rows,
+in about a second.
+
+**The warehouse** (`locaish/warehouse.py`). Those rows go into ClickHouse —
+`MergeTree`, sorted `(location, shot_size, focal_mm)`, partitioned by
+location so re-scanning a room is a partition drop. The access pattern the
+schema serves is exactly a shot brief: selective filters, then top-N.
+
+**The scout** (`locaish/agent/`). A Gemini agent on `google-adk` with two
+kinds of tools: SQL over the shot table through the official `mcp-clickhouse`
+MCP server (read-only), and measurement tools over the twin itself — the
+scout report, a tape measure with line-of-sight, a dolly-move simulator, and
+a renderer that draws the actual frame a proposed setup would capture from
+the twin's own points. The instruction is blunt about the contract: a number
+the model did not get from a tool is a number it may not state.
+
+Ask it "find the cleanest 75 mm medium shot with no window behind the
+subject" and it writes the filter, queries the table, sanity-checks the
+winner, renders the frame, and explains the physical reasoning — with every
+step visible in the chat's activity feed.
+
+---
+
+# Running the full product
+
+Two external services, both free-tier friendly. Everything else is
+`pip install -e ".[video]"` plus `colmap` and `ffmpeg` on PATH.
+
+**Gemini via Vertex AI** (the hackathon configuration):
+
+```bash
+gcloud auth application-default login
+export GOOGLE_GENAI_USE_VERTEXAI=TRUE
+export GOOGLE_CLOUD_PROJECT=your-project-id
+export GOOGLE_CLOUD_LOCATION=us-central1
+# optional: export LOCAISH_GEMINI_MODEL=gemini-3.5-flash   (the default)
+```
+
+**ClickHouse** — either ClickHouse Cloud:
+
+```bash
+export CLICKHOUSE_HOST=xxxxx.clickhouse.cloud
+export CLICKHOUSE_PASSWORD=...
+```
+
+or a local server for development:
+
+```bash
+docker run -d --name locaish-ch -p 8123:8123 \
+  -e CLICKHOUSE_USER=default -e CLICKHOUSE_PASSWORD=locaish \
+  clickhouse/clickhouse-server
+export CLICKHOUSE_HOST=localhost CLICKHOUSE_PORT=8123 \
+       CLICKHOUSE_USER=default CLICKHOUSE_PASSWORD=locaish \
+       CLICKHOUSE_SECURE=false
+```
+
+Then:
+
+```bash
+locaish studio
+```
+
+Drop a video. When the twin lands, the sweep is loaded automatically and the
+chat goes live. Without `CLICKHOUSE_HOST` the studio still works — the agent
+says plainly that the shot table is offline and answers what the measurement
+tools can. Without Google credentials the chat explains what to set.
+
+**Deploying** — the `Dockerfile` builds a Cloud Run-ready image (CPU-only is
+fine; the dense stereo stage falls back from CUDA PatchMatch to semi-global
+matching automatically):
+
+```bash
+gcloud run deploy locaish --source . --region us-central1 \
+  --memory 8Gi --cpu 4 --timeout 3600 \
+  --set-env-vars GOOGLE_GENAI_USE_VERTEXAI=TRUE,CLICKHOUSE_HOST=...,CLICKHOUSE_PASSWORD=...
+```

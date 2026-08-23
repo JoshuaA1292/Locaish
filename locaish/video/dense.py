@@ -238,39 +238,35 @@ def _choose_pairs(centres: np.ndarray, depth: float) -> list[tuple[int, int]]:
 
 
 def _pair_points(cv2, matcher, model, image_dir: Path, i: int, j: int, *, scale: float, max_depth: float):
-    """Rectify one pair, match it, and lift the disparity into world points."""
-    img1 = cv2.imread(str(image_dir / model.names[i]), cv2.IMREAD_COLOR)
-    img2 = cv2.imread(str(image_dir / model.names[j]), cv2.IMREAD_COLOR)
-    if img1 is None or img2 is None:
+    """Rectify one pair, match it, and lift the disparity into world points.
+
+    The pair is ordered so the second camera sits to the *right* of the first
+    after rectification. Block matchers search positive disparities only, so a
+    pair whose baseline points the other way matches pure noise -- every true
+    correspondence has negative disparity and is unreachable. A walk produces
+    both orderings about equally, which without this normalisation silently
+    discards half the sweep and poisons the rest.
+    """
+    for a, b in ((i, j), (j, i)):
+        got = _rectify(cv2, model, image_dir, a, b, scale)
+        if got is None:
+            continue
+        proj2, rest = got
+        # CALIB_ZERO_DISPARITY puts the signed baseline in proj2's third
+        # column: negative x means "second camera to the right", which is the
+        # geometry the matcher can search. A dominant y-term is a vertical
+        # baseline -- someone raising the phone -- and no horizontal matcher
+        # can use that pair at all.
+        if abs(proj2[1, 3]) > abs(proj2[0, 3]):
+            return None
+        if proj2[0, 3] < 0:
+            break
+    else:
         return None
-    if scale != 1.0:
-        img1 = cv2.resize(img1, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
-        img2 = cv2.resize(img2, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
-    h, w = img1.shape[:2]
+    img1, img2, rect1, r1w, t1, q, map1, map2 = rest
 
-    k1 = model.intrinsics[i].copy() * scale
-    k2 = model.intrinsics[j].copy() * scale
-    k1[2, 2] = k2[2, 2] = 1.0
-    zero = np.zeros(5)
-
-    r1w, t1 = model.extrinsics[i][:, :3], model.extrinsics[i][:, 3]
-    r2w, t2 = model.extrinsics[j][:, :3], model.extrinsics[j][:, 3]
-    # Relative pose taking camera i's frame to camera j's.
-    rel_r = r2w @ r1w.T
-    rel_t = t2 - rel_r @ t1
-
-    try:
-        rect1, rect2, proj1, proj2, q, _, _ = cv2.stereoRectify(
-            k1, zero, k2, zero, (w, h), rel_r, rel_t,
-            flags=cv2.CALIB_ZERO_DISPARITY, alpha=0,
-        )
-        map1x, map1y = cv2.initUndistortRectifyMap(k1, zero, rect1, proj1, (w, h), cv2.CV_32FC1)
-        map2x, map2y = cv2.initUndistortRectifyMap(k2, zero, rect2, proj2, (w, h), cv2.CV_32FC1)
-    except cv2.error:
-        return None
-
-    warp1 = cv2.remap(img1, map1x, map1y, cv2.INTER_LINEAR)
-    warp2 = cv2.remap(img2, map2x, map2y, cv2.INTER_LINEAR)
+    warp1 = cv2.remap(img1, map1[0], map1[1], cv2.INTER_LINEAR)
+    warp2 = cv2.remap(img2, map2[0], map2[1], cv2.INTER_LINEAR)
 
     disp = matcher.compute(
         cv2.cvtColor(warp1, cv2.COLOR_BGR2GRAY),
@@ -287,9 +283,44 @@ def _pair_points(cv2, matcher, model, image_dir: Path, i: int, j: int, *, scale:
     if valid.sum() < 500:
         return None
 
-    # Rectified camera frame -> camera i's own frame -> world.
+    # Rectified camera frame -> the left camera's own frame -> world.
     sel = pts_rect[valid]
-    cam_i = (rect1.T @ sel.T).T
-    world = (r1w.T @ (cam_i - t1).T).T
+    cam_left = (rect1.T @ sel.T).T
+    world = (r1w.T @ (cam_left - t1).T).T
     colors = cv2.cvtColor(warp1, cv2.COLOR_BGR2RGB)[valid].astype(np.float64)
     return np.hstack([world, colors])
+
+
+def _rectify(cv2, model, image_dir: Path, i: int, j: int, scale: float):
+    """Load, scale and rectify one ordered pair. Returns (proj2, unpacked state)."""
+    img1 = cv2.imread(str(image_dir / model.names[i]), cv2.IMREAD_COLOR)
+    img2 = cv2.imread(str(image_dir / model.names[j]), cv2.IMREAD_COLOR)
+    if img1 is None or img2 is None:
+        return None
+    if scale != 1.0:
+        img1 = cv2.resize(img1, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        img2 = cv2.resize(img2, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    h, w = img1.shape[:2]
+
+    k1 = model.intrinsics[i].copy() * scale
+    k2 = model.intrinsics[j].copy() * scale
+    k1[2, 2] = k2[2, 2] = 1.0
+    zero = np.zeros((5, 1))
+
+    r1w, t1 = model.extrinsics[i][:, :3], model.extrinsics[i][:, 3]
+    r2w, t2 = model.extrinsics[j][:, :3], model.extrinsics[j][:, 3]
+    # Relative pose taking camera i's frame to camera j's. The translation
+    # must be a column vector: OpenCV 5's stereoRectify rejects a flat (3,).
+    rel_r = r2w @ r1w.T
+    rel_t = (t2 - rel_r @ t1).reshape(3, 1)
+
+    try:
+        rect1, rect2, proj1, proj2, q, _, _ = cv2.stereoRectify(
+            k1, zero, k2, zero, (w, h), rel_r, rel_t,
+            flags=cv2.CALIB_ZERO_DISPARITY, alpha=0,
+        )
+        map1 = cv2.initUndistortRectifyMap(k1, zero, rect1, proj1, (w, h), cv2.CV_32FC1)
+        map2 = cv2.initUndistortRectifyMap(k2, zero, rect2, proj2, (w, h), cv2.CV_32FC1)
+    except cv2.error:
+        return None
+    return proj2, (img1, img2, rect1, r1w, t1, q, map1, map2)

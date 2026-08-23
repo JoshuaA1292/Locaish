@@ -230,6 +230,24 @@ def check_dolly_move(
     return {"status": "success", "move": report.summary()}
 
 
+def sun_schedule(date: str = "", tool_context=None) -> dict:
+    """The day's natural light at this location, computed from solar ephemeris.
+
+    Sunrise, sunset, golden hours, the sun's peak elevation, and -- window by
+    window -- when direct sun actually comes through each pane, with the
+    compass bearing it faces. Times are local solar time (solar noon = 12:00).
+    Needs the twin to be georeferenced; the error says how to add that if not.
+
+    Args:
+        date: ISO date like 2026-09-09. Empty means today.
+    """
+    from ..film import daylight
+
+    _, loc = _location(tool_context)
+    schedule = daylight.sun_schedule(loc.twin, date or None)
+    return {"status": "success", "schedule": schedule}
+
+
 def list_locations(tool_context=None) -> dict:
     """List every scanned location available in this session, with QA verdicts."""
     out = {}
@@ -288,6 +306,13 @@ score FROM {warehouse.database()}.{warehouse.TABLE} WHERE location = '...' AND
 shot_size = 'cu' AND visible = 1 AND window_behind_subject = 0 ORDER BY score
 DESC LIMIT 5. Always LIMIT.
 
+## Natural light
+sun_schedule gives sunrise/sunset, golden hours and per-window direct-sun
+intervals for any date, from real solar ephemeris. The shot table's
+window_behind_subject flag says *geometry*; sun_schedule says *when* that
+glass is actually hot. Combine them for briefs that mention light or time of
+day. It requires a georeferenced twin and will say so if there is none.
+
 ## Workflow for a shot brief
 1. Translate the brief into filters (shot size, lens preference, light, moves).
 2. Query the table; if empty, relax one constraint and say which and why.
@@ -301,7 +326,10 @@ DESC LIMIT 5. Always LIMIT.
 def _build_agent():
     from google.adk.agents import LlmAgent
 
-    tools: list[Any] = [scout_report, measure, render_frame, check_dolly_move, list_locations]
+    tools: list[Any] = [
+        scout_report, measure, render_frame, check_dolly_move, sun_schedule,
+        list_locations,
+    ]
     if warehouse.configured():
         from google.adk.tools.mcp_tool import McpToolset, StdioConnectionParams
         from mcp import StdioServerParameters

@@ -207,6 +207,23 @@ def reconstruct_video(
     sparse_pts = np.hstack(
         [model.points[keep_sparse], model.colors[keep_sparse].astype(np.float64)]
     )
+    if len(dense_pts):
+        # Stereo on a degenerate pair triangulates fog far outside the room.
+        # The sparse model is bundle-adjusted and trustworthy about where the
+        # room *is*, so anything the dense stage puts well outside it is a
+        # matching artefact, not a discovery.
+        if len(sparse_pts):
+            lo = sparse_pts[:, :3].min(axis=0)
+            hi = sparse_pts[:, :3].max(axis=0)
+            margin = 0.25 * (hi - lo).max()
+            ok = np.all(
+                (dense_pts[:, :3] >= lo - margin) & (dense_pts[:, :3] <= hi + margin),
+                axis=1,
+            )
+            dense_pts = dense_pts[ok]
+        if len(dense_pts) > max_points * 2:
+            keep = voxel_subsample_indices(dense_pts[:, :3], max_points * 2)
+            dense_pts = dense_pts[keep]
     merged = (
         np.concatenate([sparse_pts, dense_pts]) if len(dense_pts) else sparse_pts
     )

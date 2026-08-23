@@ -1,0 +1,11 @@
+.git
+.venv
+twins
+tests
+docs
+*.egg-info
+__pycache__
+**/__pycache__
+*.mov
+*.MOV
+*.mp4

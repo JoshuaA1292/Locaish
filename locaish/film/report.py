@@ -36,6 +36,7 @@ class ScoutReport:
     camera: dict[str, Any] = field(default_factory=dict)
     grip: dict[str, Any] = field(default_factory=dict)
     sound: dict[str, Any] = field(default_factory=dict)
+    light: dict[str, Any] = field(default_factory=dict)
     caveats: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -46,6 +47,7 @@ class ScoutReport:
             "camera": self.camera,
             "grip": self.grip,
             "sound": self.sound,
+            "light": self.light,
             "caveats": self.caveats,
         }
 
@@ -128,6 +130,24 @@ def build(twin: Twin, *, cell: float = spacemod.DEFAULT_CELL_M) -> ScoutReport:
         caveats.extend(ac.warnings)
     except ValueError as exc:
         report.sound = {"error": str(exc)}
+
+    # -- light -------------------------------------------------------------
+    # Only when the twin is tied to the planet: a sun schedule with no
+    # georeference would be an invention, and inventions do not go in a recce.
+    if twin.georeference is not None:
+        from . import daylight
+
+        try:
+            report.light = daylight.sun_schedule(twin)
+            if "heading_caveat" in report.light:
+                caveats.append(report.light["heading_caveat"])
+        except ValueError as exc:
+            report.light = {"error": str(exc)}
+    else:
+        report.light = {
+            "note": "no georeference; re-ingest with --lat/--lon/--heading "
+            "for sunrise, golden hours and per-window direct sun"
+        }
 
     report.caveats = caveats
     return report
@@ -282,6 +302,24 @@ def render_text(report: ScoutReport) -> str:
         add(f"  volume {so['volume_m3']} m3   RT60 {r['softest']}-{r['hardest']} s "
             f"(typical {r['typical']} s)")
         add(f"  verdict: {so['verdict']}")
+
+    li = d.get("light") or {}
+    add("")
+    add("LIGHT")
+    if "note" in li or "error" in li:
+        add(f"  {li.get('note') or li.get('error')}")
+    else:
+        up = li.get("sun_up") or []
+        gold = li.get("golden_hour") or []
+        span = f"{up[0]['from']}-{up[-1]['to']}" if up else "never up"
+        add(f"  {li['date']}: sun {span}, peak {li['max_elevation_deg']} deg "
+            f"({li['times_are']})")
+        if gold:
+            add("  golden hour: " + ", ".join(f"{g['from']}-{g['to']}" for g in gold))
+        for w in li.get("windows") or []:
+            sun = ", ".join(f"{g['from']}-{g['to']}" for g in w["direct_sun"]) or "no direct sun"
+            add(f"  {w['size_m'][0]} x {w['size_m'][1]} m window faces {w['faces']}: "
+                f"direct sun {sun}")
 
     if d["caveats"]:
         add("")

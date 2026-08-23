@@ -256,10 +256,30 @@ def _largest_model(models: list[Path]) -> Path:
     """
     best, best_n = models[0], -1
     for m in models:
-        n = len(_read_images_text(m).get("ids", []))
+        n = _count_registered(m)
         if n > best_n:
             best, best_n = m, n
     return best
+
+
+def _count_registered(model_dir: Path) -> int:
+    """How many views a model holds, without converting it to text.
+
+    A fresh mapper output is binary, and `images.bin` starts with the count as
+    a little-endian uint64 -- reading eight bytes beats running a converter on
+    every fragment just to pick the biggest one.
+    """
+    binary = model_dir / "images.bin"
+    if binary.exists():
+        import struct
+
+        with open(binary, "rb") as fh:
+            raw = fh.read(8)
+        return struct.unpack("<Q", raw)[0] if len(raw) == 8 else 0
+    text = model_dir / "images.txt"
+    if text.exists():
+        return len(_read_images_text(model_dir).get("ids", []))
+    return 0
 
 
 def read_model(model_dir: str | Path, *, exe: str | None = None) -> SparseModel:
