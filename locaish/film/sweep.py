@@ -116,10 +116,26 @@ def sweep(
     maps = spacemod.floor_maps(twin, cell=cell)
     standable = maps.standable()
     if not standable.any():
+        # A thin or rough twin -- a sparse video reconstruction, usually --
+        # can fail the full standing test everywhere while still knowing
+        # perfectly well where its floor is. Degrade rather than refuse: the
+        # sweep that comes back is labelled as resting on relaxed criteria,
+        # which is a caveat, where an empty product is an outage.
+        standable = (
+            maps.inside
+            & (maps.headroom_m >= 1.4)
+            & (maps.clearance_m >= 0.15)
+        )
+        warnings.append(
+            "no floor cell passed the full standing test (1.9 m headroom, "
+            "0.28 m clearance); positions below rest on relaxed criteria and "
+            "this twin is too rough to promise any of them physically works"
+        )
+    if not standable.any():
         raise ValueError(
-            "no standable floor at all -- the twin has no cell with both "
-            "headroom and clearance for a person, so there is nowhere to put "
-            "a camera or an actor"
+            "no standable floor at all -- the twin has no cell with even "
+            "crouching headroom and slim clearance, so there is nowhere to "
+            "put a camera or an actor"
         )
 
     if progress:

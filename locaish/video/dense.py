@@ -48,6 +48,10 @@ SGBM_SPECKLE_RANGE = 2
 # A stereo pair needs the cameras far enough apart to triangulate and close
 # enough to still see the same surfaces. Expressed as a fraction of how far away
 # the scene is, so it adapts to a cupboard and to a hall.
+# Short on purpose: block matching assumes near-fronto-parallel views, and a
+# baseline past a quarter of the depth warps perspective enough that the match
+# itself fails. The price of short baselines -- centimetre depth noise -- is
+# paid downstream by multi-pair fusion instead.
 MIN_BASELINE_RATIO = 0.04
 MAX_BASELINE_RATIO = 0.25
 
@@ -207,33 +211,48 @@ def densify_sgbm(
         ]
 
     pts = np.concatenate(out)
-    confirmed = _confirmed_across_pairs(
-        pts[:, :3], np.concatenate(pair_of), voxel=depths * CONFIRM_VOXEL_DEPTH_RATIO
+    fused, kept = _fuse_across_pairs(
+        pts, np.concatenate(pair_of), voxel=depths * CONFIRM_VOXEL_DEPTH_RATIO
     )
-    dropped = len(pts) - int(confirmed.sum())
-    if dropped:
-        warnings.append(
-            f"{dropped:,} stereo points ({dropped / len(pts):.0%}) were seen by "
-            "only one pair and discarded; a surface the walk actually passed is "
-            "matched again and again, and a mismatch is matched once"
-        )
-    return pts[confirmed], warnings
+    warnings.append(
+        f"{len(pts) - kept:,} of {len(pts):,} stereo samples were seen by only "
+        "one pair and discarded; the rest were fused to one point per voxel, "
+        "because a block matcher's depth is noisy at the centimetre scale and "
+        "averaging its repeated sightings of a surface is what recovers it"
+    )
+    return fused, warnings
 
 
-def _confirmed_across_pairs(xyz: np.ndarray, pair_id: np.ndarray, *, voxel: float) -> np.ndarray:
-    """Mask of points whose voxel was produced by >= CONFIRM_PAIRS distinct pairs."""
-    if voxel <= 0 or len(xyz) == 0:
-        return np.ones(len(xyz), dtype=bool)
-    key = np.floor(xyz / voxel).astype(np.int64)
-    # Pack the three voxel indices and the pair id into sortable rows, then
-    # count distinct pairs per voxel from the unique (voxel, pair) set.
-    packed = np.empty((len(key), 4), dtype=np.int64)
-    packed[:, :3] = key
-    packed[:, 3] = pair_id
-    vox_all, inverse = np.unique(packed[:, :3], axis=0, return_inverse=True)
+def _fuse_across_pairs(pts: np.ndarray, pair_id: np.ndarray, *, voxel: float):
+    """Fuse (N, 6) xyzrgb samples into per-voxel centroids, multi-pair confirmed.
+
+    Two jobs in one pass, both classical. *Confirmation*: a voxel survives only
+    if points from >= CONFIRM_PAIRS distinct stereo pairs landed in it -- a real
+    surface is seen again and again as the camera walks past, a mismatch once.
+    *Fusion*: the survivors are averaged per voxel, which divides the matcher's
+    depth noise by the root of the sample count and leaves a cloud whose point
+    spacing and noise are the same scale -- the property every downstream
+    plane-fitting threshold quietly assumes.
+
+    Returns (fused_points, raw_samples_kept).
+    """
+    if voxel <= 0 or len(pts) == 0:
+        return pts, len(pts)
+    key = np.floor(pts[:, :3] / voxel).astype(np.int64)
+    vox_all, inverse = np.unique(key, axis=0, return_inverse=True)
     vp = np.unique(np.column_stack([inverse, pair_id]), axis=0)
     pairs_per_voxel = np.bincount(vp[:, 0], minlength=len(vox_all))
-    return pairs_per_voxel[inverse] >= CONFIRM_PAIRS
+    good = pairs_per_voxel >= CONFIRM_PAIRS
+
+    keep = good[inverse]
+    inv = inverse[keep]
+    sel = pts[keep]
+    counts = np.bincount(inv, minlength=len(vox_all)).astype(np.float64)
+    counts[counts == 0] = 1.0
+    fused = np.empty((len(vox_all), 6), dtype=np.float64)
+    for c in range(6):
+        fused[:, c] = np.bincount(inv, weights=sel[:, c], minlength=len(vox_all)) / counts
+    return fused[good], int(keep.sum())
 
 
 # ---------------------------------------------------------------------------
