@@ -44,14 +44,17 @@ video file                                    export file
    analysis — we own the algorithms so we can explain every number.
 
    **`locaish/video/` is the one exception, and the boundary is exact.** It may
-   use torch and pretrained networks, because reconstructing geometry from
-   pixels is not something we are going to out-engineer with RANSAC. What it
-   may not do is leak: it terminates at a `ScanImport`, identical in kind to
-   what a PLY reader returns, and every module downstream stays torch-free and
-   explains its own numbers. A network's output enters this pipeline as
-   *measurements with error bars* — a cloud, poses, a scale factor and its
-   spread — never as a conclusion. Nothing in `locaish/video/` may write to a
-   QA report, and no check may be softened because the input was video.
+   shell out to COLMAP and use OpenCV, because reconstructing geometry from
+   pixels is not something we are going to out-engineer in numpy. (It used to be
+   allowed pretrained networks; the Agentic Cinema rules forbid non-Google AI
+   models, so the reconstruction is now classical end to end — SIFT, bundle
+   adjustment, photometric stereo.) What it may not do is leak: it terminates at
+   a `ScanImport`, identical in kind to what a PLY reader returns, and every
+   module downstream explains its own numbers. The reconstruction's output
+   enters this pipeline as *measurements with error bars* — a cloud, poses, a
+   scale factor and its spread — never as a conclusion. Nothing in
+   `locaish/video/` may write to a QA report, and no check may be softened
+   because the input was video.
 2. **Vectorise.** Real inputs are 1–20M points. A per-point Python loop is a
    bug. Use `scipy.spatial.cKDTree` and chunked array ops (`types.chunked`).
 3. **Never silently guess.** If a routine is unsure, it returns a confidence or

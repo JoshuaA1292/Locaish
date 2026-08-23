@@ -490,12 +490,13 @@ them — it gets you the same ones, further apart. Length is not what buys
 coverage; *distinct viewpoints* are. Ninety seconds of walking beats five
 minutes of standing still every time.
 
-**Raise `--frames` if the twin has holes.** The default of 24 is one window's
-worth, which is what the network holds at once. Past that the sweep is
-reconstructed in overlapping chunks and joined, so `--frames 72` covers
-considerably more of the room at roughly three times the runtime. On a test
-capture it took wall coverage from 0.36 to 0.46. It cannot invent viewpoints you
-never filmed, so it rewards a thorough walk and does little for a short one.
+**Move smoothly and keep surfaces in frame.** The reconstruction matches
+features from each frame to its neighbours in time, so what breaks it is not
+length but discontinuity: whip-panning to a new wall, or lingering on a blank
+one, snaps the chain and fragments the model. If a twin comes back missing a
+section of the room, the QA report will say how many frames failed to
+register — re-film with a slower, more continuous sweep rather than a longer
+one. `--fps` raises the sampling density if the default chain still breaks.
 
 **Hold the phone the way you normally would.** Gravity is recovered from the
 camera poses, which works because people hold phones upright. Portrait or

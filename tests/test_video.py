@@ -1,17 +1,16 @@
-"""The video front-end, checked without asking a 1B-parameter network for help.
+"""The video front-end, checked without running COLMAP or decoding a real sweep.
 
-Everything here runs in a second or two on a machine with no GPU and no model
-weights, which is the point: the parts of the video path that can be *wrong in
-a way that matters* are not the network's dense prediction -- that is what it
-is -- but the arithmetic wrapped around it. Which frames get chosen. Which way
-the camera says is up. What number turns network units into metres, and how
-much of an error bar goes on it.
+Everything here runs in a second or two, which is the point: the parts of the
+video path that can be *wrong in a way that matters* are not the stereo
+matcher's dense output -- that is what it is -- but the arithmetic wrapped
+around it. Which frames get chosen. Which way the camera says is up. What
+number turns reconstruction units into metres, and how much of an error bar
+goes on it.
 
 Each of those is tested against a synthetic case with a known answer, and the
 answer is constructed independently of the code under test rather than read
-back out of it. A scale solver handed depths built from a factor of 3.7 has to
-return 3.7; a gravity estimate built from cameras tilted 20 degrees has to come
-back 20 degrees off, not 0.
+back out of it. A gravity estimate built from cameras tilted 20 degrees has to
+come back 20 degrees off, not 0.
 """
 
 from __future__ import annotations
@@ -25,7 +24,7 @@ import pytest
 from locaish.formats import ScanImport
 from locaish.scan.ingest import is_video
 from locaish.types import PointCloud
-from locaish.video import backend, frames, metric
+from locaish.video import colmap, frames, metric
 
 HAVE_FFMPEG = shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
 
@@ -143,7 +142,7 @@ def test_up_is_recovered_from_an_upright_camera_path():
     world_up = np.array([0.0, 0.0, 1.0])
     extr = np.stack([_extrinsic(yaw, world_up) for yaw in np.linspace(0, 2 * np.pi, 16)])
 
-    up, coherence, note = backend._up_from_cameras(extr)
+    up, coherence, note = colmap.up_from_cameras(extr)
 
     assert note is None
     assert coherence > 0.99
@@ -156,7 +155,7 @@ def test_a_consistently_tilted_camera_reports_a_tilted_up():
     true_up /= np.linalg.norm(true_up)
     extr = np.stack([_extrinsic(yaw, true_up) for yaw in np.linspace(0, np.pi, 12)])
 
-    up, coherence, _ = backend._up_from_cameras(extr)
+    up, coherence, _ = colmap.up_from_cameras(extr)
 
     assert coherence > 0.99
     assert np.degrees(np.arccos(np.clip(np.dot(up, np.array([0.0, 0.0, 1.0])), -1, 1))) == pytest.approx(20, abs=1.0)
@@ -173,10 +172,10 @@ def test_an_incoherently_held_camera_withholds_the_hint():
     ups /= np.linalg.norm(ups, axis=1, keepdims=True)
     extr = np.stack([_extrinsic(0.0, u) for u in ups])
 
-    up, coherence, note = backend._up_from_cameras(extr)
+    up, coherence, note = colmap.up_from_cameras(extr)
 
     assert up is None
-    assert coherence < backend.UP_COHERENCE_FLOOR
+    assert coherence < colmap.UP_COHERENCE_FLOOR
     assert note and "consistent orientation" in note
 
 
@@ -193,99 +192,6 @@ def test_scan_import_drops_a_degenerate_up():
 # ---------------------------------------------------------------------------
 # scale
 # ---------------------------------------------------------------------------
-
-
-class _FakeMetricDepth:
-    """A metric depth model that is right to within a known, controlled error."""
-
-    def __init__(self, factor: float, noise: float = 0.0, seed: int = 0):
-        self.factor, self.noise = factor, noise
-        self.model_name = "fake/metric-depth"
-        self._rng = np.random.default_rng(seed)
-        self._depths: dict[str, np.ndarray] = {}
-
-    def register(self, path, recon_depth: np.ndarray) -> None:
-        d = recon_depth * self.factor
-        if self.noise:
-            d = d * np.exp(self._rng.normal(0.0, self.noise, size=d.shape))
-        self._depths[str(path)] = d
-
-    def load(self):
-        return self.model_name
-
-    def predict(self, path):
-        return self._depths[str(path)]
-
-
-def _depth_stack(n: int = 6, h: int = 32, w: int = 32, seed: int = 1) -> np.ndarray:
-    rng = np.random.default_rng(seed)
-    return rng.uniform(0.4, 3.0, size=(n, h, w))
-
-
-def test_scale_recovers_a_known_factor_exactly():
-    recon = _depth_stack()
-    model = _FakeMetricDepth(factor=3.7)
-    paths = [f"f{i}.jpg" for i in range(len(recon))]
-    for p, d in zip(paths, recon):
-        model.register(p, d)
-
-    est = metric.solve_scale(paths, recon, model=model, conf_quantile=0.0)
-
-    assert est.factor == pytest.approx(3.7, rel=1e-6)
-    assert est.frames_used == len(recon)
-    assert est.relative_error < 1e-6
-    assert est.confidence > 0.9
-
-
-def test_scale_error_bar_grows_with_disagreement():
-    """The reported uncertainty must track the real one, not a constant.
-
-    Two runs differing only in how much the metric prior disagrees with the
-    reconstruction have to come back with different error bars, or the number
-    is decoration.
-    """
-    recon = _depth_stack()
-    paths = [f"f{i}.jpg" for i in range(len(recon))]
-
-    def run(noise):
-        model = _FakeMetricDepth(factor=2.0, noise=noise, seed=5)
-        for p, d in zip(paths, recon):
-            model.register(p, d)
-        return metric.solve_scale(paths, recon, model=model, conf_quantile=0.0)
-
-    tight, loose = run(0.02), run(0.25)
-
-    assert tight.factor == pytest.approx(2.0, rel=0.05)
-    assert loose.log_spread > tight.log_spread
-    assert loose.confidence < tight.confidence
-
-
-def test_scale_ignores_pixels_outside_the_indoor_range():
-    """Sky through a window and the operator's own hand must not set the scale."""
-    recon = _depth_stack(n=4)
-    paths = [f"f{i}.jpg" for i in range(len(recon))]
-    model = _FakeMetricDepth(factor=2.5)
-    for p, d in zip(paths, recon):
-        model.register(p, d)
-    # Poison a corner of every frame with depths far outside a room.
-    for d in model._depths.values():
-        d[:4, :4] = 400.0
-        d[-4:, -4:] = 0.01
-
-    est = metric.solve_scale(paths, recon, model=model, conf_quantile=0.0)
-
-    assert est.factor == pytest.approx(2.5, rel=0.02)
-
-
-def test_scale_refuses_rather_than_guesses_when_nothing_agrees():
-    recon = _depth_stack(n=3)
-    paths = [f"f{i}.jpg" for i in range(len(recon))]
-    model = _FakeMetricDepth(factor=1.0, noise=2.0, seed=9)
-    for p, d in zip(paths, recon):
-        model.register(p, d)
-
-    with pytest.raises(RuntimeError, match="scale could not be recovered"):
-        metric.solve_scale(paths, recon, model=model, conf_quantile=0.0)
 
 
 def test_declared_metres_can_carry_less_than_total_confidence():
@@ -421,69 +327,6 @@ def _synthetic_video(path, *, seconds: int, fps: int, size: str):
 
 
 # ---------------------------------------------------------------------------
-# preprocessing
-# ---------------------------------------------------------------------------
-
-
-def test_preprocess_keeps_the_top_and_bottom_of_a_portrait_frame(tmp_path):
-    """The whole frame has to reach the network, ceiling and floor included.
-
-    Phone video is portrait, and the upstream helper's default is to centre-crop
-    height to reach a square -- which on a 9:16 frame discards roughly the top
-    and bottom third. For a room twin those thirds are the ceiling and the
-    floor, so this is the regression that matters most in the video path: the
-    marker rows are placed at the very top and very bottom of the source frame
-    and both must survive.
-    """
-    pytest.importorskip("torch")
-    from PIL import Image
-
-    a = np.zeros((1024, 576, 3), dtype=np.uint8)
-    a[:, :, 1] = 128
-    a[:8, :] = [255, 0, 0]      # ceiling marker
-    a[-8:, :] = [0, 0, 255]     # floor marker
-    src = tmp_path / "portrait.png"
-    Image.fromarray(a).save(src)
-
-    batch, valid, _boxes = backend.preprocess([src])
-    frame = (batch[0].permute(1, 2, 0).numpy() * 255).astype(np.uint8)
-
-    assert batch.shape == (1, 3, backend.TARGET_SIZE, backend.TARGET_SIZE)
-    rows = frame[valid[0].any(axis=1)]
-    assert rows[0][valid[0][valid[0].any(axis=1)][0]][:, 0].mean() > 180, "ceiling row lost"
-    assert rows[-1][valid[0][valid[0].any(axis=1)][-1]][:, 2].mean() > 180, "floor row lost"
-
-
-def test_preprocess_marks_its_padding_invalid(tmp_path):
-    """Padding is pixels the camera never saw, and must be labelled as such."""
-    pytest.importorskip("torch")
-    from PIL import Image
-
-    src = tmp_path / "portrait.png"
-    Image.fromarray(np.full((1024, 576, 3), 90, np.uint8)).save(src)
-
-    _, valid, _boxes = backend.preprocess([src])
-
-    assert valid.shape == (1, backend.TARGET_SIZE, backend.TARGET_SIZE)
-    assert 0.3 < valid[0].mean() < 0.75, "a 9:16 frame should letterbox to about half the square"
-    columns = valid[0].any(axis=0)
-    assert not columns[0] and not columns[-1], "the padded edges must be the invalid ones"
-    assert valid[0].all(axis=0)[backend.TARGET_SIZE // 2], "the centre column must be real"
-
-
-def test_preprocess_leaves_a_square_frame_untouched(tmp_path):
-    pytest.importorskip("torch")
-    from PIL import Image
-
-    src = tmp_path / "square.png"
-    Image.fromarray(np.full((518, 518, 3), 40, np.uint8)).save(src)
-
-    _, valid, _boxes = backend.preprocess([src])
-
-    assert valid[0].all(), "a frame that is already square needs no padding"
-
-
-# ---------------------------------------------------------------------------
 # the second, independent scale estimator
 # ---------------------------------------------------------------------------
 
@@ -546,7 +389,7 @@ def _est(factor, spread, bias, source):
 
 def test_agreeing_estimators_produce_a_tighter_bar_than_either_alone():
     a = _est(2.00, 0.02, 0.10, "camera-height")
-    b = _est(2.03, 0.02, 0.10, "metric-depth")
+    b = _est(2.03, 0.02, 0.10, "door-height")
 
     combined = metric.combine_scales([a, b])
 
@@ -564,7 +407,7 @@ def test_disagreeing_estimators_widen_the_bar_instead_of_picking_a_winner():
     it covers the disagreement, because at that point we genuinely do not know.
     """
     a = _est(1.00, 0.02, 0.10, "camera-height")
-    b = _est(2.20, 0.02, 0.10, "metric-depth")
+    b = _est(2.20, 0.02, 0.10, "door-height")
 
     combined = metric.combine_scales([a, b])
 
@@ -575,18 +418,21 @@ def test_disagreeing_estimators_widen_the_bar_instead_of_picking_a_winner():
     assert any("disagree" in w for w in combined.warnings)
 
 
-def test_frame_agreement_alone_cannot_produce_a_confident_scale():
-    """Precision is not accuracy, and the estimator must not confuse them.
+def test_internal_agreement_alone_cannot_produce_a_confident_scale():
+    """Precision is not accuracy, and the combiner must not confuse them.
 
-    A depth prior that agrees with itself perfectly across every frame still
-    carries the bias of the model that produced it. Reporting that zero spread
-    as certainty is exactly the failure this module is built to prevent.
+    An estimator that agrees with itself perfectly still carries the bias of
+    the prior that produced it. Reporting that zero spread as certainty is
+    exactly the failure this module is built to prevent.
     """
-    flawless = _est(1.0, 0.0, metric.DEPTH_PRIOR_LOG_BIAS, "metric-depth")
+    import math
+
+    bias = math.log(1.30)
+    flawless = _est(1.0, 0.0, bias, "camera-height")
 
     combined = metric.combine_scales([flawless])
 
-    assert combined.log_spread >= metric.DEPTH_PRIOR_LOG_BIAS
+    assert combined.log_spread >= bias
     assert combined.relative_error > 0.2
     assert any("single estimator" in w for w in combined.warnings)
 
@@ -747,57 +593,3 @@ def test_the_door_anchor_is_scale_free_in_its_shape_test():
         est = metric.scale_from_doors(doors, current_factor=1.0)
         assert est is not None, f"a door went unrecognised at {error}x scale"
         assert est.factor == pytest.approx(1.0 / error, rel=0.02)
-
-
-# ---------------------------------------------------------------------------
-# silhouette ramps
-# ---------------------------------------------------------------------------
-
-
-def test_a_flat_surface_survives_edge_filtering():
-    depth = np.full((16, 16), 2.5)
-    assert backend.edge_mask(depth)[1:-1, 1:-1].all()
-
-
-def test_a_steeply_grazing_surface_survives():
-    """A wall seen almost edge-on ramps fast and is still a wall.
-
-    This is the constraint that stops the filter from being a blunt instrument:
-    the far end of any room is seen at grazing incidence, and a threshold tight
-    enough to look tidy deletes it.
-    """
-    ramp = 2.0 * (1.02 ** np.arange(16))          # 2% per pixel, about 80 degrees
-    depth = np.tile(ramp, (16, 1))
-    assert backend.edge_mask(depth)[1:-1, 1:-1].mean() > 0.99
-
-
-def test_a_silhouette_is_removed():
-    """Depth ramping between an object and the wall behind it lands in mid-air."""
-    depth = np.full((16, 16), 1.5)
-    depth[:, 8:] = 5.0
-    mask = backend.edge_mask(depth)
-    assert not mask[1:-1, 7:9].any(), "the jump itself must go"
-    assert mask[1:-1, 2:6].all(), "the flat parts either side must stay"
-
-
-def test_the_threshold_is_relative_not_absolute():
-    """A 5 cm step is a silhouette up close and invisible across a hall."""
-    near = np.full((16, 16), 0.5)
-    near[:, 8:] = 0.55                             # 10% step
-    far = np.full((16, 16), 20.0)
-    far[:, 8:] = 20.05                             # 0.25% step
-
-    assert not backend.edge_mask(near)[1:-1, 7:9].any()
-    assert backend.edge_mask(far)[1:-1, 1:-1].all()
-
-
-def test_the_frame_border_is_never_trusted():
-    depth = np.full((16, 16), 2.0)
-    mask = backend.edge_mask(depth)
-    assert not mask[0].any() and not mask[-1].any()
-    assert not mask[:, 0].any() and not mask[:, -1].any()
-
-
-def test_edge_filtering_copes_with_a_degenerate_map():
-    assert backend.edge_mask(np.zeros((2, 2))).sum() == 0
-    assert not backend.edge_mask(np.full((8, 8), np.nan))[1:-1, 1:-1].any()

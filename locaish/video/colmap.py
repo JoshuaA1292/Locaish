@@ -1,8 +1,7 @@
 """Reconstruction without a neural network: classical structure from motion.
 
-This is the same job `backend.py` does -- frames in, a dense cloud and camera
-poses out -- performed by matching hand-designed features between images and
-bundle-adjusting the result. SIFT is from 1999 and bundle adjustment is older
+Frames in, a sparse model and camera poses out -- produced by matching
+hand-designed features between images and bundle-adjusting the result. SIFT is from 1999 and bundle adjustment is older
 than that. There is no model file, nothing was trained, and every number it
 produces traces to a corner detected in an image and a least-squares solve over
 reprojection error.
@@ -56,6 +55,54 @@ SEQUENTIAL_OVERLAP = 20
 
 class ColmapError(RuntimeError):
     """COLMAP is missing, or refused to reconstruct this sweep."""
+
+
+# Below this mean resultant length, the frames do not agree which way is up and
+# the hint is withheld entirely: a confidently wrong up is worse for the
+# pipeline than no up at all, because it would outvote the room's own geometry.
+UP_COHERENCE_FLOOR = 0.75
+
+
+def up_from_cameras(extrinsics: np.ndarray) -> tuple[np.ndarray | None, float, str | None]:
+    """Recover which way is up from how the phone was held.
+
+    Nothing in the reconstruction itself knows about gravity -- feature matching
+    sees pixels, and a room filmed upside down reconstructs perfectly happily
+    upside down. But the *poses* carry the answer for free: a person filming a
+    room holds the phone roughly upright, so the camera's own down axis is
+    roughly gravity, in every frame, and the frames were solved in a single
+    shared world frame. Averaging the per-frame down axes therefore recovers
+    gravity directly, without a single assumption about furniture, ceilings or
+    what a room looks like.
+
+    The mean resultant length of those directions is returned alongside, and it
+    is the whole safety net: it is near 1 when the phone was held consistently
+    and collapses toward 0 when it was not, which is exactly when this estimate
+    deserves to be ignored.
+
+    With OpenCV extrinsics `x_cam = R x_world + t`, a camera-frame direction d
+    maps back to the world as `R^T d`; camera down is +Y, so world down is the
+    second row of R.
+    """
+    if extrinsics is None or len(extrinsics) == 0:
+        return None, 0.0, None
+    downs = np.asarray(extrinsics, dtype=np.float64)[:, 1, :3]
+    norms = np.linalg.norm(downs, axis=1, keepdims=True)
+    good = norms[:, 0] > 1e-9
+    if good.sum() < 2:
+        return None, 0.0, None
+    ups = -downs[good] / norms[good]
+    mean = ups.mean(axis=0)
+    coherence = float(np.linalg.norm(mean))
+    if coherence < UP_COHERENCE_FLOOR:
+        return (
+            None,
+            coherence,
+            f"the camera was not held in a consistent orientation (frames agree "
+            f"on which way is up only {coherence:.0%}), so gravity was left to be "
+            "recovered from the room's own geometry",
+        )
+    return mean / coherence, coherence, None
 
 
 @dataclass

@@ -2,13 +2,15 @@
 
 The sequence is fixed and each step depends on the one before it:
 
-    frames -> reconstruction -> scale -> clean -> subsample -> ScanImport
+    frames -> structure from motion -> dense stereo -> scale -> clean -> ScanImport
 
-Scale has to come after reconstruction because it is solved by comparing the
-reconstruction's own depth against a metric prior, and cleaning has to come
-after scale because every threshold in it is a distance in metres -- "drop
-points more than 12 cm from any neighbour" is meaningless in the network's
-arbitrary unit.
+Reconstruction is classical: SIFT features matched between frames, bundle
+adjustment, and photometric stereo to densify -- see `colmap.py` for why that
+choice is load-bearing rather than aesthetic. Scale has to come after
+reconstruction because it is solved from the camera trajectory, and cleaning
+has to come after scale because every threshold in it is a distance in metres
+-- "drop points more than 12 cm from any neighbour" is meaningless in the
+reconstruction's arbitrary unit.
 
 The result deliberately stops at a `ScanImport`, the same object the PLY and
 OBJ readers produce. Everything after that -- gravity, yaw, planes, openings,
@@ -16,15 +18,16 @@ QA -- is the existing pipeline, unchanged and unaware that the points came from
 video. That is the point: a twin from a phone sweep gets audited by exactly the
 same code as a twin from a LiDAR export, and gets to fail the same checks.
 
-The intermediate artefacts (chosen frames, raw cloud, manifest) are written to
-a working directory rather than a temp dir that vanishes. When a twin comes out
-wrong, the first question is always whether the frames were any good, and that
-question cannot be answered from a point cloud.
+The intermediate artefacts (chosen frames, raw cloud, manifest, COLMAP logs)
+are written to a working directory rather than a temp dir that vanishes. When a
+twin comes out wrong, the first question is always whether the frames were any
+good, and that question cannot be answered from a point cloud.
 """
 
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -33,17 +36,18 @@ import numpy as np
 
 from ..formats import ScanImport, voxel_subsample_indices, write_ply
 from ..types import PointCloud
-from .frames import FrameSet, VideoError, VideoInfo, extract_frames
+from .frames import FrameSet, VideoError, VideoInfo, extract_frames, probe
 
-# Default number of frames handed to the network. Global attention across
-# frames makes memory grow quadratically, and on a 32 GB Apple Silicon machine
-# this is comfortably inside the envelope while still covering a room sweep.
-DEFAULT_FRAMES = 24
+# Ceiling on how many frames are decoded for matching. Classical SfM wants
+# temporal density -- correspondences chain frame to frame -- but past a few
+# hundred frames the matching cost grows without the room gaining coverage.
+MAX_FRAMES = 300
 
-# Raising `frames` past a window's worth is what engages the chunked path: the
-# frame budget stops being a hardware limit and becomes a choice about how much
-# of the room to reconstruct.
-DEFAULT_FRAMES_CHUNKED = 24
+# Sparse points kept for the final cloud must have been seen from at least this
+# many views with at most this reprojection error. A two-view point with a
+# three-pixel residual is a matching accident, not a surface.
+SPARSE_MIN_TRACK = 3
+SPARSE_MAX_ERROR_PX = 2.0
 
 # Neighbourhood used by the outlier trim. Small enough to be cheap on a
 # multi-million point cloud, large enough that a genuine thin surface (a
@@ -84,15 +88,11 @@ def reconstruct_video(
     path: str | Path,
     *,
     workdir: str | Path | None = None,
-    frames: int = DEFAULT_FRAMES,
-    device: str | None = None,
+    fps: float | None = None,
     max_points: int = 1_500_000,
     scale_factor: float | None = None,
     start_s: float | None = None,
     end_s: float | None = None,
-    conf_quantile: float | None = None,
-    chunk: int | None = None,
-    overlap: int | None = None,
     keep_frames: bool = True,
     refresh: bool = False,
     extra_scales=None,
@@ -100,17 +100,18 @@ def reconstruct_video(
 ) -> VideoReconstruction:
     """Reconstruct a hand-held video sweep into a metric `ScanImport`.
 
-    The expensive half of this -- decode, network, scale -- depends only on the
-    video and the handful of options listed in the cache key, so its result is
-    stored next to the twin and reused. That matters more than it sounds: the
-    reconstruction is minutes and everything downstream is seconds, so without
-    a cache, adjusting a voxel size means re-running a billion-parameter network
-    to get back a cloud that was never going to change. `refresh=True` forces
-    the work to happen again.
+    The expensive half of this -- decode, matching, bundle adjustment, stereo --
+    depends only on the video and the handful of options in the cache key, so
+    its result is stored next to the twin and reused. That matters more than it
+    sounds: the reconstruction is minutes and everything downstream is seconds,
+    so without a cache, adjusting a voxel size means re-matching a few hundred
+    frames to get back a cloud that was never going to change. `refresh=True`
+    forces the work to happen again.
     """
     import time
 
-    from . import backend as backendmod
+    from . import colmap as colmapmod
+    from . import dense as densemod
     from . import metric as metricmod
 
     src = Path(path)
@@ -122,22 +123,43 @@ def reconstruct_video(
     def _step(name):
         return _Clock(timings, name, progress)
 
-    key = _cache_key(
-        src, frames, max_points, scale_factor, start_s, end_s, conf_quantile, chunk, overlap
-    )
-    # Extra estimators change the scale but nothing the network computes, so
-    # they are kept out of the cache key: a second pass carrying a door anchor
-    # must still reuse the first pass's reconstruction, or the anchor costs a
-    # full re-run of the network to change one number.
+    fps = float(fps) if fps else colmapmod.CLASSICAL_FPS
+    key = _cache_key(src, fps, max_points, scale_factor, start_s, end_s)
     if not refresh and not extra_scales:
         cached = _load_cache(workdir, key, src, progress=progress)
         if cached is not None:
             return cached
 
     # -- frames -----------------------------------------------------------
+    #
+    # Dense in time, because correspondence is the binding constraint: SIFT
+    # matches a frame against its neighbours, and a gap in time where the
+    # camera kept moving is a break in the chain. The sharpest frame per
+    # timeline slice is still chosen -- motion blur costs matches too.
+    info = probe(src)
+    span = info.duration_s or 0.0
+    if start_s is not None or end_s is not None:
+        lo = start_s or 0.0
+        hi = end_s if end_s is not None else span
+        span = max(hi - lo, 0.0)
+    count = int(math.ceil(max(span, 1.0) * fps))
+    if count > MAX_FRAMES:
+        warnings.append(
+            f"the sweep offers {count} frames at {fps:g} fps and {MAX_FRAMES} were "
+            "kept, spread across the whole timeline; a very long walk is better "
+            "reconstructed as two shorter clips"
+        )
+        count = MAX_FRAMES
     with _step("frames"):
         fs = extract_frames(
-            src, workdir, count=frames, start_s=start_s, end_s=end_s, progress=progress
+            src,
+            workdir,
+            count=count,
+            candidate_fps=min(max(fps * 1.5, fps + 1.0), 30.0),
+            long_side=colmapmod.CLASSICAL_LONG_SIDE,
+            start_s=start_s,
+            end_s=end_s,
+            progress=progress,
         )
     warnings += fs.warnings
     if len(fs) < 2:
@@ -145,20 +167,64 @@ def reconstruct_video(
             f"{src.name} yielded only {len(fs)} usable frame(s); a reconstruction "
             "needs at least two viewpoints of the room"
         )
+    image_dir = fs.paths[0].parent
 
-    # -- reconstruction ---------------------------------------------------
+    # -- structure from motion --------------------------------------------
     with _step("reconstruct"):
-        kw = {} if conf_quantile is None else {"conf_quantile": conf_quantile}
-        recon = backendmod.reconstruct_chunked(
-            fs.paths,
-            chunk=chunk,
-            overlap=overlap,
-            device=device,
-            max_points=max_points * 2,
-            progress=progress,
-            **kw,
+        colmap_dir = workdir / "colmap"
+        model_dir = colmapmod.run_sfm(image_dir, colmap_dir, progress=progress)
+        model = colmapmod.read_model(model_dir)
+    warnings += model.warnings
+    if len(model) < max(3, len(fs) // 4):
+        warnings.append(
+            f"only {len(model)} of {len(fs)} frames could be registered into one "
+            "model; the parts of the sweep that broke the chain are simply absent "
+            "from this twin"
         )
-    warnings += recon.warnings
+
+    up_hint, up_coherence, up_note = colmapmod.up_from_cameras(model.extrinsics)
+    if up_note:
+        warnings.append(up_note)
+    centres = densemod._camera_centres(model.extrinsics)
+
+    # -- dense stereo ------------------------------------------------------
+    with _step("stereo"):
+        if colmapmod.supports_cuda():
+            dense_pts = densemod.densify_patchmatch(
+                image_dir, model_dir, colmap_dir, progress=progress
+            )
+            stereo = "patchmatch"
+        else:
+            dense_pts, dense_warnings = densemod.densify_sgbm(
+                model, image_dir, progress=progress
+            )
+            warnings += dense_warnings
+            stereo = "sgbm"
+
+    keep_sparse = (model.errors <= SPARSE_MAX_ERROR_PX) & (
+        model.track_lengths >= SPARSE_MIN_TRACK
+    )
+    sparse_pts = np.hstack(
+        [model.points[keep_sparse], model.colors[keep_sparse].astype(np.float64)]
+    )
+    merged = (
+        np.concatenate([sparse_pts, dense_pts]) if len(dense_pts) else sparse_pts
+    )
+    if len(merged) == 0:
+        raise VideoError(
+            "the reconstruction produced no points at all; the sweep carries too "
+            "little texture or too little parallax to triangulate"
+        )
+    raw_xyz = merged[:, :3]
+    raw_rgb = np.clip(merged[:, 3:6], 0, 255).astype(np.uint8)
+
+    recon_summary = {
+        "backend": "colmap",
+        "stereo": stereo,
+        **model.summary(),
+        "dense_points": int(len(dense_pts)),
+        "up_coherence": round(float(up_coherence), 3),
+    }
 
     # -- scale ------------------------------------------------------------
     scale = None
@@ -170,43 +236,47 @@ def reconstruct_video(
         )
     else:
         with _step("scale"):
-            # Two estimators, deliberately sharing no evidence: one reads the
-            # room's appearance, the other reads where the operator's hand was.
-            # Either alone can be confidently wrong; only together do they say
-            # anything about accuracy rather than repeatability.
+            # Parallax recovers the room's shape, never its size, so the metres
+            # come from evidence outside the geometry: how high the phone rode
+            # above the floor, and -- on a second pass -- the height of any
+            # doorway found in the room. Both are physical priors, not models.
             estimates = []
             from_cameras = metricmod.scale_from_camera_height(
-                recon.points, recon.camera_centers, recon.up_hint
+                raw_xyz, centres, up_hint
             )
             if from_cameras is not None:
                 estimates.append(from_cameras)
-            estimates.append(
-                metricmod.solve_scale(
-                    fs.paths,
-                    recon.depths,
-                    recon.depth_conf,
-                    boxes=recon.frame_box,
-                    progress=progress,
-                )
-            )
             for extra in extra_scales or []:
                 estimates.append(extra)
-            scale = metricmod.combine_scales(estimates)
+            if estimates:
+                scale = metricmod.combine_scales(estimates)
+            else:
+                scale = metricmod.ScaleEstimate(
+                    factor=1.0,
+                    confidence=0.05,
+                    log_spread=math.log(2.0),
+                    source="unresolved",
+                    warnings=[
+                        "no scale evidence survived -- the camera path gave no "
+                        "usable height above the floor and no doorway anchored "
+                        "it -- so the twin keeps the reconstruction's arbitrary "
+                        "unit; tape-measure one length and pass --scale-factor"
+                    ],
+                )
         factor = scale.factor
         warnings += scale.warnings
 
-    pts = recon.points * factor
-    cams = recon.camera_centers * factor
+    pts = raw_xyz * factor
+    cams = centres * factor
 
     # -- clean ------------------------------------------------------------
     with _step("clean"):
-        pts, cols, dropped = _trim_outliers(pts, recon.colors)
+        pts, cols, dropped = _trim_outliers(pts, raw_rgb)
     if dropped:
         warnings.append(
             f"{dropped:,} isolated points ({dropped / (len(pts) + dropped):.1%}) were "
-            "removed as reconstruction floaters -- depth predicted at an object "
-            "silhouette lands in mid-air, and left in place it would be fitted as "
-            "a wall"
+            "removed as reconstruction floaters -- a mismatched patch triangulates "
+            "into mid-air, and left in place it would be fitted as a wall"
         )
 
     # -- subsample --------------------------------------------------------
@@ -227,10 +297,10 @@ def reconstruct_video(
         mesh=None,
         source_path=src,
         source_format="video",
-        software="locaish-video/vggt",
+        software="locaish-video/colmap",
         camera_positions=cams,
-        # Gravity, measured rather than inferred: see backend._up_from_cameras.
-        up_hint=recon.up_hint,
+        # Gravity, measured rather than inferred: see colmap.up_from_cameras.
+        up_hint=up_hint,
         # Declared, not assumed: the cloud really has been converted to metres
         # by the scale solve, so the unit inference downstream must not run its
         # plausibility priors over it a second time.
@@ -239,11 +309,11 @@ def reconstruct_video(
         raw_header={
             "video": fs.info.summary(),
             "frames_used": len(fs),
+            "frames_registered": len(model),
             "scale_factor_m_per_unit": factor,
-            "scale_source": "supplied" if scale_factor is not None else "metric-depth",
+            "scale_source": "supplied" if scale_factor is not None else "camera-path",
             "scale_confidence": None if scale is None else scale.confidence,
-            "device": recon.device,
-            "up_coherence": recon.up_coherence,
+            "up_coherence": up_coherence,
         },
     )
 
@@ -251,7 +321,7 @@ def reconstruct_video(
         scan=scan,
         frames=fs,
         scale=scale,
-        recon_summary=recon.summary(),
+        recon_summary=recon_summary,
         workdir=workdir,
         timings=timings,
         warnings=warnings,
@@ -275,10 +345,7 @@ def reconstruct_video(
 CACHE_NAME = "reconstruction.npz"
 
 
-def _cache_key(
-    src: Path, frames, max_points, scale_factor, start_s, end_s, conf_quantile,
-    chunk=None, overlap=None,
-) -> dict:
+def _cache_key(src: Path, fps, max_points, scale_factor, start_s, end_s) -> dict:
     """Everything that would change the reconstructed cloud, and nothing else.
 
     The video is identified by size and modification time rather than a hash of
@@ -289,18 +356,15 @@ def _cache_key(
     """
     st = src.stat()
     return {
-        "version": 2,
+        "version": 3,
         "source": str(src.resolve()),
         "size": st.st_size,
         "mtime": int(st.st_mtime),
-        "frames": frames,
+        "fps": fps,
         "max_points": max_points,
         "scale_factor": scale_factor,
         "start_s": start_s,
         "end_s": end_s,
-        "conf_quantile": conf_quantile,
-        "chunk": chunk,
-        "overlap": overlap,
     }
 
 
@@ -347,7 +411,7 @@ def _load_cache(workdir: Path, key: dict, src: Path, progress=None) -> "VideoRec
             mesh=None,
             source_path=src,
             source_format="video",
-            software="locaish-video/vggt",
+            software="locaish-video/colmap",
             camera_positions=cams if len(cams) else None,
             up_hint=up if len(up) == 3 else None,
             unit_hint="m",
@@ -394,7 +458,7 @@ def _info_from_summary(src: Path, s: dict) -> VideoInfo:
 
 
 class _ScaleView:
-    """A restored scale estimate: the numbers, without the model that made them."""
+    """A restored scale estimate: the numbers, without the solver that made them."""
 
     def __init__(self, d: dict):
         self._d = dict(d)
@@ -409,12 +473,12 @@ class _ScaleView:
 def _trim_outliers(xyz: np.ndarray, rgb: np.ndarray) -> tuple[np.ndarray, np.ndarray, int]:
     """Drop points whose local neighbourhood is far away.
 
-    Predicted depth at a silhouette edge interpolates between the object and
-    whatever is behind it, so it lands in empty space. Those floaters are few
-    but they are catastrophic for plane fitting, which will happily fit a wall
-    through a cloud of them. The test is on the mean distance to the k nearest
-    neighbours, cut at a robust sigma rather than a fixed threshold so that it
-    adapts to how densely this particular sweep sampled the room.
+    A patch matched wrongly between two views triangulates into empty space.
+    Those floaters are few but they are catastrophic for plane fitting, which
+    will happily fit a wall through a cloud of them. The test is on the mean
+    distance to the k nearest neighbours, cut at a robust sigma rather than a
+    fixed threshold so that it adapts to how densely this particular sweep
+    sampled the room.
     """
     from scipy.spatial import cKDTree
 

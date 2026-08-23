@@ -15,19 +15,23 @@ dependencies = [
     "trimesh>=4.0",
     "pillow>=10.0",
     "scikit-image>=0.22",
+    # The agent: Gemini on Google Cloud's Agent Development Kit, with the
+    # official ClickHouse MCP server as its tool surface and clickhouse-connect
+    # for bulk-loading the shot sweep it searches.
+    "google-adk>=2.7",
+    "mcp-clickhouse>=0.4",
+    "clickhouse-connect>=1.7",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
-# Reconstructing a video into a cloud. Kept optional because it is a multi-
-# gigabyte install for a capability most scan-file users never touch, and every
-# import of it in `locaish.video` is function-local so the rest of the CLI works
-# without it. Needs `ffmpeg` on PATH as well, which pip cannot supply.
+# The video front-end reconstructs classically -- COLMAP structure-from-motion
+# plus stereo matching, no neural networks anywhere (see locaish/video/colmap.py
+# for why that is load-bearing). OpenCV supplies the CPU stereo fallback; the
+# `colmap` and `ffmpeg` binaries must be on PATH, which pip cannot supply
+# (`brew install colmap ffmpeg` / `apt install colmap ffmpeg`).
 video = [
-    "torch>=2.4",
-    "torchvision>=0.19",
-    "transformers>=4.45",
-    "vggt @ git+https://github.com/facebookresearch/vggt.git",
+    "opencv-python-headless>=4.9",
 ]
 
 [project.scripts]

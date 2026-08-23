@@ -50,6 +50,7 @@ class Job:
     error: str | None = None
     twin_path: Path | None = None
     viewer_path: Path | None = None
+    scout_path: Path | None = None
     summary: dict = field(default_factory=dict)
 
     def emit(self, kind: str, text: str, **extra) -> None:
@@ -64,10 +65,8 @@ class Studio:
     both simpler and faster than any scheduling would be.
     """
 
-    def __init__(self, root: Path, *, frames: int, device: str | None, max_points: int):
+    def __init__(self, root: Path, *, max_points: int):
         self.root = root
-        self.frames = frames
-        self.device = device
         self.max_points = max_points
         self.jobs: dict[str, Job] = {}
         self._lock = threading.Lock()
@@ -93,8 +92,6 @@ class Studio:
             try:
                 opts = IngestOptions(
                     name=Path(job.name).stem,
-                    video_frames=self.frames,
-                    video_device=self.device,
                     video_workdir=job.workdir / "recon",
                     max_points=self.max_points,
                     progress=lambda m: job.emit("stage", m),
@@ -106,7 +103,23 @@ class Studio:
                 job.emit("stage", "rendering viewer")
                 job.viewer_path = render_html(twin, job.workdir / "view.html")
 
+                # The recce, written up. Cheap next to the reconstruction, and
+                # it is the thing the twin exists to produce.
+                job.emit("stage", "scouting the location")
+                try:
+                    from .film import report as reportmod
+
+                    built = reportmod.build(twin)
+                    job.scout_path = job.workdir / "scout.txt"
+                    job.scout_path.write_text(reportmod.render_text(built))
+                    (job.workdir / "scout.json").write_text(
+                        json.dumps(built.to_dict(), indent=2, default=str)
+                    )
+                except Exception as exc:  # noqa: BLE001 - a twin can be too thin to survey
+                    job.emit("note", f"the location could not be surveyed: {exc}")
+
                 job.summary = _summarise(twin, result)
+                job.summary["scout"] = job.scout_path is not None
                 for w in result.warnings:
                     job.emit("note", w)
                 job.state = "done"
@@ -179,6 +192,11 @@ class _Handler(BaseHTTPRequestHandler):
             if not job or not job.viewer_path or not job.viewer_path.exists():
                 return self._json({"error": "no viewer for that job"}, 404)
             return self._file(job.viewer_path, "text/html; charset=utf-8")
+        if parts[0] == "scout" and len(parts) == 2:
+            job = self.studio.jobs.get(parts[1])
+            if not job or not job.scout_path or not job.scout_path.exists():
+                return self._json({"error": "no scout report for that job"}, 404)
+            return self._file(job.scout_path, "text/plain; charset=utf-8")
         if parts[0] == "twin" and len(parts) == 2:
             job = self.studio.jobs.get(parts[1])
             if not job or not job.twin_path or not job.twin_path.exists():
@@ -283,8 +301,6 @@ def serve(
     root: Path,
     *,
     port: int = 8765,
-    frames: int = 24,
-    device: str | None = None,
     max_points: int = 1_500_000,
     open_browser: bool = True,
 ) -> str:
@@ -292,7 +308,7 @@ def serve(
     import webbrowser
 
     root.mkdir(parents=True, exist_ok=True)
-    studio = Studio(root, frames=frames, device=device, max_points=max_points)
+    studio = Studio(root, max_points=max_points)
     handler = type("Handler", (_Handler,), {"studio": studio})
     httpd = ThreadingHTTPServer(("127.0.0.1", port), handler)
     url = f"http://127.0.0.1:{httpd.server_address[1]}"
@@ -388,9 +404,9 @@ let t0 = 0;
 
 // The stages the pipeline announces, in order, so a progress bar can mean
 // something instead of animating for its own sake.
-const STAGES = ['frames','decode','score','reconstruct','load model','scale','clean',
+const STAGES = ['frames','decode','score','reconstruct','colmap','stereo','scale','clean',
                 'subsample','write','read','normals','planes','canonicalize','grid',
-                'mesh','bounds','structure','qa','rendering viewer'];
+                'mesh','bounds','structure','qa','rendering viewer','scouting the location'];
 
 drop.onclick = () => file.click();
 drop.ondragover = e => { e.preventDefault(); drop.classList.add('hot'); };
@@ -468,6 +484,7 @@ function show(id, s) {
       '<div class="card ' + (c[2]||'') + '"><em>' + c[0] + '</em><b>' + c[1] + '</b></div>').join('') +
     '</div><div class="actions">' +
       '<a class="primary" href="/view/' + id + '" target="_blank">Open the twin</a>' +
+      (s.scout ? '<a href="/scout/' + id + '" target="_blank">Scout report</a>' : '') +
       '<a href="/twin/' + id + '">Download .twin</a>' +
     '</div>';
   const bad = (s.checks.fail || []).concat(s.checks.warn || []);

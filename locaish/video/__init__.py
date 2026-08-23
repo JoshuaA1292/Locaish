@@ -23,8 +23,8 @@ __all__ = [
 
 
 def __getattr__(name: str):
-    # Deferred so that importing locaish.video for `probe` alone does not drag
-    # in torch, which costs seconds and half a gigabyte of RSS.
+    # Deferred so that importing locaish.video for `probe` alone does not pay
+    # for the reconstruction stack.
     if name == "reconstruct_video":
         from .reconstruct import reconstruct_video
 

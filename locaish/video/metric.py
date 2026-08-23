@@ -10,14 +10,8 @@ limitation of the network; it is a property of the problem.
 Locaish cannot ship a twin with an unknown scale, because every downstream
 claim -- will the dolly fit, how long is the light on that wall -- is a
 statement in metres. So the scale has to come from outside the geometry, and
-this module gets it from two places that have nothing to do with each other:
-
-**A monocular metric depth network.** Trained on indoor scenes with real depth
-ground truth, it has learned the size priors a human uses for the same
-judgement -- that is a door, doors are about two metres, therefore the room is
-about four. It sees one frame and returns depth in metres, which is compared
-against the reconstruction's own depth over the same pixels. Their ratio is the
-scale factor.
+this module gets it from two physical anchors that have nothing to do with
+each other:
 
 **How high the phone was.** A person filming a room holds it somewhere around
 chest height. Once gravity is known -- and the camera poses give that away --
@@ -25,19 +19,26 @@ the distance from the camera path down to the floor is a length in the
 reconstruction's arbitrary units whose value in metres we already know to
 within a few centimetres.
 
+**Any doorway in the room.** A door leaf is built to a standard almost
+everywhere on earth, which makes it the tightest anchor available in a room
+nobody measured. It is recognised by shape rather than size -- see
+`scale_from_doors` -- and runs as a second pass, because apertures are found
+in the canonical frame and the canonical frame needs a scale to exist.
+
 Neither is a tape measure. The point of having both is that they fail
-*differently*: a depth network's absolute scale drifts with room type and
-framing, while camera height is wrong only if the operator was crouching or
-holding the phone overhead. When two estimates built from unrelated evidence
-agree, that agreement is real information; when they disagree, the honest
-response is a wider error bar, not a choice. `combine_scales` does exactly
-that, and the spread it reports is what becomes the twin's `scale_confidence`.
+*differently*: camera height is wrong only if the operator was crouching or
+holding the phone overhead, while a door anchor is wrong only if the aperture
+it locked onto was not actually a door. When two estimates built from
+unrelated evidence agree, that agreement is real information; when they
+disagree, the honest response is a wider error bar, not a choice.
+`combine_scales` does exactly that, and the spread it reports is what becomes
+the twin's `scale_confidence`.
 
 The failure this module exists to prevent is subtle and worth naming: a scale
-solved from one estimator, checked against itself, reports beautiful agreement
-between frames and can still be off by a factor of two. Frame-to-frame
-consistency measures precision. Only a second, independent estimator measures
-anything like accuracy.
+solved from one estimator, checked against itself, reports beautiful internal
+agreement and can still be off by a factor of two. Self-consistency measures
+precision. Only a second, independent estimator measures anything like
+accuracy.
 """
 
 from __future__ import annotations
@@ -47,40 +48,11 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-# Indoor-trained metric checkpoints, in descending order of quality. Indoor
-# matters: the outdoor variants of the same architecture are trained to an 80 m
-# range and systematically overestimate a 4 m room.
-DEFAULT_MODEL = "depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf"
-FALLBACK_MODELS = (
-    "depth-anything/Depth-Anything-V2-Metric-Indoor-Base-hf",
-    "depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf",
-)
-
-# Pixels nearer than this are usually the operator's own hand or body drifting
-# into frame; further than this is beyond both the metric model's indoor
-# training range and any wall in a normal room, so it is almost always a view
-# through a doorway or window into space the twin does not cover.
-MIN_VALID_M = 0.25
-MAX_VALID_M = 15.0
-
-# A frame whose log-ratio spread exceeds this is internally inconsistent --
-# the metric model and the reconstruction disagree about the *shape* of the
-# depth, not just its scale -- so its scale vote is unreliable and is dropped.
-MAX_FRAME_LOG_SPREAD = 0.35
-
 # What a hand-held phone rides at while someone walks a room, and how much that
 # varies between people and postures. Roughly chest to eye height: the operator
 # is looking at the screen, not through a viewfinder.
 CAMERA_HEIGHT_M = 1.55
 CAMERA_HEIGHT_LOG_BIAS = math.log(1.12)
-
-# The irreducible absolute error of a monocular metric depth prior on a room it
-# has never seen. This is *not* measured from the frames -- it cannot be, since
-# every frame is scored by the same biased model and they will happily agree
-# with each other to within a percent while all being half the true size. It is
-# a prior on the estimator itself, and without it the combined error bar would
-# be a measure of precision wearing the label of accuracy.
-DEPTH_PRIOR_LOG_BIAS = math.log(1.30)
 
 # A door leaf is one of the few dimensions in a building that is effectively
 # standardised: 1981 mm in the UK, 2032 mm across Europe and North America, and
@@ -117,7 +89,7 @@ class ScaleEstimate:
     factor: float
     confidence: float
     log_spread: float
-    source: str = "metric-depth"
+    source: str = "unspecified"
     prior_bias: float = 0.0
     per_frame: list[float] = field(default_factory=list)
     frames_used: int = 0
@@ -150,194 +122,6 @@ class ScaleEstimate:
         if self.components:
             d["components"] = self.components
         return d
-
-
-class MetricDepth:
-    """Lazy wrapper around a monocular metric depth model."""
-
-    def __init__(self, model_name: str | None = None, device: str | None = None) -> None:
-        self.model_name = model_name or DEFAULT_MODEL
-        self.device = device
-        self._model = None
-        self._processor = None
-
-    def load(self) -> str:
-        if self._model is not None:
-            return self.model_name
-        import torch
-        from transformers import AutoImageProcessor, AutoModelForDepthEstimation
-
-        from .backend import pick_device
-
-        self.device = self.device or pick_device()
-        last: Exception | None = None
-        for name in (self.model_name, *FALLBACK_MODELS):
-            try:
-                self._processor = AutoImageProcessor.from_pretrained(name)
-                self._model = AutoModelForDepthEstimation.from_pretrained(
-                    name, dtype=torch.float32
-                ).to(self.device).eval()
-                self.model_name = name
-                return name
-            except Exception as exc:  # noqa: BLE001 - any load failure is a fallback
-                last = exc
-        raise RuntimeError(f"could not load a metric depth model: {last}") from last
-
-    def predict(self, image) -> np.ndarray:
-        """Metric depth in metres for one image, at the image's own resolution.
-
-        Takes a path or an HxWx3 uint8 array. What must *not* be handed to it is
-        a letterboxed frame: a photograph with white bars down both sides is a
-        photograph of nothing, and this model reads framing as evidence about
-        distance -- padding one measurably shifts its metres. The caller
-        compares against the reconstruction by mapping this prediction into the
-        letterbox instead.
-        """
-        import torch
-        from PIL import Image
-
-        self.load()
-        opened = None
-        if isinstance(image, np.ndarray):
-            im = Image.fromarray(np.asarray(image, dtype=np.uint8)).convert("RGB")
-        else:
-            opened = Image.open(image)
-            im = opened.convert("RGB")
-        try:
-            size = im.size  # (w, h)
-            inputs = self._processor(images=im, return_tensors="pt").to(self.device)
-        finally:
-            if opened is not None:
-                opened.close()
-        with torch.no_grad():
-            out = self._model(**inputs)
-        depth = out.predicted_depth
-        if depth.ndim == 3:
-            depth = depth.unsqueeze(1)
-        depth = torch.nn.functional.interpolate(
-            depth.float(), size=(size[1], size[0]), mode="bicubic", align_corners=False
-        )
-        return depth[0, 0].detach().cpu().numpy().astype(np.float64)
-
-
-def solve_scale(
-    frames,
-    recon_depths: np.ndarray,
-    recon_conf: np.ndarray | None = None,
-    *,
-    boxes: np.ndarray | None = None,
-    model: MetricDepth | None = None,
-    conf_quantile: float = 0.5,
-    max_frames: int = 8,
-    sample_px: int = 20_000,
-    progress=None,
-) -> ScaleEstimate:
-    """Find the metres-per-unit factor by comparing against a metric depth prior.
-
-    `frames` is what the metric model should look at -- the *original* frames,
-    not the network's padded squares. `recon_depths` is (N, H, W) in the
-    reconstruction's own unit, and `boxes` says where each original frame's
-    pixels sit inside those squares, so the two depth maps being divided by each
-    other are depth maps of the same picture.
-
-    Only a subset of frames is used: the factor is a single global scalar, so
-    eight independent votes settle it, and each extra frame costs a full forward
-    pass of a large network for no additional information.
-
-    The spread this returns is the disagreement *between frames*, which is a
-    measure of precision. It is not the accuracy of the answer, and callers must
-    not treat it as such -- see `DEPTH_PRIOR_LOG_BIAS`.
-    """
-    md = model or MetricDepth()
-    recon_depths = np.asarray(recon_depths, dtype=np.float64)
-    n = len(recon_depths)
-    if n == 0:
-        raise ValueError("no reconstruction depths to scale")
-
-    # Spread the votes across the sweep rather than taking the first eight
-    # frames: consecutive frames see the same wall, and a metric model that is
-    # wrong about that one wall would then be wrong in every vote.
-    idx = np.unique(np.linspace(0, n - 1, min(max_frames, n)).round().astype(int))
-    md.load()
-
-    rng = np.random.default_rng(0)
-    per_frame: list[float] = []
-    spreads: list[float] = []
-    rejected = 0
-    warnings: list[str] = []
-
-    for k, i in enumerate(idx):
-        if progress:
-            progress(f"scale {k + 1}/{len(idx)}")
-        metric = md.predict(frames[i])
-        recon = recon_depths[i]
-        conf = None if recon_conf is None else np.asarray(recon_conf[i], dtype=np.float64)
-
-        if boxes is not None:
-            top, left, h, w = (int(v) for v in boxes[i])
-            recon = recon[top : top + h, left : left + w]
-            if conf is not None:
-                conf = conf[top : top + h, left : left + w]
-        metric = _resize_to(metric, recon.shape)
-
-        valid = (
-            np.isfinite(metric) & np.isfinite(recon)
-            & (metric > MIN_VALID_M) & (metric < MAX_VALID_M)
-            & (recon > 1e-6)
-        )
-        if conf is not None and conf.shape == recon.shape:
-            finite = conf[np.isfinite(conf)]
-            if finite.size:
-                valid &= conf >= np.quantile(finite, conf_quantile)
-        if valid.sum() < 500:
-            rejected += 1
-            continue
-
-        ratios = np.log(metric[valid] / recon[valid])
-        if ratios.size > sample_px:
-            ratios = rng.choice(ratios, sample_px, replace=False)
-        med = float(np.median(ratios))
-        mad = float(np.median(np.abs(ratios - med))) * 1.4826
-        if mad > MAX_FRAME_LOG_SPREAD:
-            rejected += 1
-            continue
-        per_frame.append(med)
-        spreads.append(mad)
-
-    if not per_frame:
-        raise RuntimeError(
-            "the metric depth model and the reconstruction did not agree on any "
-            "frame, so the twin's scale could not be recovered"
-        )
-
-    logs = np.array(per_frame)
-    log_factor = float(np.median(logs))
-    # Between-frame disagreement is what this estimator can measure about
-    # itself: within-frame spread measures shape disagreement, but the factor is
-    # a per-frame median, so what limits it is how much those medians differ.
-    between = float(np.median(np.abs(logs - log_factor)) * 1.4826) if len(logs) > 1 else float(np.median(spreads))
-    within = float(np.median(spreads))
-    log_spread = float(max(between, within * 0.25))
-
-    if rejected:
-        warnings.append(
-            f"{rejected} of {len(idx)} frames were rejected while solving scale "
-            "because the metric depth prior disagreed with the reconstruction's "
-            "own geometry on them"
-        )
-
-    return ScaleEstimate(
-        factor=float(np.exp(log_factor)),
-        confidence=_confidence(log_spread),
-        log_spread=log_spread,
-        source="metric-depth",
-        prior_bias=DEPTH_PRIOR_LOG_BIAS,
-        per_frame=[float(np.exp(v)) for v in logs],
-        frames_used=len(per_frame),
-        frames_rejected=rejected,
-        model=md.model_name,
-        warnings=warnings,
-    )
 
 
 def scale_from_camera_height(
@@ -563,11 +347,3 @@ def _confidence(log_sigma: float) -> float:
     """
     rel = float(np.expm1(max(log_sigma, 0.0)))
     return float(np.clip(1.0 - rel / 0.30, 0.05, 0.95))
-
-
-def _resize_to(a: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
-    if a.shape == shape:
-        return a
-    from scipy.ndimage import zoom
-
-    return zoom(a, (shape[0] / a.shape[0], shape[1] / a.shape[1]), order=1)

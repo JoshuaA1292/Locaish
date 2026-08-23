@@ -77,15 +77,11 @@ class IngestOptions:
     # Only consulted when the source is a video. Kept on the same options
     # object rather than a parallel one because from the caller's point of view
     # this is still "ingest a scan"; the source just happens to be footage.
-    video_frames: int = 24
-    video_device: str | None = None
+    video_fps: float | None = None
     video_scale_factor: float | None = None
     video_workdir: Path | None = None
     video_start_s: float | None = None
     video_end_s: float | None = None
-    video_conf_quantile: float | None = None
-    video_chunk: int | None = None
-    video_overlap: int | None = None
     video_refresh: bool = False
     # Extra scale estimators handed to the video front-end. Populated by the
     # second pass below, never by a caller.
@@ -166,15 +162,11 @@ def ingest(
             video = reconstruct_video(
                 src,
                 workdir=opts.video_workdir,
-                frames=opts.video_frames,
-                device=opts.video_device,
+                fps=opts.video_fps,
                 max_points=opts.max_points or 1_500_000,
                 scale_factor=opts.video_scale_factor,
                 start_s=opts.video_start_s,
                 end_s=opts.video_end_s,
-                conf_quantile=opts.video_conf_quantile,
-                chunk=opts.video_chunk,
-                overlap=opts.video_overlap,
                 refresh=opts.video_refresh,
                 extra_scales=list(opts.video_extra_scales),
                 progress=prog,
@@ -459,7 +451,7 @@ def _hint_confidence(scan, opts) -> float | None:
     Returns None for every ordinary import, which leaves the unit inference at
     its usual behaviour of believing a header outright. A front-end that
     *computed* the unit rather than reading it -- currently only video, whose
-    metres come from a monocular depth prior -- records its own confidence, and
+    metres come from the camera path -- records its own confidence, and
     that number has to survive all the way to QA or the twin will claim a
     certainty nobody established.
     """
@@ -480,9 +472,9 @@ def _hint_evidence(scan) -> list[str] | None:
     if source == "supplied":
         return [f"scale supplied by the operator as {factor:.6g} m per source unit"]
     return [
-        f"scale solved as {factor:.6g} m per source unit by comparing the "
-        "reconstruction against a monocular metric depth prior; the room's shape "
-        "is measured but its size is inferred"
+        f"scale solved as {factor:.6g} m per source unit from the camera path's "
+        "height above the floor (and any doorway found in the room); the room's "
+        "shape is measured but its size is inferred"
     ]
 
 

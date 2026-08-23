@@ -81,24 +81,30 @@ MP4, MKV and friends, which get reconstructed first.
 No LiDAR, no scanning app, no export step: film the room and hand over the file.
 
 ```bash
-locaish ingest sweep.mov --frames 72 --view
+locaish ingest sweep.mov --view
 ```
 
-The video is decoded, the sharpest frame in each slice of the timeline is
-selected, and those frames go to a feed-forward reconstruction transformer
-(VGGT) that predicts a depth and a camera pose for every one of them in a
-single shared coordinate frame. The result is a dense cloud — a million-odd
-points for a room — plus the trajectory of the phone. From there it is the same
-pipeline a LiDAR export goes through, and it faces the same QA.
+The reconstruction is **classical, end to end** — no neural networks anywhere
+in the pipeline. Frames are pulled densely from the sweep, SIFT features are
+matched between neighbouring frames, bundle adjustment solves every camera pose
+and a sparse cloud (COLMAP), and photometric stereo densifies the result — GPU
+PatchMatch where CUDA exists, semi-global block matching on the CPU everywhere
+else. SIFT is from 1999 and bundle adjustment is older; there is no model file,
+nothing was trained, and every point traces to a corner detected in an image
+and a least-squares solve over reprojection error.
+
+That choice is load-bearing, not aesthetic: the Agentic Cinema rules permit
+only Google Cloud AI tools and prohibit any other AI model regardless of
+vendor, while explicitly allowing open-source non-AI software. A pretrained
+reconstruction network is an AI model whoever wrote it; SIFT is not. This path
+is compliant by construction rather than by argument.
 
 Two things are worth knowing before trusting the output.
 
 **Video has no scale.** A kitchen and a doll's-house kitchen produce identical
 footage; parallax recovers shape, never size. So the metres come from outside
-the geometry — from two estimators that share no evidence:
+the geometry — from two physical anchors that share no evidence:
 
-- a monocular *metric* depth model, run on a handful of frames and compared
-  against the reconstruction's own depth over the same pixels;
 - **how high the phone was.** Gravity is known from the camera poses, so the
   drop from the camera path to the floor is a length whose value in metres we
   already know to within a few centimetres;
@@ -113,27 +119,25 @@ the geometry — from two estimators that share no evidence:
 They are combined by inverse-variance weighting in log space, and — this is the
 part that matters — if they disagree by more than their own error bars allow,
 the combined uncertainty is inflated until it covers the disagreement. Two
-confident estimators cannot produce one confident wrong answer.
-
-That mechanism is there because the obvious version of this is a trap. A scale
-solved from a single depth prior agrees with itself across every frame to within
-a percent and can still be off by a factor of two: frame-to-frame consistency
-measures precision, and reporting precision as accuracy is how a twin ends up
-claiming a 5.9 m ceiling, to ±4%, in a room that is 2.6 m tall. That is not
-hypothetical — it is what this pipeline did during development, and the second
-estimator is what caught it.
+confident estimators cannot produce one confident wrong answer. An estimator
+that agrees with itself perfectly can still be off by a factor of two:
+self-consistency measures precision, and reporting precision as accuracy is how
+a twin ends up claiming a 5.9 m ceiling, to ±4%, in a room that is 2.6 m tall.
+That is not hypothetical — an earlier version of this pipeline did it during
+development, and the independent-anchor design is what caught it.
 
 The result lands in the QA report as `scale_confidence` rather than being
 laundered into a declared unit. If you need better, tape-measure one length in
 the room and pass `--scale-factor`.
 
-**Gravity comes from how you held the phone.** The network knows nothing about
-up — a room filmed upside down reconstructs perfectly happily upside down. But
-the camera poses give it away: averaging each frame's own down-axis recovers
-gravity directly, and the frames' agreement about it is checked before the hint
-is used at all. It breaks ties in the vertical-axis choice and votes hard on
-which end is the floor, but it can never outvote the room's own geometry — film
-pointing at the floor the whole time and the furniture still wins.
+**Gravity comes from how you held the phone.** Feature matching knows nothing
+about up — a room filmed upside down reconstructs perfectly happily upside
+down. But the camera poses give it away: averaging each frame's own down-axis
+recovers gravity directly, and the frames' agreement about it is checked before
+the hint is used at all. It breaks ties in the vertical-axis choice and votes
+hard on which end is the floor, but it can never outvote the room's own
+geometry — film pointing at the floor the whole time and the furniture still
+wins.
 
 **Holes get closed by carving, not by guessing.** A capture by someone who is
 not a surveyor comes back with the floor hidden under furniture, walls glanced
@@ -146,28 +150,16 @@ every such vertex is labelled — `Mesh.filled`, muted colours, and a line in th
 QA report. It cannot seal a doorway you walked through; that is a test, not a
 hope. Without camera poses it declines entirely rather than guess.
 
-**More frames than fit at once.** Attention is global across a window, so memory
-grows with its square and about 24 frames is the limit on a 32 GB machine — but
-24 frames of a 90-second walk see a fraction of the room, and that is where the
-holes come from. Past a window's worth, `--frames` cuts the sweep into
-overlapping chunks, reconstructs each, and joins them through the poses they
-share. On a real capture, going from 24 to 72 frames took wall coverage from
-0.36 to 0.46 and hole fraction from 0.71 to 0.62.
-
-The join is worth one note. Fitting a similarity to the shared camera *centres*
-is the textbook move and it degenerates on the most common capture there is —
-someone walking in a straight line — because collinear points leave the roll
-about the walking axis undetermined and the room comes back barrel-rolled with
-every surface still perfectly planar. Rotation is therefore averaged from the
-cameras' *orientations*, which pin all three axes whatever path was walked.
-
-This is not a bundle adjustment: rotation error accumulates along the chain and
-is reported, not hidden. On the test capture it cost levelling — 0.28° on one
-window against 1.65° across four — which is the standing trade for the coverage.
-Correcting it per-join by forcing every window's gravity estimate to agree was
-tried and removed: that estimate measures the operator's posture, posture really
-does change over a ninety-second walk, and nothing available here separates the
-two.
+**Classical SfM needs frames that chain.** Matching two views of a blank
+painted wall taken a second apart finds nothing, so a sweep sampled sparsely in
+time fragments into disconnected pieces. Measured on a real capture, 72 frames
+produced four fragments whose largest held 28 of them, while 251 frames of the
+same clip registered 240 into a single model with a mean reprojection error
+under a pixel. So frames are pulled densely — `--fps`, default 8 — and the
+binding constraint is temporal density, not coverage. When the chain does
+break, the largest fragment is reconstructed and the QA report says how many
+frames were left out, rather than joining unrelated coordinate frames on a
+guess.
 
 The reconstruction is cached beside the twin, so re-ingesting with different
 options costs seconds rather than minutes. `--refresh` forces it to run again.
@@ -182,10 +174,10 @@ serves a loopback page you drag the video onto, streams the pipeline's own
 stage names back as it works, and hands you the twin and the viewer at the end.
 Same code path as `ingest`, same QA, no extra dependencies.
 
-Requires `ffmpeg` on PATH and the optional ML extra:
-`pip install -e ".[video]"`. First run downloads about 6 GB of weights. On an
-M4 a 24-frame reconstruction takes roughly two minutes; there is no CUDA
-requirement, and no COLMAP.
+Requires `ffmpeg` and `colmap` on PATH (`brew install colmap ffmpeg`) and the
+optional extra: `pip install -e ".[video]"` (OpenCV, for the CPU stereo
+fallback). No weights to download, no GPU required — CUDA merely upgrades the
+dense stage from block matching to PatchMatch.
 
 ## What a twin is
 
@@ -245,12 +237,16 @@ The ten refusals are honest ones: the ceiling-plausibility check firing on rooms
   above is for scan-file input. Video needs `--scale-factor` from a tape measure
   before any claim at centimetre precision.
 - **A video sweep has to actually sweep.** Reconstruction only knows what the
-  frames saw, and a pan from one spot produces a twin that fails the coverage
-  check — correctly. See [CAPTURE.md](CAPTURE.md).
-- **Chunked reconstruction trades levelling for coverage.** Joins are computed
-  pairwise and their rotation error accumulates, so a four-window sweep is
-  measurably less level than a one-window sweep of the same room. Fixing that
-  properly means a global solve over all windows, which is not built.
+  frames saw, and a pan from one spot gives feature matching no baseline to
+  triangulate from — the twin fails the coverage check, correctly. See
+  [CAPTURE.md](CAPTURE.md).
+- **A broken matching chain drops frames.** A pause on a textureless wall can
+  fragment the reconstruction; the largest fragment wins and the rest of the
+  sweep is honestly absent rather than stitched on a guess. Film with steady
+  overlap and the chain holds.
+- **The CPU stereo fallback is weaker on blank walls.** Semi-global matching
+  returns nothing where there is nothing to match, so an undecorated room
+  densifies thinly without CUDA. Honest sparsity, but sparsity.
 - **Nobody films the ceiling**, so `ceiling_z` usually comes back unknown and no
   ceiling height is reported. The completion pass closes the room at the
   frontier of what was swept and labels it inferred; that is not a measurement
@@ -268,8 +264,8 @@ The ten refusals are honest ones: the ceiling-plausibility check firing on rooms
 `pytest tests/` — 156 tests. `test_contract.py` pins the frozen data model,
 `test_accuracy.py` checks eight catalogue fixtures to ±15 mm, `test_qa.py`
 checks the report discriminates rather than decorates, `test_video.py` holds the
-video front-end to known answers without loading a model — a scale solver handed
-depths built from a factor of 3.7 has to return 3.7 — and
+video front-end to known answers without running COLMAP — a gravity estimate
+built from cameras tilted 20° has to come back 20° off, not 0 — and
 `test_generalization.py` is the one that matters: rooms built from a seed the
 tuning never saw, holding the pipeline to the promise above.
 

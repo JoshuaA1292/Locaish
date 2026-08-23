@@ -101,34 +101,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "video",
         "only used when the source is footage rather than a scan file. A video "
         "gives the room's shape from parallax but never its size, so the scale "
-        "is solved separately against a metric depth prior and reported with the "
-        "error bar it deserves.",
+        "is solved separately from the camera path and any doorway in shot, and "
+        "reported with the error bar it deserves.",
     )
     vid.add_argument(
-        "--frames",
-        type=int,
-        default=24,
-        help="frames reconstructed from the sweep; the sharpest frame in each "
-        "slice of the timeline is the one chosen. Past one window's worth the "
-        "sweep is reconstructed in overlapping chunks and joined, so this is a "
-        "choice about how much of the room to cover rather than a hardware "
-        "limit (default: 24)",
-    )
-    vid.add_argument(
-        "--chunk",
-        type=int,
+        "--fps",
+        type=float,
         metavar="N",
-        help="frames per reconstruction window (default 24). Attention is global "
-        "across a window, so memory grows with the square of this",
+        help="frames per second pulled from the sweep for matching (default 8). "
+        "Classical feature matching chains correspondences frame to frame, so "
+        "this is about keeping the chain unbroken, not about coverage",
     )
-    vid.add_argument(
-        "--overlap",
-        type=int,
-        metavar="N",
-        help="frames shared between neighbouring windows, which is what the join "
-        "between them is computed from (default 8)",
-    )
-    vid.add_argument("--device", choices=["mps", "cuda", "cpu"], help="override device selection")
     vid.add_argument(
         "--scale-factor",
         type=float,
@@ -227,8 +210,6 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     st.add_argument("--port", type=int, default=8765)
     st.add_argument("--root", type=Path, default=Path("twins/studio"), help="where jobs land")
-    st.add_argument("--frames", type=int, default=24, dest="studio_frames")
-    st.add_argument("--device", choices=["mps", "cuda", "cpu"], dest="studio_device")
     st.add_argument("--max-points", type=int, default=1_500_000, dest="studio_max_points")
     st.add_argument("--no-open", action="store_true", help="do not open a browser")
     st.set_defaults(func=cmd_studio)
@@ -268,12 +249,9 @@ def cmd_ingest(args) -> int:
         fill_holes=not args.no_fill,
         fill_radius_m=args.fill_radius,
         progress=None if args.quiet else _progress,
-        video_frames=args.frames,
-        video_device=args.device,
+        video_fps=args.fps,
         video_scale_factor=args.scale_factor,
         video_workdir=args.recon_dir,
-        video_chunk=args.chunk,
-        video_overlap=args.overlap,
         video_start_s=args.start,
         video_end_s=args.end,
         video_refresh=args.refresh,
@@ -395,8 +373,6 @@ def cmd_studio(args) -> int:
     serve(
         args.root,
         port=args.port,
-        frames=args.studio_frames,
-        device=args.studio_device,
         max_points=args.studio_max_points,
         open_browser=not args.no_open,
     )
