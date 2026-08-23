@@ -213,8 +213,11 @@ def reconstruct_video(
         # room *is*, so anything the dense stage puts well outside it is a
         # matching artefact, not a discovery.
         if len(sparse_pts):
-            lo = sparse_pts[:, :3].min(axis=0)
-            hi = sparse_pts[:, :3].max(axis=0)
+            # Percentile bounds, not min/max: even the filtered sparse set
+            # keeps a few long-range triangulations, and one of them would
+            # inflate the box to cover the fog it exists to exclude.
+            lo = np.percentile(sparse_pts[:, :3], 1, axis=0)
+            hi = np.percentile(sparse_pts[:, :3], 99, axis=0)
             margin = 0.25 * (hi - lo).max()
             ok = np.all(
                 (dense_pts[:, :3] >= lo - margin) & (dense_pts[:, :3] <= hi + margin),

@@ -56,6 +56,18 @@ MAX_BASELINE_RATIO = 0.25
 # those are the points that would otherwise become a fog around the room.
 MAX_DEPTH_RATIO = 3.0
 
+# A disparity is only kept where the image actually has something to match:
+# below this Sobel gradient magnitude the pixel is blank wall, and whatever
+# SGBM returned there is regularisation, not measurement.
+TEXTURE_MIN_GRADIENT = 10.0
+
+# A point survives fusion only if the voxel it falls in was produced by at
+# least this many *different* stereo pairs. A real surface is seen again and
+# again as the camera walks past; a mismatch is seen once. This is the same
+# idea as COLMAP's multi-view geometric consistency, done at fusion time.
+CONFIRM_PAIRS = 2
+CONFIRM_VOXEL_DEPTH_RATIO = 0.02
+
 
 def densify_patchmatch(
     image_dir: str | Path,
@@ -177,6 +189,7 @@ def densify_sgbm(
     )
 
     out: list[np.ndarray] = []
+    pair_of: list[np.ndarray] = []
     for n, (i, j) in enumerate(pairs):
         if progress and n % 10 == 0:
             progress(f"stereo {n + 1}/{len(pairs)}")
@@ -185,13 +198,42 @@ def densify_sgbm(
         )
         if got is not None and len(got):
             out.append(got)
+            pair_of.append(np.full(len(got), n, dtype=np.int32))
 
     if not out:
         return np.zeros((0, 6)), warnings + [
             "block matching found no consistent depth in any pair; the surfaces "
             "in this sweep carry too little texture for photometric matching"
         ]
-    return np.concatenate(out), warnings
+
+    pts = np.concatenate(out)
+    confirmed = _confirmed_across_pairs(
+        pts[:, :3], np.concatenate(pair_of), voxel=depths * CONFIRM_VOXEL_DEPTH_RATIO
+    )
+    dropped = len(pts) - int(confirmed.sum())
+    if dropped:
+        warnings.append(
+            f"{dropped:,} stereo points ({dropped / len(pts):.0%}) were seen by "
+            "only one pair and discarded; a surface the walk actually passed is "
+            "matched again and again, and a mismatch is matched once"
+        )
+    return pts[confirmed], warnings
+
+
+def _confirmed_across_pairs(xyz: np.ndarray, pair_id: np.ndarray, *, voxel: float) -> np.ndarray:
+    """Mask of points whose voxel was produced by >= CONFIRM_PAIRS distinct pairs."""
+    if voxel <= 0 or len(xyz) == 0:
+        return np.ones(len(xyz), dtype=bool)
+    key = np.floor(xyz / voxel).astype(np.int64)
+    # Pack the three voxel indices and the pair id into sortable rows, then
+    # count distinct pairs per voxel from the unique (voxel, pair) set.
+    packed = np.empty((len(key), 4), dtype=np.int64)
+    packed[:, :3] = key
+    packed[:, 3] = pair_id
+    vox_all, inverse = np.unique(packed[:, :3], axis=0, return_inverse=True)
+    vp = np.unique(np.column_stack([inverse, pair_id]), axis=0)
+    pairs_per_voxel = np.bincount(vp[:, 0], minlength=len(vox_all))
+    return pairs_per_voxel[inverse] >= CONFIRM_PAIRS
 
 
 # ---------------------------------------------------------------------------
@@ -268,12 +310,17 @@ def _pair_points(cv2, matcher, model, image_dir: Path, i: int, j: int, *, scale:
     warp1 = cv2.remap(img1, map1[0], map1[1], cv2.INTER_LINEAR)
     warp2 = cv2.remap(img2, map2[0], map2[1], cv2.INTER_LINEAR)
 
-    disp = matcher.compute(
-        cv2.cvtColor(warp1, cv2.COLOR_BGR2GRAY),
-        cv2.cvtColor(warp2, cv2.COLOR_BGR2GRAY),
-    ).astype(np.float32) / 16.0
+    gray1 = cv2.cvtColor(warp1, cv2.COLOR_BGR2GRAY)
+    disp = matcher.compute(gray1, cv2.cvtColor(warp2, cv2.COLOR_BGR2GRAY)).astype(np.float32) / 16.0
 
     valid = disp > (SGBM_MIN_DISPARITY + 0.5)
+    # Keep disparity only where the image had something to match on. On a
+    # blank wall SGBM's smoothness term invents a plausible-looking surface;
+    # honest is returning nothing there and letting the carve-based completion
+    # label the gap, exactly as it does for a wall nobody filmed.
+    gx = cv2.Sobel(gray1, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(gray1, cv2.CV_32F, 0, 1, ksize=3)
+    valid &= np.hypot(gx, gy) >= TEXTURE_MIN_GRADIENT
     if valid.sum() < 500:
         return None
 

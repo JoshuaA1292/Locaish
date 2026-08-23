@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from google.adk.tools import ToolContext
 
 from .. import warehouse
 from ..types import Twin
@@ -97,7 +98,7 @@ def _maps_and_grid(loc: _Location):
 # ---------------------------------------------------------------------------
 
 
-def scout_report(tool_context=None) -> dict:
+def scout_report(tool_context: ToolContext = None) -> dict:
     """Full technical scout report for the active location, by department.
 
     Covers trust (QA verdict, scale confidence), space (dimensions, standable
@@ -115,7 +116,7 @@ def scout_report(tool_context=None) -> dict:
 
 def measure(
     x1: float, y1: float, z1: float, x2: float, y2: float, z2: float,
-    tool_context=None,
+    tool_context: ToolContext = None,
 ) -> dict:
     """Measure the straight-line metric distance between two points in the room.
 
@@ -149,7 +150,7 @@ def render_frame(
     cam_x: float, cam_y: float, cam_z: float,
     subj_x: float, subj_y: float,
     focal_mm: float,
-    tool_context=None,
+    tool_context: ToolContext = None,
 ) -> dict:
     """Render the actual frame a camera setup would capture, from the twin's points.
 
@@ -191,7 +192,7 @@ def check_dolly_move(
     start_x: float, start_y: float, end_x: float, end_y: float,
     height_m: float, focal_mm: float,
     subj_x: float, subj_y: float,
-    tool_context=None,
+    tool_context: ToolContext = None,
 ) -> dict:
     """Simulate a straight dolly move and report whether it physically works.
 
@@ -230,7 +231,7 @@ def check_dolly_move(
     return {"status": "success", "move": report.summary()}
 
 
-def sun_schedule(date: str = "", tool_context=None) -> dict:
+def sun_schedule(date: str = "", tool_context: ToolContext = None) -> dict:
     """The day's natural light at this location, computed from solar ephemeris.
 
     Sunrise, sunset, golden hours, the sun's peak elevation, and -- window by
@@ -248,7 +249,7 @@ def sun_schedule(date: str = "", tool_context=None) -> dict:
     return {"status": "success", "schedule": schedule}
 
 
-def list_locations(tool_context=None) -> dict:
+def list_locations(tool_context: ToolContext = None) -> dict:
     """List every scanned location available in this session, with QA verdicts."""
     out = {}
     with _LOCATIONS_LOCK:
