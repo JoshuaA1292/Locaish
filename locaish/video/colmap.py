@@ -43,14 +43,41 @@ import numpy as np
 CLASSICAL_FPS = 8.0
 
 # Long side, in pixels, that frames are decoded to for matching. SIFT wants
-# resolution -- it is finding corners a few pixels across -- and 1600 keeps
-# enough of them on a plain wall without making the match quadratically slow.
-CLASSICAL_LONG_SIDE = 1600
+# resolution -- it is finding corners a few pixels across -- and on the blank
+# interior walls that break the matching chain, the corners that exist are
+# small: paint texture, outlet screws, shadow edges. 2400 finds the features
+# 1600 missed, and an unbroken chain is worth the extra matching time, because
+# every frame that falls out of the chain is a wall missing from the twin.
+CLASSICAL_LONG_SIDE = 2400
+
+# Features extracted per frame. The default 8192 is tuned for photo
+# collections; a video frame of a low-texture room needs the budget raised so
+# the weak corners on plain surfaces survive the ranking.
+SIFT_MAX_FEATURES = 16384
 
 # Views on either side that each frame is matched against. Sequential rather
 # than exhaustive because a walk revisits its neighbours in time, and quadratic
 # overlap adds the powers-of-two jumps that catch a loop closing.
-SEQUENTIAL_OVERLAP = 20
+SEQUENTIAL_OVERLAP = 30
+
+# A frame needs this many inliers to join the model. COLMAP's default of 30 is
+# right for photo collections; on a sweep, a frame that fails here breaks the
+# chain and everything after it lands in a separate fragment, so the threshold
+# is lowered -- a marginal registration constrained by its neighbours beats an
+# amputated half of the room.
+MAPPER_MIN_INLIERS = 15
+
+# Vocabulary tree for loop detection: when the walk comes back to where it
+# started, this is what tells the matcher to close the loop instead of letting
+# drift accumulate to the end of the chain. Downloaded once and cached; the
+# pipeline works without it, just less well on captures that circle a room.
+# The faiss-format index -- COLMAP moved off flann in 2025, and the legacy
+# trees on demuc.de crash the matcher outright.
+VOCAB_TREE_URL = (
+    "https://github.com/colmap/colmap/releases/download/3.11.1/"
+    "vocab_tree_faiss_flickr100K_words32K.bin"
+)
+VOCAB_TREE_CACHE = "~/.cache/locaish/vocab_tree_faiss_flickr100K_words32K.bin"
 
 
 class ColmapError(RuntimeError):
@@ -159,6 +186,29 @@ def supports_cuda() -> bool:
     return "without CUDA" not in out
 
 
+def vocab_tree(progress=None) -> Path | None:
+    """The loop-detection vocabulary, downloaded once and cached. None if offline.
+
+    150 MB, from the COLMAP author's own distribution. Failure here must never
+    fail a reconstruction: loop closure is an upgrade, not a dependency.
+    """
+    path = Path(VOCAB_TREE_CACHE).expanduser()
+    if path.exists() and path.stat().st_size > 5_000_000:
+        return path
+    try:
+        import urllib.request
+
+        if progress:
+            progress("fetching loop-closure vocabulary (once)")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".part")
+        urllib.request.urlretrieve(VOCAB_TREE_URL, tmp)
+        tmp.rename(path)
+        return path
+    except Exception:  # noqa: BLE001 - offline is a mode, not an error
+        return None
+
+
 def _run(args: list[str], log: Path, step: str) -> None:
     log.parent.mkdir(parents=True, exist_ok=True)
     proc = subprocess.run(args, capture_output=True, text=True)
@@ -204,6 +254,7 @@ def run_sfm(
             # solved from one frame each.
             "--ImageReader.single_camera", "1",
             "--ImageReader.camera_model", "SIMPLE_RADIAL",
+            "--SiftExtraction.max_num_features", str(SIFT_MAX_FEATURES),
         ],
         work_dir / "features.log",
         "feature_extractor",
@@ -211,16 +262,19 @@ def run_sfm(
 
     if progress:
         progress("colmap matching")
-    _run(
-        [
-            exe, "sequential_matcher",
-            "--database_path", str(database),
-            "--SequentialMatching.overlap", str(overlap),
-            "--SequentialMatching.quadratic_overlap", "1",
-        ],
-        work_dir / "matching.log",
-        "sequential_matcher",
-    )
+    matching = [
+        exe, "sequential_matcher",
+        "--database_path", str(database),
+        "--SequentialMatching.overlap", str(overlap),
+        "--SequentialMatching.quadratic_overlap", "1",
+    ]
+    vocab = vocab_tree(progress=progress)
+    if vocab is not None:
+        matching += [
+            "--SequentialMatching.loop_detection", "1",
+            "--SequentialMatching.vocab_tree_path", str(vocab),
+        ]
+    _run(matching, work_dir / "matching.log", "sequential_matcher")
 
     if progress:
         progress("colmap mapping")
@@ -230,6 +284,7 @@ def run_sfm(
             "--database_path", str(database),
             "--image_path", str(image_dir),
             "--output_path", str(sparse),
+            "--Mapper.abs_pose_min_num_inliers", str(MAPPER_MIN_INLIERS),
         ],
         work_dir / "mapping.log",
         "mapper",

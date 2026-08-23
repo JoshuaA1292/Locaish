@@ -145,6 +145,107 @@ def densify_patchmatch(
     return np.hstack([xyz, rgb.astype(np.float64)])
 
 
+def openmvs_binary() -> str | None:
+    """Locate OpenMVS's DensifyPointCloud, or None if it is not installed.
+
+    OpenMVS is classical patch-based multi-view stereo -- depth *and* normal
+    per pixel, propagated between neighbours, checked across many views -- the
+    same family of algorithm as COLMAP's CUDA PatchMatch, implemented for the
+    CPU. No model file, nothing trained. Where it is available it replaces the
+    block-matching fallback outright, because it is better at everything the
+    fallback is weak at.
+    """
+    found = shutil.which("DensifyPointCloud")
+    if found:
+        return found
+    for cand in (
+        Path.home() / "tools/openMVS/out/bin/DensifyPointCloud",
+        Path.home() / "tools/openMVS/build/bin/DensifyPointCloud",
+        Path("/usr/local/bin/OpenMVS/DensifyPointCloud"),
+        Path("/usr/local/bin/DensifyPointCloud"),
+    ):
+        if cand.exists():
+            return str(cand)
+    return None
+
+
+def densify_openmvs(
+    image_dir: str | Path,
+    model_dir: str | Path,
+    work_dir: str | Path,
+    *,
+    binary: str | None = None,
+    resolution_level: int = 1,
+    progress=None,
+) -> np.ndarray:
+    """OpenMVS patch-match stereo over the COLMAP model. Returns (N, 6) xyz+rgb.
+
+    Three steps: undistort to a pinhole COLMAP workspace (OpenMVS, like every
+    MVS, assumes no radial distortion), convert the workspace to an .mvs scene,
+    densify. `resolution_level` is OpenMVS's own knob -- each level halves the
+    image, and level 1 on 2400 px frames matches at 1200 px, which is where the
+    quality/time trade sits for a room sweep on a CPU.
+    """
+    from .colmap import ColmapError, executable
+
+    binary = binary or openmvs_binary()
+    if binary is None:
+        raise ColmapError("OpenMVS's DensifyPointCloud is not installed")
+    interface = str(Path(binary).parent / "InterfaceCOLMAP")
+
+    exe = executable()
+    work_dir = Path(work_dir)
+    dense = work_dir / "dense"
+    if dense.exists():
+        shutil.rmtree(dense)
+    dense.mkdir(parents=True)
+
+    def run(args, step, cwd=None):
+        proc = subprocess.run(args, capture_output=True, text=True, cwd=cwd)
+        (work_dir / f"{step}.log").write_text(proc.stdout + "\n" + proc.stderr)
+        if proc.returncode != 0:
+            tail = (proc.stderr or proc.stdout).strip().splitlines()[-3:]
+            raise ColmapError(f"{step} failed: {' / '.join(tail)[:400]}")
+
+    if progress:
+        progress("undistort")
+    run([
+        exe, "image_undistorter",
+        "--image_path", str(image_dir),
+        "--input_path", str(model_dir),
+        "--output_path", str(dense),
+        "--output_type", "COLMAP",
+    ], "undistort")
+
+    if progress:
+        progress("openmvs interface")
+    run([
+        interface, "-i", str(dense), "-o", str(dense / "scene.mvs"),
+        "--image-folder", str(dense / "images"),
+    ], "interface", cwd=str(dense))
+
+    if progress:
+        progress("openmvs densify")
+    run([
+        binary, str(dense / "scene.mvs"),
+        "-o", str(dense / "scene_dense.mvs"),
+        "--resolution-level", str(resolution_level),
+        "-w", str(dense),
+    ], "densify", cwd=str(dense))
+
+    fused = dense / "scene_dense.ply"
+    if not fused.exists():
+        raise ColmapError("OpenMVS produced no dense cloud")
+    from ..formats.ply import read_ply
+
+    scan = read_ply(fused)
+    xyz = scan.points.xyz
+    rgb = scan.points.rgb
+    if rgb is None:
+        rgb = np.full((len(xyz), 3), 200, dtype=np.uint8)
+    return np.hstack([xyz, rgb.astype(np.float64)])
+
+
 def densify_sgbm(
     model,
     image_dir: str | Path,

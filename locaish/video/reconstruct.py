@@ -175,11 +175,12 @@ def reconstruct_video(
         model_dir = colmapmod.run_sfm(image_dir, colmap_dir, progress=progress)
         model = colmapmod.read_model(model_dir)
     warnings += model.warnings
-    if len(model) < max(3, len(fs) // 4):
+    if len(model) < 0.8 * len(fs):
         warnings.append(
             f"only {len(model)} of {len(fs)} frames could be registered into one "
             "model; the parts of the sweep that broke the chain are simply absent "
-            "from this twin"
+            "from this twin -- whatever the missing frames saw, the twin does not "
+            "know about"
         )
 
     up_hint, up_coherence, up_note = colmapmod.up_from_cameras(model.extrinsics)
@@ -188,18 +189,34 @@ def reconstruct_video(
     centres = densemod._camera_centres(model.extrinsics)
 
     # -- dense stereo ------------------------------------------------------
+    #
+    # Three implementations of the same classical job, best available wins:
+    # COLMAP's CUDA PatchMatch on a GPU host, OpenMVS's CPU patch-match where
+    # the binary exists, and semi-global block matching as the floor that runs
+    # anywhere. The gap between the first two and the third is large, which is
+    # why OpenMVS is worth the install.
     with _step("stereo"):
         if colmapmod.supports_cuda():
             dense_pts = densemod.densify_patchmatch(
                 image_dir, model_dir, colmap_dir, progress=progress
             )
             stereo = "patchmatch"
+        elif densemod.openmvs_binary():
+            dense_pts = densemod.densify_openmvs(
+                image_dir, model_dir, colmap_dir, progress=progress
+            )
+            stereo = "openmvs"
         else:
             dense_pts, dense_warnings = densemod.densify_sgbm(
                 model, image_dir, progress=progress
             )
             warnings += dense_warnings
             stereo = "sgbm"
+            warnings.append(
+                "dense stereo ran on the block-matching fallback; installing "
+                "OpenMVS (DensifyPointCloud on PATH) upgrades this stage "
+                "substantially on machines without CUDA"
+            )
 
     keep_sparse = (model.errors <= SPARSE_MAX_ERROR_PX) & (
         model.track_lengths >= SPARSE_MIN_TRACK
