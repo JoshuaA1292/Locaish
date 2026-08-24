@@ -213,7 +213,12 @@ def ingest(
         # the better rule regardless: what counts as "on the wall" depends on
         # how finely the wall was sampled, not on the choice of unit.
         spacing = _median_spacing(cloud.xyz, seed=opts.seed)
-        plane_thresh = float(np.clip(spacing, 1e-9, None))
+        # The threshold has to cover whichever is larger: how far apart the
+        # points are, or how thick the producer says its surfaces come out.
+        # Stereo reconstruction packs millimetre spacing onto centimetre-noisy
+        # surfaces, and the spacing rule alone would find fragments of every
+        # plane and the whole of none.
+        plane_thresh = float(np.clip(max(spacing, scan.noise_hint_m or 0.0), 1e-9, None))
         raw_planes = planemod.detect_planes(
             cloud, normals=raw_normals, distance_thresh=plane_thresh, seed=opts.seed
         )
@@ -261,7 +266,10 @@ def ingest(
     with step("planes_canonical"):
         canon_normals = cloud.normals
         canon_planes = planemod.detect_planes(
-            cloud, normals=canon_normals, seed=opts.seed
+            cloud,
+            normals=canon_normals,
+            distance_thresh=max(0.03, scan.noise_hint_m or 0.0),
+            seed=opts.seed,
         )
 
     # -- derived representations ------------------------------------------

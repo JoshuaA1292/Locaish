@@ -251,11 +251,21 @@ The ten refusals are honest ones: the ceiling-plausibility check firing on rooms
   [CAPTURE.md](CAPTURE.md).
 - **A broken matching chain drops frames.** A pause on a textureless wall can
   fragment the reconstruction; the largest fragment wins and the rest of the
-  sweep is honestly absent rather than stitched on a guess. Film with steady
-  overlap and the chain holds.
-- **The CPU stereo fallback is weaker on blank walls.** Semi-global matching
-  returns nothing where there is nothing to match, so an undecorated room
-  densifies thinly without CUDA. Honest sparsity, but sparsity.
+  sweep is honestly absent rather than stitched on a guess. The chain is built
+  to hold — dense high-resolution features, wide sequential overlap, loop
+  closure when the walk circles back — and the QA report says how many frames
+  fell out when it doesn't.
+- **Install OpenMVS.** The dense stage runs COLMAP's PatchMatch on CUDA,
+  OpenMVS's patch-match on any CPU (see `docs/BUILD_OPENMVS_MACOS.md`; the
+  Dockerfile builds it automatically), and falls back to block matching only
+  when neither exists — and block matching is markedly weaker on the blank
+  walls rooms are made of.
+- **A video twin's surfaces are centimetres thick, not millimetres.** The
+  pipeline widens its plane tolerances to the reconstruction's declared noise
+  (`noise_hint_m`), which recovers the floor and walls — but the finer
+  structure detections tuned against LiDAR accuracy, ceilings and window/door
+  openings especially, usually decline on video input rather than guess. A
+  scanner-app export gets all of them.
 - **Nobody films the ceiling**, so `ceiling_z` usually comes back unknown and no
   ceiling height is reported. The completion pass closes the room at the
   frontier of what was swept and labels it inferred; that is not a measurement

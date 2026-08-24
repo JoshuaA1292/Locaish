@@ -255,6 +255,12 @@ def reconstruct_video(
     raw_xyz = merged[:, :3]
     raw_rgb = np.clip(merged[:, 3:6], 0, 255).astype(np.uint8)
 
+    # How thick this reconstruction's surfaces come out, measured during
+    # development against planes fitted to real captures: ~2 cm RMS for the
+    # patch-match densifiers, worse for block matching. Downstream plane
+    # thresholds widen to this instead of starving on millimetre spacing.
+    noise_hint = 0.03 if stereo in ("patchmatch", "openmvs") else 0.045
+
     recon_summary = {
         "backend": "colmap",
         "stereo": stereo,
@@ -342,11 +348,13 @@ def reconstruct_video(
         # by the scale solve, so the unit inference downstream must not run its
         # plausibility priors over it a second time.
         unit_hint="m",
+        noise_hint_m=noise_hint,
         warnings=list(warnings),
         raw_header={
             "video": fs.info.summary(),
             "frames_used": len(fs),
             "frames_registered": len(model),
+            "noise_hint_m": noise_hint,
             "scale_factor_m_per_unit": factor,
             "scale_source": "supplied" if scale_factor is not None else "camera-path",
             "scale_confidence": None if scale is None else scale.confidence,
@@ -455,6 +463,7 @@ def _load_cache(workdir: Path, key: dict, src: Path, progress=None) -> "VideoRec
             camera_positions=cams if len(cams) else None,
             up_hint=up if len(up) == 3 else None,
             unit_hint="m",
+            noise_hint_m=json.loads(str(data["header"])).get("noise_hint_m"),
             warnings=json.loads(str(data["warnings"])),
             raw_header=json.loads(str(data["header"])),
         )

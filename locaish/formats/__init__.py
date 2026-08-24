@@ -95,6 +95,11 @@ class ScanImport:
     camera_positions: np.ndarray | None = None
     up_hint: np.ndarray | None = None
     unit_hint: str | None = None
+    # How thick this scan's surfaces are, in source units, when the producer
+    # knows. A LiDAR export leaves it None and downstream thresholds track the
+    # point spacing; multi-view stereo is centimetres-noisy at millimetre
+    # spacing, and a plane detector tuned to the spacing would starve on it.
+    noise_hint_m: float | None = None
     warnings: list[str] = field(default_factory=list)
     raw_header: dict[str, Any] = field(default_factory=dict)
 

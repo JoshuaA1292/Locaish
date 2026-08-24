@@ -120,10 +120,19 @@ def floor_maps(twin: Twin, *, cell: float = DEFAULT_CELL_M) -> FloorMaps:
     flat = ij[:, 0] * ny + ij[:, 1]
     height = xyz[:, 2] - floor_z
 
+    # What counts as "enough points to be an obstacle" has to scale with how
+    # densely this twin was sampled. Four points is right for a LiDAR export at
+    # a few hundred points per cell; a stereo reconstruction packs thousands
+    # into the same cell and scatters a percent of them as mid-air speckle, so
+    # a fixed four would wall off the whole room.
+    occupied = np.bincount(flat, minlength=nx * ny)
+    per_cell = float(np.median(occupied[occupied > 0])) if (occupied > 0).any() else 0.0
+    min_pts = max(MIN_POINTS_FOR_OBSTRUCTION, int(0.02 * per_cell))
+
     inside = _footprint_mask(twin, lo, cell, nx, ny)
     surveyed = _surveyed_mask(twin, lo, cell, nx, ny)
-    headroom = _headroom(flat, height, nx, ny, ceiling_z, floor_z)
-    clearance = _clearance(flat, height, nx, ny, cell)
+    headroom = _headroom(flat, height, nx, ny, ceiling_z, floor_z, min_pts)
+    clearance = _clearance(flat, height, nx, ny, cell, min_pts)
     rise = _floor_rise(flat, height, nx, ny)
 
     return FloorMaps(
@@ -176,7 +185,7 @@ def _surveyed_mask(twin: Twin, lo, cell, nx, ny) -> np.ndarray:
     return _points_in_polygon(gx.ravel(), gy.ravel(), bounds.hull_xy).reshape(nx, ny)
 
 
-def _headroom(flat, height, nx, ny, ceiling_z, floor_z) -> np.ndarray:
+def _headroom(flat, height, nx, ny, ceiling_z, floor_z, min_pts: int = MIN_POINTS_FOR_OBSTRUCTION) -> np.ndarray:
     """Clear height over each cell: the lowest thing above head height.
 
     Looks only above `BODY_BAND_M[1]`, because the question is what a standing
@@ -199,7 +208,7 @@ def _headroom(flat, height, nx, ny, ceiling_z, floor_z) -> np.ndarray:
         fs, hs = f[order], h[order]
         first = np.concatenate([[True], fs[1:] != fs[:-1]])
         cells, lowest = fs[first], hs[first]
-        solid = counts[cells] >= MIN_POINTS_FOR_OBSTRUCTION
+        solid = counts[cells] >= min_pts
         out[cells[solid]] = np.minimum(out[cells[solid]], lowest[solid])
 
     return out.reshape(nx, ny)
@@ -231,14 +240,25 @@ def _floor_rise(flat, height, nx, ny) -> np.ndarray:
     return out.reshape(nx, ny)
 
 
-def _clearance(flat, height, nx, ny, cell) -> np.ndarray:
+def _clearance(flat, height, nx, ny, cell, min_pts: int = MIN_POINTS_FOR_OBSTRUCTION) -> np.ndarray:
     """Distance from each cell to the nearest thing standing in the body band."""
     band = (height >= BODY_BAND_M[0]) & (height <= BODY_BAND_M[1])
     blocked = np.zeros(nx * ny, dtype=bool)
     if band.any():
         counts = np.bincount(flat[band], minlength=nx * ny)
-        blocked = counts >= MIN_POINTS_FOR_OBSTRUCTION
+        blocked = counts >= min_pts
     blocked = blocked.reshape(nx, ny)
+    # A single blocked cell with no blocked neighbour is reconstruction
+    # speckle, not furniture -- nothing a camera crew cares about is 10 cm
+    # across in every direction. A neighbour test rather than a morphological
+    # opening, because a wall shows up here as a one-cell-thick *line*, and an
+    # opening would erase the wall along with the speckle; every cell of a
+    # line has neighbours, an isolated fleck has none.
+    if blocked.any():
+        neighbours = ndimage.convolve(
+            blocked.astype(np.uint8), np.ones((3, 3), dtype=np.uint8), mode="constant"
+        ) - blocked.astype(np.uint8)
+        blocked &= neighbours > 0
     if not blocked.any():
         return np.full((nx, ny), float(max(nx, ny)) * cell)
     return ndimage.distance_transform_edt(~blocked, sampling=(cell, cell)).astype(np.float64)
