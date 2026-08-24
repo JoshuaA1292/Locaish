@@ -172,7 +172,9 @@ def reconstruct_video(
     # -- structure from motion --------------------------------------------
     with _step("reconstruct"):
         colmap_dir = workdir / "colmap"
-        model_dir = colmapmod.run_sfm(image_dir, colmap_dir, progress=progress)
+        model_dir = colmapmod.run_sfm(
+            image_dir, colmap_dir, reuse=not refresh, progress=progress
+        )
         model = colmapmod.read_model(model_dir)
     warnings += model.warnings
     if len(model) < 0.8 * len(fs):

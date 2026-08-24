@@ -30,6 +30,7 @@ Both are classical; they differ in quality and speed, not in what they are.
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -223,6 +224,7 @@ def run_sfm(
     work_dir: str | Path,
     *,
     overlap: int = SEQUENTIAL_OVERLAP,
+    reuse: bool = True,
     progress=None,
 ) -> Path:
     """Feature-extract, match and map. Returns the sparse model directory.
@@ -230,12 +232,36 @@ def run_sfm(
     Sequential matching, not exhaustive: a video's correspondences are between
     frames near each other in time, and matching all pairs of 250 frames costs
     thirty thousand comparisons to find what twenty neighbours already found.
+
+    With `reuse` (the default), a workspace that already holds a solved model
+    is returned as-is: the solve is minutes, it is deterministic for the same
+    frames, and a failure in the *dense* stage should not cost re-solving the
+    cameras on retry. Callers who changed the frames pass `reuse=False`.
     """
     exe = executable()
     image_dir, work_dir = Path(image_dir), Path(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
     database = work_dir / "database.db"
     sparse = work_dir / "sparse"
+
+    if reuse and database.exists() and sparse.exists():
+        # Only a solve of *these exact frames*. Decoding is deterministic for
+        # the same video and options, so name+size identity is the right test;
+        # modification times are useless here because retries re-extract the
+        # frames and stamp them with fresh times.
+        stamp = work_dir / "frames_used.json"
+        models = sorted(p for p in sparse.iterdir()
+                        if p.is_dir() and not p.name.endswith("_txt"))
+        if (
+            stamp.exists()
+            and json.loads(stamp.read_text()) == _frames_fingerprint(image_dir)
+            and models
+            and any(_count_registered(m) > 0 for m in models)
+        ):
+            if progress:
+                progress("reusing solved camera poses")
+            return _largest_model(models)
+
     if database.exists():
         database.unlink()
     if sparse.exists():
@@ -297,7 +323,17 @@ def run_sfm(
             "texture or too little parallax for feature matching -- see "
             "CAPTURE.md on walking rather than panning."
         )
+    (work_dir / "frames_used.json").write_text(json.dumps(_frames_fingerprint(image_dir)))
     return _largest_model(models)
+
+
+def _frames_fingerprint(image_dir: Path) -> list[list]:
+    """Name and byte size of every frame, sorted -- identity for a decode."""
+    return sorted(
+        [f.name, f.stat().st_size]
+        for f in Path(image_dir).iterdir()
+        if f.suffix.lower() in (".jpg", ".png")
+    )
 
 
 def _largest_model(models: list[Path]) -> Path:

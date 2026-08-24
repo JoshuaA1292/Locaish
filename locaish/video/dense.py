@@ -192,6 +192,12 @@ def densify_openmvs(
     binary = binary or openmvs_binary()
     if binary is None:
         raise ColmapError("OpenMVS's DensifyPointCloud is not installed")
+    # Absolute, unconditionally: the OpenMVS steps run with the dense folder as
+    # their working directory (they write log and depth-map files beside the
+    # scene), so a relative input path would resolve against the wrong base.
+    image_dir = Path(image_dir).resolve()
+    model_dir = Path(model_dir).resolve()
+    work_dir = Path(work_dir).resolve()
     if resolution_level is None:
         # Each level halves the matching resolution and quarters the work.
         # Level 1 (half of the 2400 px frames) is right on a laptop; a small
