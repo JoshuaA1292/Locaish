@@ -15,5 +15,5 @@ gcloud run deploy locaish \
   --source deploy/ctx \
   --project "$PROJECT" --region "$REGION" \
   --allow-unauthenticated \
-  --memory 8Gi --cpu 4 --timeout 3600 --concurrency 20 --max-instances 2 \
+  --memory 8Gi --cpu 4 --timeout 3600 --concurrency 20 --max-instances 1 \
   --set-env-vars "GOOGLE_API_KEY=$KEY,LOCAISH_SHOWCASE=1"
