@@ -10,7 +10,7 @@ for i in $(seq 1 60); do
 done
 clickhouse client --query "SELECT 1" >/dev/null 2>&1 || {
   echo "clickhouse did not come up"; tail -20 /var/log/clickhouse.log; exit 1; }
-python -c "from locaish import warehouse; warehouse.ensure_schema()"
+python -c "from locaish import warehouse; warehouse.ensure_schema(); warehouse.ensure_plans_schema()"
 clickhouse client --query "INSERT INTO locaish.shot_setups FORMAT Native" < /app/chdata/shot_setups.native
 clickhouse client --query "INSERT INTO locaish.shot_plans FORMAT Native" < /app/chdata/shot_plans.native
 echo "shot table loaded: $(clickhouse client --query 'SELECT count() FROM locaish.shot_setups') setups"
