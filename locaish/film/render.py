@@ -197,6 +197,11 @@ def _decode_field(twin: Twin, path: str, factor: float, key: str) -> GaussianFie
         from ..video.splat import read_gaussian_ply
 
         g = read_gaussian_ply(path)
+    except MemoryError:
+        # Transient by nature -- another render or a build was holding the
+        # memory. Do not poison the cache: the next frame should try again
+        # rather than condemn the whole plan to point renders.
+        return None
     except Exception:
         _FIELD_CACHE[key] = None
         return None
