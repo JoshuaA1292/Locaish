@@ -44,11 +44,19 @@ class PointCloud:
     `xyz` is (N, 3) float32/float64. `rgb` is (N, 3) uint8 or None. `normals`
     is (N, 3) float32 unit vectors or None -- readers usually leave it None and
     `geom.normals.estimate` fills it in.
+
+    `inferred` is (N,) float32 in [0, 1] or None: how much of each point was
+    resampled from a model of the room rather than measured off it -- the
+    point-cloud twin of `Mesh.filled`. None means nothing was inferred, which
+    is not the same as zeros: one says the question was never asked, the other
+    says it was asked of every point and answered no. Anything measuring off
+    this cloud must exclude points with `inferred > 0.5`.
     """
 
     xyz: np.ndarray
     rgb: np.ndarray | None = None
     normals: np.ndarray | None = None
+    inferred: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         self.xyz = np.asarray(self.xyz, dtype=np.float64).reshape(-1, 3)
@@ -63,6 +71,13 @@ class PointCloud:
             if len(self.normals) != len(self.xyz):
                 raise ValueError(
                     f"normals has {len(self.normals)} rows but xyz has {len(self.xyz)}"
+                )
+        if self.inferred is not None:
+            self.inferred = np.asarray(self.inferred, dtype=np.float32).reshape(-1)
+            if len(self.inferred) != len(self.xyz):
+                raise ValueError(
+                    f"inferred has {len(self.inferred)} entries but xyz has "
+                    f"{len(self.xyz)} rows"
                 )
 
     def __len__(self) -> int:
@@ -92,14 +107,25 @@ class PointCloud:
             normals = self.normals @ np.linalg.inv(rot)
             n = np.linalg.norm(normals, axis=1, keepdims=True)
             normals = normals / np.where(n == 0, 1.0, n)
-        return PointCloud(xyz=xyz, rgb=self.rgb, normals=normals)
+        return PointCloud(xyz=xyz, rgb=self.rgb, normals=normals, inferred=self.inferred)
 
     def subset(self, index: np.ndarray) -> "PointCloud":
         return PointCloud(
             xyz=self.xyz[index],
             rgb=None if self.rgb is None else self.rgb[index],
             normals=None if self.normals is None else self.normals[index],
+            inferred=None if self.inferred is None else self.inferred[index],
         )
+
+    def measured(self) -> "PointCloud":
+        """The subset that was actually observed, for anything taking a number.
+
+        Identity when nothing was inferred, so callers can use it
+        unconditionally.
+        """
+        if self.inferred is None:
+            return self
+        return self.subset(self.inferred <= 0.5)
 
 
 @dataclass
@@ -329,6 +355,63 @@ class Opening:
 
 
 @dataclass
+class Fixture:
+    """A solid the returns found standing in the room, fitted as a prism.
+
+    `footprint` is a closed (M, 2) XY polygon in twin space -- for the
+    rectilinear fits the solver produces it is a rectangle aligned to the
+    room's wall directions -- extruded from `z0` to `z1`. This is deliberately
+    the vocabulary of a CAD massing model, not a mesh: a counter is a box, an
+    island is a box, a fridge is a box, and a box is something a person can
+    measure, occlude against, and light. `support` is how many returns stand
+    on the solid, and `fill` is how much of the prism's plan the returns
+    actually occupy -- both kept so a consumer can tell a confident island
+    from a box drawn around a wisp of noise.
+    """
+
+    footprint: np.ndarray
+    z0: float
+    z1: float
+    support: int = 0
+    fill: float = 0.0
+    kind: str = "fixture"
+
+    def __post_init__(self) -> None:
+        self.footprint = np.asarray(self.footprint, dtype=np.float64).reshape(-1, 2)
+
+    @property
+    def height(self) -> float:
+        return float(self.z1 - self.z0)
+
+    @property
+    def plan_area(self) -> float:
+        p = self.footprint
+        q = np.roll(p, -1, axis=0)
+        return float(abs(np.sum(p[:, 0] * q[:, 1] - q[:, 0] * p[:, 1])) / 2.0)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "footprint": self.footprint.tolist(),
+            "z0": float(self.z0),
+            "z1": float(self.z1),
+            "support": int(self.support),
+            "fill": float(self.fill),
+            "kind": self.kind,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "Fixture":
+        return cls(
+            footprint=np.array(d["footprint"], dtype=np.float64),
+            z0=float(d["z0"]),
+            z1=float(d["z1"]),
+            support=int(d.get("support", 0)),
+            fill=float(d.get("fill", 0.0)),
+            kind=d.get("kind", "fixture"),
+        )
+
+
+@dataclass
 class Structure:
     """The room read as architecture rather than as points.
 
@@ -343,16 +426,56 @@ class Structure:
     planes: list[Plane] = field(default_factory=list)
     openings: list[Opening] = field(default_factory=list)
     footprint: np.ndarray | None = None
+    # A ceiling the sweep bounded but never returned from. It is kept out of
+    # `ceiling_z` so that every consumer which measures keeps reading None and
+    # keeps saying "not captured"; it exists so that the ones which *draw* the
+    # room, or bound its volume, have something better than the top of the
+    # points to use -- and have to name it as inference when they do.
+    ceiling_z_inferred: float | None = None
+    #: returns | carve | none -- where `ceiling_z`/`ceiling_z_inferred` came from
+    ceiling_source: str = "none"
+    #: Where the footprint polygon came from, which decides what may be drawn
+    #: from it. "cells": the boundary of the wall-arrangement's interior cells,
+    #: straight-walled by construction and fit to enclose a room. "raster": a
+    #: traced occupancy contour, adequate on a dense pose-less import.
+    #: "raster-sparse": the same contour on a capture that HAD poses but whose
+    #: room solve declined -- good enough for an area estimate, and expressly
+    #: not good enough to extrude a room shell from. "none": no footprint.
+    footprint_source: str = "raster"
+    #: One label per footprint edge (edge i is footprint[i] -> footprint[i+1]):
+    #: returns | carve | frontier. None when the footprint is not cell-derived.
+    footprint_edge_sources: list[str] | None = None
+    #: Per-vertex inferred weight in [0, 1] for the footprint, aligned with
+    #: `footprint`. None means the question was never asked.
+    footprint_inferred: np.ndarray | None = None
+    #: Solid contents the returns located inside the room -- counters,
+    #: islands, appliances -- fitted as extruded prisms. Empty when the
+    #: question was never asked (pose-less imports, declined room solves).
+    fixtures: list[Fixture] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.footprint is not None:
             self.footprint = np.asarray(self.footprint, dtype=np.float64).reshape(-1, 2)
+        if self.footprint_inferred is not None:
+            self.footprint_inferred = np.asarray(
+                self.footprint_inferred, dtype=np.float32
+            ).reshape(-1)
 
     @property
     def ceiling_height(self) -> float | None:
         if self.ceiling_z is None:
             return None
         return float(self.ceiling_z - self.floor_z)
+
+    @property
+    def drawable_ceiling_z(self) -> float | None:
+        """The best available cap on the room, measured or not.
+
+        Anything that renders or bounds the room should use this and say which
+        it got; anything that reports a dimension should use `ceiling_z` and
+        report nothing when it is None.
+        """
+        return self.ceiling_z if self.ceiling_z is not None else self.ceiling_z_inferred
 
     @property
     def floor_area(self) -> float:
@@ -373,17 +496,45 @@ class Structure:
             "planes": [p.to_dict() for p in self.planes],
             "openings": [o.to_dict() for o in self.openings],
             "footprint": None if self.footprint is None else self.footprint.tolist(),
+            "ceiling_z_inferred": (
+                None if self.ceiling_z_inferred is None else float(self.ceiling_z_inferred)
+            ),
+            "ceiling_source": self.ceiling_source,
+            "footprint_source": self.footprint_source,
+            "footprint_edge_sources": (
+                None if self.footprint_edge_sources is None
+                else list(self.footprint_edge_sources)
+            ),
+            "footprint_inferred": (
+                None if self.footprint_inferred is None
+                else [float(v) for v in self.footprint_inferred]
+            ),
+            "fixtures": [f.to_dict() for f in self.fixtures],
         }
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "Structure":
         fp = d.get("footprint")
+        fpi = d.get("footprint_inferred")
         return cls(
             floor_z=float(d.get("floor_z", 0.0)),
             ceiling_z=None if d.get("ceiling_z") is None else float(d["ceiling_z"]),
             planes=[Plane.from_dict(p) for p in d.get("planes", [])],
             openings=[Opening.from_dict(o) for o in d.get("openings", [])],
             footprint=None if fp is None else np.array(fp, dtype=np.float64),
+            ceiling_z_inferred=(
+                None if d.get("ceiling_z_inferred") is None else float(d["ceiling_z_inferred"])
+            ),
+            ceiling_source=d.get("ceiling_source", "none"),
+            footprint_source=d.get("footprint_source", "raster"),
+            footprint_edge_sources=(
+                None if d.get("footprint_edge_sources") is None
+                else list(d["footprint_edge_sources"])
+            ),
+            footprint_inferred=(
+                None if fpi is None else np.array(fpi, dtype=np.float32)
+            ),
+            fixtures=[Fixture.from_dict(f) for f in d.get("fixtures", [])],
         )
 
 
@@ -592,6 +743,16 @@ class Twin:
     qa: QAReport = field(default_factory=QAReport)
     canonical_transform: np.ndarray = field(default_factory=lambda: np.eye(4))
     provenance: dict[str, Any] = field(default_factory=dict)
+    # The video projected back onto the room shell: a JPEG atlas plus the
+    # layout that says which atlas rect belongs to which shell panel, in the
+    # panel-uv convention `geom.shell.build_shell` emits. Optional because it
+    # only exists for video captures whose room solve produced a shell; the
+    # viewer falls back to provenance tints without it. Nothing measures off
+    # a texture -- it is paint on fitted architecture, and the layout carries
+    # per-panel coverage so the page can say where the video ran out.
+    shell_texture: bytes | None = None
+    shell_texture_format: str = "jpg"
+    shell_texture_layout: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         self.canonical_transform = np.asarray(
@@ -657,6 +818,10 @@ class Twin:
             "arrays": [],
             "has_mesh": self.mesh is not None,
             "texture_format": None if self.mesh is None else self.mesh.texture_format,
+            "shell_texture_format": (
+                None if self.shell_texture is None else self.shell_texture_format
+            ),
+            "shell_texture_layout": self.shell_texture_layout,
         }
 
         arrays: dict[str, np.ndarray] = {"points/xyz": self.points.xyz.astype(np.float32)}
@@ -664,6 +829,8 @@ class Twin:
             arrays["points/rgb"] = self.points.rgb
         if self.points.normals is not None:
             arrays["points/normals"] = self.points.normals.astype(np.float32)
+        if self.points.inferred is not None:
+            arrays["points/inferred"] = self.points.inferred.astype(np.float32)
         if self.mesh is not None:
             arrays["mesh/vertices"] = self.mesh.vertices.astype(np.float32)
             arrays["mesh/faces"] = self.mesh.faces.astype(np.int32)
@@ -689,6 +856,10 @@ class Twin:
                 zf.writestr(f"{key}.npy", buf.getvalue())
             if self.mesh is not None and self.mesh.texture is not None:
                 zf.writestr(f"mesh/texture.{self.mesh.texture_format}", self.mesh.texture)
+            if self.shell_texture is not None:
+                zf.writestr(
+                    f"shell/texture.{self.shell_texture_format}", self.shell_texture
+                )
         return path
 
     @classmethod
@@ -715,6 +886,7 @@ class Twin:
                 xyz=arr("points/xyz"),
                 rgb=arr("points/rgb"),
                 normals=arr("points/normals"),
+                inferred=arr("points/inferred"),
             )
             mesh = None
             if manifest.get("has_mesh"):
@@ -743,6 +915,8 @@ class Twin:
                 if manifest.get("georeference")
                 else None
             )
+            shell_fmt = manifest.get("shell_texture_format") or "jpg"
+            shell_name = f"shell/texture.{shell_fmt}"
             return cls(
                 name=manifest["name"],
                 points=points,
@@ -755,6 +929,9 @@ class Twin:
                     manifest.get("canonical_transform", np.eye(4).tolist())
                 ),
                 provenance=manifest.get("provenance", {}),
+                shell_texture=zf.read(shell_name) if shell_name in names else None,
+                shell_texture_format=shell_fmt,
+                shell_texture_layout=manifest.get("shell_texture_layout"),
             )
 
 

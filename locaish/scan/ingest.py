@@ -70,6 +70,14 @@ class IngestOptions:
     # why an unposed cloud cannot tell a hole from an open door.
     fill_holes: bool = True
     fill_radius_m: float | None = None
+    # Believe the capture device about which way is up: forces the gravity
+    # axis onto the camera-derived hint. Off by default -- see align.canonicalize.
+    trust_up_hint: bool = False
+    # Resampling points onto detected wall planes where camera rays prove the
+    # wall was observed and unbroken -- see `geom.planefill`. The added points
+    # are tagged `inferred` and excluded from every measurement; the flag
+    # exists for callers who want the raw capture and nothing else.
+    fill_planes: bool = True
     seed: int = 0
     progress: Callable[[str], None] | None = None
 
@@ -155,6 +163,9 @@ def ingest(
     # cares whether the points came from a LiDAR export or from footage, which
     # is deliberate. A twin built from video earns its numbers by passing the
     # same QA as a twin built from a laser scanner, not by being special-cased.
+    frames_dir: Path | None = None
+    extra_xyz: np.ndarray | None = None
+    extra_rgb: np.ndarray | None = None
     with step("read"):
         if is_video(src):
             from ..video import reconstruct_video
@@ -163,7 +174,7 @@ def ingest(
                 src,
                 workdir=opts.video_workdir,
                 fps=opts.video_fps,
-                max_points=opts.max_points or 1_500_000,
+                max_points=opts.max_points or 3_000_000,
                 scale_factor=opts.video_scale_factor,
                 start_s=opts.video_start_s,
                 end_s=opts.video_end_s,
@@ -173,6 +184,11 @@ def ingest(
             )
             scan = video.scan
             result.steps["video"] = video.manifest()
+            frames_dir = Path(video.workdir) / "frames"
+            # The splat view layer rides outside the scan so every fitter
+            # below sees only the measured cloud; appended after the solve.
+            extra_xyz = video.extra_xyz
+            extra_rgb = video.extra_rgb
         else:
             scan = read_scan(src, max_points=opts.max_points)
     if len(scan.points) == 0:
@@ -237,6 +253,11 @@ def ingest(
             normals=raw_normals,
             camera_positions=scan.camera_positions,
             up_hint=scan.up_hint,
+            trust_up_hint=opts.trust_up_hint,
+            # The video front-end measures how consistently the device was
+            # held (its `up_coherence`); the sign vote scales the hint's
+            # authority with it -- see align._sign_hint_weight.
+            up_hint_coherence=(scan.raw_header or {}).get("up_coherence"),
             unit_hint=opts.unit_hint or scan.unit_hint,
             unit_hint_confidence=_hint_confidence(scan, opts),
             unit_hint_evidence=_hint_evidence(scan),
@@ -247,6 +268,11 @@ def ingest(
         if scan.camera_positions is not None:
             m = canon.transform
             cams = scan.camera_positions @ m[:3, :3].T + m[:3, 3]
+        if extra_xyz is not None:
+            m = canon.transform
+            extra_xyz = (
+                extra_xyz.astype(np.float64) @ m[:3, :3].T + m[:3, 3]
+            ).astype(np.float32)
     result.warnings += list(canon.warnings)
     result.steps["canonicalize"] = {
         "unit": canon.scale.unit,
@@ -277,11 +303,70 @@ def ingest(
         grid = gridmod.build_grid(cloud, voxel_xy=opts.voxel_xy, voxel_z=opts.voxel_z)
 
     with step("structure"):
+        structure_notes: list[str] = []
         structure = structmod.analyze(
-            cloud, planes=canon_planes, normals=canon_normals, grid=grid, seed=opts.seed
+            cloud,
+            planes=canon_planes,
+            normals=canon_normals,
+            grid=grid,
+            camera_positions=cams,
+            notes=structure_notes,
+            seed=opts.seed,
         )
         if opts.skip_openings:
             structure.openings = []
+    result.warnings += structure_notes
+
+    # -- square the twin to the solved walls --------------------------------
+    #
+    # The canonicaliser's yaw is a vote over RANSAC wall planes, and a dense
+    # cloud stuffs that ballot with cabinet fronts, counter sides and
+    # through-door geometry -- this capture came out 22 degrees off before
+    # this pass existed. The cell-solved footprint IS the wall arrangement,
+    # so once it exists the twin is rotated to lay its dominant edge on the
+    # axis. A pure yaw about the origin: gravity, the floor at z=0 and every
+    # plane offset are all invariant under it, and everything yaw-dependent
+    # downstream (capture bounds, mesh, QA, plane fill) runs after this.
+    if (
+        structure.footprint_source == "cells"
+        and structure.footprint is not None
+        and len(structure.footprint) >= 3
+    ):
+        theta = align.footprint_yaw(structure.footprint)
+        if abs(theta) > np.radians(1.0):
+            R3 = align.yaw_matrix(-theta)
+            R2 = R3[:2, :2]
+            cloud = PointCloud(
+                xyz=(cloud.xyz @ R3.T).astype(np.float32),
+                rgb=cloud.rgb,
+                normals=(
+                    None if cloud.normals is None else (cloud.normals @ R3.T).astype(np.float32)
+                ),
+                inferred=cloud.inferred,
+            )
+            if mesh is not None:
+                mesh.vertices = mesh.vertices @ R3.T
+            if cams is not None:
+                cams = cams @ R3.T
+            if extra_xyz is not None:
+                extra_xyz = (extra_xyz @ R3.T).astype(np.float32)
+            structure.footprint = structure.footprint @ R2.T
+            for p in structure.planes:
+                p.normal = R3 @ p.normal
+            for o in structure.openings:
+                o.center = R3 @ o.center
+                o.normal = R3 @ o.normal
+            R4 = np.eye(4)
+            R4[:3, :3] = R3
+            canon.transform = R4 @ canon.transform
+            canon_normals = cloud.normals
+            grid = gridmod.build_grid(cloud, voxel_xy=opts.voxel_xy, voxel_z=opts.voxel_z)
+            result.steps["squared_to_walls_deg"] = round(float(np.degrees(theta)), 2)
+            result.warnings.append(
+                f"the twin was rotated {abs(float(np.degrees(theta))):.1f} deg to lay "
+                "the solved walls on the axes; the initial yaw vote over fitted "
+                "planes was pulled off-axis by furniture and through-door surfaces"
+            )
 
     with step("capture_bounds"):
         bounds = hull.capture_bounds(
@@ -368,6 +453,90 @@ def ingest(
         _check_gravity_decision(twin.qa, canon)
         twin.qa.finalize()
 
+    # -- plane-guided completion -------------------------------------------
+    #
+    # Deliberately after QA and after every measurement: the points added here
+    # are resampled from the fitted wall planes, not observed, so structure,
+    # openings, footprint and every QA metric were taken from the capture
+    # alone. What the fill changes is only what a viewer sees -- complete
+    # walls where the camera proved wall -- and each added point carries
+    # `inferred = 1.0` so no later consumer can mistake it for measurement.
+    if opts.fill_planes and cams is not None:
+        with step("plane_fill"):
+            from ..geom import planefill
+
+            try:
+                fill_xyz, fill_rgb, fill_nrm, fill_stats = planefill.fill_wall_planes(
+                    cloud, structure, grid, cams, seed=opts.seed
+                )
+            except Exception as exc:  # completion is best-effort, like the mesh
+                fill_xyz = np.zeros((0, 3))
+                fill_stats = {"filled": False, "reason": f"plane fill failed: {exc}"}
+        result.steps["plane_fill"] = {
+            k: v for k, v in fill_stats.items() if k != "walls"
+        }
+        if len(fill_xyz):
+            inferred = np.concatenate([
+                np.zeros(len(cloud), dtype=np.float32)
+                if cloud.inferred is None else cloud.inferred,
+                np.ones(len(fill_xyz), dtype=np.float32),
+            ])
+            twin.points = PointCloud(
+                xyz=np.concatenate([cloud.xyz, fill_xyz]),
+                rgb=None if cloud.rgb is None
+                else np.concatenate([cloud.rgb, fill_rgb]),
+                normals=None if cloud.normals is None
+                else np.concatenate([cloud.normals, fill_nrm]),
+                inferred=inferred,
+            )
+            area = sum(w["filled_area_m2"] for w in fill_stats.get("walls", []))
+            result.warnings.append(
+                f"{len(fill_xyz):,} points ({area:.1f} m2 of wall) were resampled "
+                "onto detected wall planes where camera rays prove the wall was "
+                "seen and unbroken; they are tagged inferred, drawn desaturated, "
+                "and excluded from every measurement"
+            )
+
+    # -- append the splat view layer ---------------------------------------
+    #
+    # Optimiser-derived density covering the surfaces stereo cannot measure.
+    # It joins the twin only here, after every fit and every measurement is
+    # done: exclusion by order, the same guarantee the plane fill has. And
+    # because the room is already solved, the solve disciplines the layer:
+    # a splat's soft fringe sprays feathered wings past the walls and stacks
+    # layers behind them, so everything outside the solved volume is deleted
+    # and everything within a handsbreadth of a solved wall is snapped flat
+    # onto it. The optimiser proposes, the measured room disposes.
+    if extra_xyz is not None and len(extra_xyz):
+        extra_xyz, extra_rgb = _discipline_view_layer(
+            extra_xyz, extra_rgb, structure
+        )
+    if extra_xyz is not None and len(extra_xyz):
+        base = twin.points
+        inferred = (
+            None
+            if base.inferred is None
+            else np.concatenate(
+                [base.inferred, np.zeros(len(extra_xyz), dtype=np.float32)]
+            )
+        )
+        twin.points = PointCloud(
+            xyz=np.concatenate([base.xyz, extra_xyz.astype(base.xyz.dtype)]),
+            rgb=None
+            if base.rgb is None
+            else np.concatenate([base.rgb, extra_rgb.astype(np.uint8)]),
+            normals=None
+            if base.normals is None
+            else np.concatenate(
+                [base.normals, np.zeros((len(extra_xyz), 3), dtype=np.float32)]
+            ),
+            inferred=inferred,
+        )
+        result.steps["splat_points"] = int(len(extra_xyz))
+        sp = (scan.raw_header or {}).get("splat_ply")
+        if sp:
+            twin.provenance["splat_ply"] = sp
+
     result.twin = twin
     result.timings["total"] = result.total_seconds
 
@@ -394,9 +563,135 @@ def ingest(
                 f"the tightest anchor available in a room nobody measured"
             )
             second.steps["door_anchor"] = anchor.to_dict()
+            _semantic_crosscheck(second, frames_dir, prog)
             return second
 
+    # -- Gemini cross-check, on the final twin only -------------------------
+    #
+    # An independent reading of the raw frames, compared against the geometry
+    # after the fact -- see scan.semantic. Gated to the outermost pass so the
+    # door-anchor recursion does not pay for it twice, and best-effort like
+    # every other advisory stage.
+    if _door_pass == 0:
+        _semantic_crosscheck(result, frames_dir, prog)
+
     return result
+
+
+def _discipline_view_layer(
+    xyz: np.ndarray, rgb: np.ndarray, structure
+) -> tuple[np.ndarray, np.ndarray]:
+    """Cut a view-density layer to the solved room and flatten it onto walls.
+
+    Everything below runs on the solved footprint and ceiling, which the
+    layer itself never influenced -- so this is measurement disciplining
+    inference, never inference voting on itself.
+    """
+    fp = structure.footprint
+    if fp is None or len(fp) < 3 or structure.footprint_source not in {"cells", "raster"}:
+        return xyz, rgb
+    poly = np.asarray(fp, dtype=np.float64)
+    pts = xyz.astype(np.float64)
+    x, y, z = pts[:, 0], pts[:, 1], pts[:, 2]
+
+    inside = np.zeros(len(pts), dtype=bool)
+    n = len(poly)
+    for i in range(n):
+        x0, y0 = poly[i - 1]
+        x1, y1 = poly[i]
+        dy = y0 - y1
+        if abs(dy) < 1e-12:
+            continue
+        inside ^= ((y1 > y) != (y0 > y)) & (x < (x0 - x1) * (y - y1) / dy + x1)
+
+    # walls: within the band around each solved wall, every 2 cm cell keeps
+    # only the points that agree with that cell's median depth -- the
+    # dominant layer. A splat stacks translucent layers through a wall, and
+    # simply flattening them puts the dim back layers on the same plane as
+    # the true surface, which reads as pepper; the consensus filter keeps
+    # the layer most of the evidence voted for, whatever its colour, and
+    # snaps it flat. A drifted minority layer is deleted, not averaged.
+    band_out = 0.05
+    band_in = 0.08
+    agree = 0.010
+    cell = 0.02
+    near_wall = np.zeros(len(pts), dtype=bool)
+    drop_wall = np.zeros(len(pts), dtype=bool)
+    for i in range(n):
+        a, b = poly[i], poly[(i + 1) % n]
+        seg = b - a
+        length = float(np.hypot(*seg))
+        if length < 1e-9:
+            continue
+        d = seg / length
+        inward = np.array([-d[1], d[0]])
+        rel_x, rel_y = x - a[0], y - a[1]
+        along = rel_x * d[0] + rel_y * d[1]
+        d_in = rel_x * inward[0] + rel_y * inward[1]
+        band = (
+            (along >= -0.05)
+            & (along <= length + 0.05)
+            & (d_in >= -band_out)
+            & (d_in <= band_in)
+        )
+        idx = np.flatnonzero(band)
+        if not len(idx):
+            continue
+        cells = (
+            np.floor(along[idx] / cell).astype(np.int64) * 4096
+            + np.floor(z[idx] / cell).astype(np.int64)
+        )
+        order = np.argsort(cells, kind="stable")
+        cs = cells[order]
+        starts = np.flatnonzero(np.concatenate([[True], cs[1:] != cs[:-1]]))
+        din_sorted = d_in[idx][order]
+        med = np.empty(len(cs))
+        for s0, s1 in zip(starts, np.concatenate([starts[1:], [len(cs)]])):
+            med[s0:s1] = np.median(din_sorted[s0:s1])
+        ok_sorted = np.abs(din_sorted - med) <= agree
+        ok = np.zeros(len(idx), dtype=bool)
+        ok[order] = ok_sorted
+        keep_ids = idx[ok]
+        x[keep_ids] -= d_in[keep_ids] * inward[0]
+        y[keep_ids] -= d_in[keep_ids] * inward[1]
+        near_wall[keep_ids] = True
+        drop_wall[idx[~ok]] = True
+
+    floor = float(structure.floor_z)
+    cap = structure.drawable_ceiling_z
+    top = (cap if cap is not None else floor + 2.40) + 0.08
+    below = (z > floor - 0.06) & (z < floor + 0.01)
+    z[below] = floor
+    keep = (inside | near_wall) & ~(drop_wall & ~near_wall) & (z >= floor - 0.01) & (z <= top)
+    if cap is not None:
+        high = keep & (z > cap - 0.05)
+        z[high] = np.minimum(z[high], cap)
+
+    pts[:, 0], pts[:, 1], pts[:, 2] = x, y, z
+    return pts[keep].astype(np.float32), rgb[keep]
+
+
+def _semantic_crosscheck(result: IngestResult, frames_dir: Path | None, prog) -> None:
+    """Run `scan.semantic` against the frames, best-effort, and record it."""
+    from . import semantic
+
+    if frames_dir is None or result.twin is None or not semantic.available():
+        return
+    if prog:
+        prog("semantic")
+    t0 = time.perf_counter()
+    try:
+        observation = semantic.crosscheck(frames_dir)
+    except Exception as exc:  # advisory: a network failure must not cost a twin
+        result.warnings.append(f"the Gemini frame cross-check was skipped: {exc}")
+        return
+    finally:
+        result.timings["semantic"] = time.perf_counter() - t0
+    if observation is None:
+        return
+    semantic.apply(result.twin, observation)
+    result.steps["semantic"] = observation
+    result.twin.provenance["semantic"] = observation
 
 
 class IngestError(RuntimeError):

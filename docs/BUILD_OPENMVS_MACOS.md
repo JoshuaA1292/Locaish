@@ -45,5 +45,15 @@ cmake --build out -j8 --target DensifyPointCloud InterfaceCOLMAP
 `locaish` finds the binaries automatically at
 `~/tools/openMVS/out/bin/DensifyPointCloud` (see
 `locaish/video/dense.py::openmvs_binary`); putting them on PATH works too.
-`LOCAISH_MVS_LEVEL=2` halves the matching resolution again for small cloud
-CPUs.
+Matching runs at half the frame resolution by default (`LOCAISH_MVS_LEVEL=1`,
+1200 px from 2400 px frames): on hand-held low-light footage, full resolution
+matches blur against blur and buys noise rather than detail, at double the
+runtime. `LOCAISH_MVS_LEVEL=0` restores full-resolution matching for captures
+sharp enough to use it (~10 min and ~8 GB peak for a 300-frame sweep on an
+M4); `=2` halves again for small cloud CPUs. `LOCAISH_MVS_VIEWS` (default 8)
+sets how many neighbour views weigh in on each depth map;
+`LOCAISH_MVS_VIEWS_FUSE` (default 3) how many views must agree before a fused
+point survives -- the main fog control; `LOCAISH_MVS_GEOMETRIC_ITERS`
+(default 3) how many geometric-consistency refinement rounds run between
+depth maps. A `--filter-point-cloud` pass then deletes points the depth maps
+of the views that should see them contradict.

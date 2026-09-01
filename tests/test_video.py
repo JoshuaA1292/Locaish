@@ -593,3 +593,112 @@ def test_the_door_anchor_is_scale_free_in_its_shape_test():
         est = metric.scale_from_doors(doors, current_factor=1.0)
         assert est is not None, f"a door went unrecognised at {error}x scale"
         assert est.factor == pytest.approx(1.0 / error, rel=0.02)
+
+
+# ---------------------------------------------------------------------------
+# re-anchoring a cached reconstruction
+# ---------------------------------------------------------------------------
+
+
+def _cached_reconstruction(factor: float, tmp_path):
+    """A minimal VideoReconstruction as _load_cache would hand it back."""
+    from locaish.video import reconstruct as rmod
+
+    scale = metric.ScaleEstimate(
+        factor=factor, confidence=0.6, log_spread=0.113, source="camera-height"
+    )
+    scan = ScanImport(
+        points=PointCloud(xyz=np.random.default_rng(0).normal(size=(50, 3)) * factor),
+        source_format="video",
+        camera_positions=np.random.default_rng(1).normal(size=(5, 3)) * factor,
+        unit_hint="m",
+        raw_header={
+            "scale_factor_m_per_unit": factor,
+            "scale_source": "camera-path",
+            "scale_confidence": 0.6,
+        },
+    )
+    return rmod.VideoReconstruction(
+        scan=scan,
+        frames=None,
+        scale=rmod._ScaleView(scale.to_dict()),
+        recon_summary={},
+        workdir=tmp_path,
+    )
+
+
+def test_a_door_anchor_rescales_the_cached_cloud_without_a_rerun(tmp_path):
+    """The second pass must change the factor, not the geometry under it.
+
+    A cached cloud at factor f, re-anchored by a door that says the factor is
+    really g, must come back with every coordinate multiplied by the combined
+    factor over f -- the same cloud a full re-run would have produced, because
+    the geometry in reconstruction units never changed.
+    """
+    from locaish.video.reconstruct import _rescale_cached
+
+    cached = _cached_reconstruction(0.25, tmp_path)
+    before = cached.scan.points.xyz.copy()
+
+    door = metric.ScaleEstimate(
+        factor=0.30, confidence=0.7, log_spread=0.05, source="door-height"
+    )
+    out = _rescale_cached(cached, [door])
+
+    assert out is not None
+    new_factor = out.scan.raw_header["scale_factor_m_per_unit"]
+    assert 0.25 < new_factor < 0.30  # between the two estimates, not either alone
+    np.testing.assert_allclose(
+        out.scan.points.xyz, before * (new_factor / 0.25), rtol=1e-12
+    )
+    assert out.scale.factor == pytest.approx(new_factor)
+
+
+def test_a_supplied_factor_refuses_the_rescale(tmp_path):
+    """A user-supplied factor is exact by declaration; nothing may move it."""
+    from locaish.video.reconstruct import _rescale_cached
+
+    cached = _cached_reconstruction(0.25, tmp_path)
+    cached.scan.raw_header["scale_source"] = "supplied"
+    door = metric.ScaleEstimate(
+        factor=0.30, confidence=0.7, log_spread=0.05, source="door-height"
+    )
+    assert _rescale_cached(cached, [door]) is None
+
+
+def test_brush_is_handed_absolute_paths(tmp_path, monkeypatch):
+    """Brush runs with the splat directory as cwd; a relative dataset path
+    from a relative studio root made it die with 'No such file or directory'
+    before training (Sep 2026). Every path on its command line is absolute."""
+    import os
+    import subprocess
+    from pathlib import Path
+
+    from locaish.video import splat as splatmod
+
+    monkeypatch.chdir(tmp_path)
+    frames = tmp_path / "recon" / "frames"
+    frames.mkdir(parents=True)
+    model = tmp_path / "recon" / "colmap" / "sparse" / "0"
+    model.mkdir(parents=True)
+    out = tmp_path / "recon" / "colmap" / "splat"
+    seen = {}
+
+    def fake_run(argv, **kw):
+        seen["argv"] = argv
+        seen["cwd"] = kw.get("cwd")
+        (out / "splat_5.ply").write_bytes(b"ply")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(splatmod, "brush_binary", lambda: "/usr/bin/true")
+    monkeypatch.setattr(splatmod.subprocess, "run", fake_run)
+    ply = splatmod.train_splat("recon/frames", "recon/colmap/sparse/0", "recon/colmap/splat", steps=5, resolution=64)
+    assert ply is not None and ply.exists()
+    assert os.path.isabs(seen["cwd"])
+    for a in seen["argv"][1:]:
+        if a.startswith("-") or a.isdigit() or "{" in a:
+            continue
+        assert os.path.isabs(a), a
+    # The dataset the command names actually exists from that cwd.
+    ds = seen["argv"][1]
+    assert (Path(ds) / "images").exists() and (Path(ds) / "sparse" / "0").exists()

@@ -198,6 +198,140 @@ def carve_free_space(
     return free
 
 
+# Visibility-based outlier deletion. A voxel is condemned when at least this
+# many rays were *blocked* by it on their way to a surface well beyond it.
+FLOATER_MIN_RAYS = 4
+# ... where "well beyond" means the ray's endpoint lies at least this many
+# voxels past the blocking voxel. Rays that stop at or just behind a surface
+# are that surface being seen, not seen through -- the margin also absorbs the
+# centimetre depth noise a stereo point carries along its own ray.
+FLOATER_BEYOND_VOXELS = 4.0
+# The peel iterates because condemned fog shields the fog behind it: deleting
+# a shell exposes the next one. Real captures converge in two or three rounds;
+# the cap is a backstop, not a target.
+FLOATER_MAX_ITERATIONS = 6
+# Grid ceiling for the vote volume. Coarsening the voxel beats refusing to
+# filter: the fog this removes is decimetres across.
+FLOATER_MAX_VOXELS = 200_000_000
+
+
+def contradicted_points(
+    points: np.ndarray,
+    cameras: np.ndarray,
+    *,
+    voxel_m: float = 0.05,
+    min_rays: int = FLOATER_MIN_RAYS,
+    max_rays: int = MAX_CARVE_RAYS,
+    seed: int = 0,
+) -> np.ndarray:
+    """Points sitting in space that rays from other views proved empty.
+
+    `carve_free_space` uses camera-to-point rays to *add* surface where the
+    capture's frontier ran out. This is the same evidence run in reverse to
+    *delete* surface that should never have existed: a mismatched stereo patch
+    triangulates a point into mid-air, and mid-air is exactly where the rays
+    to the real surfaces behind it keep passing. This is the filter a
+    k-nearest-neighbour trim cannot be -- floaters travel in clusters, one bad
+    patch produces a puff of them, so they look densely neighboured to each
+    other and sail through any statistical test on local spacing. They cannot
+    fake visibility: rays end *on* a wall, they end *behind* a floater.
+
+    The test is being seen through, not being crossed. Each ray is marched to
+    the first occupied voxel it meets, and that voxel -- alone -- collects a
+    vote if the ray's endpoint lies well beyond it, because a surface that
+    blocks the view of another surface metres further on is contradicted by
+    that very observation. Marching to the first hit rather than counting
+    every crossing is what protects real geometry: a grazing ray to a far
+    point on the same wall skims *inside* the wall's own voxel layer for its
+    whole length, and counting those skim crossings condemns mid-wall points
+    -- measured at 2.7% of a synthetic room's walls before this was changed,
+    and 0.0% after, with the fog cluster still fully removed.
+
+    Condemned voxels stop blocking on the next iteration, which peels the fog
+    from the outside in -- a shell of deleted fog would otherwise shield the
+    fog behind it. Iteration also re-deals the camera assignment, so a ray
+    unlucky enough to be cast from the one camera that could not see past a
+    floater gets another draw.
+
+    Returns an (N,) bool mask, True where the point is condemned.
+    """
+    pts = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+    cams = np.asarray(cameras, dtype=np.float64).reshape(-1, 3)
+    out = np.zeros(len(pts), dtype=bool)
+    if len(pts) < 100 or len(cams) == 0:
+        return out
+
+    lo = pts.min(axis=0) - voxel_m
+    hi = pts.max(axis=0) + voxel_m
+    voxel = float(voxel_m)
+    dims = np.maximum(np.ceil((hi - lo) / voxel).astype(np.int64), 1)
+    while int(np.prod(dims)) > FLOATER_MAX_VOXELS:
+        voxel *= 2.0
+        dims = np.maximum(np.ceil((hi - lo) / voxel).astype(np.int64), 1)
+    strides = np.array([dims[1] * dims[2], dims[2], 1], dtype=np.int64)
+    total = int(np.prod(dims))
+
+    idx = np.floor((pts - lo) / voxel).astype(np.int64)
+    np.clip(idx, 0, dims - 1, out=idx)
+    point_voxel = idx @ strides
+
+    beyond_m = FLOATER_BEYOND_VOXELS * voxel
+    condemned = np.zeros(total, dtype=bool)
+    for iteration in range(FLOATER_MAX_ITERATIONS):
+        solid = np.zeros(total, dtype=bool)
+        live = ~condemned[point_voxel]
+        solid[point_voxel[live]] = True
+
+        rng = np.random.default_rng(seed + iteration)
+        live_idx = np.flatnonzero(live)
+        if len(live_idx) == 0:
+            break
+        # Two rays per point rather than one: a streak of stereo fog hanging
+        # along a single camera's viewing ray is exactly the case where the one
+        # randomly drawn camera can be the camera that produced it, and a ray
+        # cast from there ends *on* the fog instead of being blocked by it.
+        # A second independent draw halves the odds per iteration without
+        # raising the ray budget.
+        rays_per_point = 2 if len(cams) >= 2 else 1
+        budget = max(1, max_rays // rays_per_point)
+        if len(live_idx) > budget:
+            live_idx = rng.choice(live_idx, budget, replace=False)
+        ends = np.repeat(pts[live_idx], rays_per_point, axis=0)
+        origins = cams[rng.integers(0, len(cams), size=len(ends))]
+
+        lengths = np.linalg.norm(ends - origins, axis=1)
+        longest = float(lengths.max()) if len(lengths) else 0.0
+        if longest <= 0:
+            break
+        samples = int(min(MAX_RAY_SAMPLES, max(8, np.ceil(longest / voxel))))
+        t = np.linspace(0.0, 1.0, samples)
+
+        votes = np.zeros(total, dtype=np.int64)
+        chunk = max(1, int(4_000_000 / max(samples, 1)))
+        for lo_i in range(0, len(ends), chunk):
+            sl = slice(lo_i, lo_i + chunk)
+            o, p, length = origins[sl], ends[sl], lengths[sl]
+            pos = o[:, None, :] + t[None, :, None] * (p - o)[:, None, :]
+            ijk = np.floor((pos - lo) / voxel).astype(np.int64)
+            inside = np.all((ijk >= 0) & (ijk < dims), axis=-1)
+            flat = np.clip(ijk, 0, dims - 1) @ strides
+            hit = solid[flat] & inside
+            blocked = hit.any(axis=1)
+            first = hit.argmax(axis=1)
+            remaining = (1.0 - t[first]) * length
+            ok = blocked & (remaining > beyond_m)
+            sel = flat[np.arange(len(o)), first][ok]
+            if len(sel):
+                votes += np.bincount(sel, minlength=total)
+
+        fresh = (votes >= min_rays) & ~condemned
+        if not fresh.any():
+            break
+        condemned |= fresh
+
+    return condemned[point_voxel]
+
+
 def observed_volume(
     free: np.ndarray,
     *,

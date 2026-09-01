@@ -42,6 +42,10 @@ RUN git clone --depth 1 https://github.com/cdcseacave/VCG.git /opt/vcglib \
 # -- stage 2: the studio -----------------------------------------------------
 FROM python:3.12-slim-bookworm
 
+# Debian's colmap (3.8) predates the merged-in GLOMAP global mapper, so the
+# pipeline's mapper probe falls back to incremental mapping in this image; a
+# base image with COLMAP >= 4 upgrades the solve automatically, nothing to
+# configure.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         colmap ffmpeg \
         libboost-iostreams1.74.0 libboost-program-options1.74.0 \

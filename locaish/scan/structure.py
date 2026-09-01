@@ -54,6 +54,7 @@ import numpy as np
 from scipy import ndimage
 from skimage import measure
 
+from ..geom import room as roommod
 from ..geom.planes import detect_planes, plane_frame
 from ..types import Opening, Plane, PointCloud, Structure, chunked
 
@@ -429,7 +430,8 @@ def _outside_coverage(
     res = _adaptive_resolution(res, n_on, float((hi[0] - lo[0]) * (hi[1] - lo[1])))
     nx = int(math.ceil((hi[0] - lo[0]) / res)) + 1
     ny = int(math.ceil((hi[1] - lo[1]) / res)) + 1
-    foot = _raster(inliers[:, 0], inliers[:, 1], lo[0], lo[1], res, nx, ny) > 0
+    foot_counts = _raster(inliers[:, 0], inliers[:, 1], lo[0], lo[1], res, nx, ny)
+    foot = foot_counts > 0
     cells = int(np.count_nonzero(foot))
     area = cells * res * res
     if cells == 0:
@@ -438,7 +440,20 @@ def _outside_coverage(
     beyond = sample[d < -PLANE_BAND_M]
     if len(beyond) == 0:
         return 0.0, area, plane_z
-    occupied = _raster(beyond[:, 0], beyond[:, 1], lo[0], lo[1], res, nx, ny) > 0
+    # A cell only counts as "material beyond" when its occupancy is a real
+    # fraction of what the plane's own cells carry. One threshold for every
+    # capture density, because both sides of the ratio scale with it: the
+    # floor under a wardrobe is sampled like the wardrobe top above it, so
+    # furniture still scores high -- but the film of residual stereo fog that
+    # drifts above a ceiling puts a stray point or two into cells the ceiling
+    # fills with hundreds, and a boundary of the room must not be disqualified
+    # by one percent of its own density in noise. Measured on the capture that
+    # forced this: fog above a real ceiling covered 40% of its cells at a
+    # point threshold of one and 0% at this one, while the wardrobe-top
+    # separation the fixed thresholds were calibrated against is untouched.
+    own = foot_counts[foot]
+    min_pts = max(2.0, 0.1 * float(np.median(own)))
+    occupied = _raster(beyond[:, 0], beyond[:, 1], lo[0], lo[1], res, nx, ny) >= min_pts
     return float(np.count_nonzero(foot & occupied) / cells), area, plane_z
 
 
@@ -466,8 +481,34 @@ def _column_mask(
     return counts > 0, lo
 
 
+#: Where a hand-held camera plausibly rides above the floor of the room it is
+#: sweeping, in metres. Anatomy, not calibration: a phone held at chest or eye
+#: height by a standing adult. Outside this range, the "floor" the detectors
+#: chose is more likely a piece of furniture than the floor -- see
+#: `_rescue_floor` for the failure this guards.
+CAMERA_HEIGHT_PLAUSIBLE_M = (1.05, 2.20)
+CAMERA_HEIGHT_TYPICAL_M = 1.55
+
+#: What a rescued floor band must show before it is believed: a band this
+#: thick in z, holding at least this many points, spread over at least this
+#: much area. A video sweep that never points at the floor still catches it
+#: at grazing angles in a few thousand points -- enough to place a height,
+#: nowhere near enough to win a RANSAC round against the furniture. The area
+#: floor is deliberately modest, because a grazing capture's floor is patchy:
+#: the real floor of the capture this was built against measured 0.7 m2 of
+#: covered cells spread over a 1.8 x 1.7 m reach.
+RESCUE_BAND_M = 0.10
+RESCUE_MIN_POINTS = 2_000
+RESCUE_MIN_AREA_M2 = 0.5
+RESCUE_MAX_RMS_M = 0.06
+
+
 def find_floor_ceiling(
-    cloud: PointCloud, planes: list[Plane]
+    cloud: PointCloud,
+    planes: list[Plane],
+    *,
+    camera_positions: np.ndarray | None = None,
+    notes: list[str] | None = None,
 ) -> tuple[float, float | None]:
     """Robust floor and ceiling heights, with `None` for an unroofed capture.
 
@@ -483,6 +524,10 @@ def find_floor_ceiling(
 
     An open-topped capture returns `None`. Inventing a number there would put a
     roof into the daylight study that does not exist in the building.
+
+    When `camera_positions` are given, the chosen floor is sanity-checked
+    against them: a hand-held camera rides 1-2 m above the floor, and a floor
+    that puts it outside that range is re-examined -- see `_rescue_floor`.
     """
     xyz = _xyz(cloud)
     if len(xyz) == 0:
@@ -496,8 +541,100 @@ def find_floor_ceiling(
     else:
         floor_z = _modal_floor_z(xyz)
 
+    if camera_positions is not None:
+        floor_z = _rescue_floor(xyz, floor_z, camera_positions, notes=notes)
+
     ceiling_z = _pick_ceiling(xyz, planes, floor_z)
     return floor_z, ceiling_z
+
+
+def _rescue_floor(
+    xyz: np.ndarray,
+    floor_z: float,
+    cameras: np.ndarray,
+    *,
+    notes: list[str] | None = None,
+) -> float:
+    """Reconsider a floor that puts the camera at an implausible height.
+
+    The failure this exists for is a video sweep that never points down. The
+    real floor comes back as a few thousand grazing-angle points -- far too few
+    to win a RANSAC round or a modal-histogram vote against the furniture --
+    and the detectors land the "floor" on the bottom of the *captured* band
+    instead: tabletops, a sofa, the lowest shelf. Every architectural number
+    downstream then cascades off by a metre: the real ceiling gets rejected as
+    a soffit (it is "1.0 m above the floor"), coverage is measured against a
+    furniture-level footprint, and floor-and-ceiling become a coin toss.
+
+    The camera path is the physical evidence that catches it. A hand-held
+    camera rides 1-2 m above the floor of the room it is sweeping -- anatomy,
+    not an assumption about the room -- so a floor 0.6 m under the camera path
+    is almost certainly not the floor. When that happens, the sparse z-bands
+    the detectors ignored are re-examined under three tests (enough points,
+    enough area, actually flat), and the band that puts the camera at a
+    plausible height wins. A capture with no such band keeps its original
+    floor: an implausible answer beats an invented one.
+    """
+    cams = np.asarray(cameras, dtype=np.float64).reshape(-1, 3)
+    if len(cams) < 2:
+        return floor_z
+    cam_z = float(np.median(cams[:, 2]))
+    height = cam_z - floor_z
+    lo, hi = CAMERA_HEIGHT_PLAUSIBLE_M
+    if lo <= height <= hi:
+        return floor_z
+
+    z = _stat_sample(xyz)[:, 2]
+    # Only bands that would make the camera height plausible are candidates,
+    # which searches below the current floor when it sat too high and above it
+    # when reflections through a window dragged it too low.
+    band_lo = cam_z - hi
+    band_hi = cam_z - lo
+    in_window = (z >= band_lo) & (z <= band_hi)
+    if int(in_window.sum()) < RESCUE_MIN_POINTS:
+        return floor_z
+
+    zw = z[in_window]
+    bins = max(4, int(math.ceil((band_hi - band_lo) / 0.02)))
+    hist, edges = np.histogram(zw, bins=bins, range=(band_lo, band_hi))
+    order = np.argsort(hist)[::-1]
+
+    # Among qualifying bands, the *lowest* wins, not the best-populated or the
+    # one nearest the typical height: a floor is the bottom boundary of the
+    # room, and a coffee table a metre under the camera path passes every
+    # other test while the sparse real floor beneath it passes them too.
+    best_z: float | None = None
+    for b in order[:8]:
+        if hist[b] < RESCUE_MIN_POINTS * 0.25:
+            break
+        centre = 0.5 * (edges[b] + edges[b + 1])
+        sel = xyz[np.abs(xyz[:, 2] - centre) <= RESCUE_BAND_M / 2]
+        if len(sel) < RESCUE_MIN_POINTS:
+            continue
+        z_med = float(np.median(sel[:, 2]))
+        if abs(z_med - floor_z) < 0.15:
+            continue  # the floor we already have, seen through a wider band
+        if float(np.std(sel[:, 2])) > RESCUE_MAX_RMS_M:
+            continue  # a slice through sloping clutter, not a surface
+        if _footprint_area(sel) < RESCUE_MIN_AREA_M2:
+            continue
+        candidate_height = cam_z - z_med
+        if not (lo <= candidate_height <= hi):
+            continue
+        if best_z is None or z_med < best_z:
+            best_z = z_med
+
+    if best_z is None:
+        return floor_z
+    if notes is not None:
+        notes.append(
+            f"the detected floor sat {height:.2f} m below the camera path, outside "
+            f"the {lo:.2f}-{hi:.2f} m a hand-held sweep allows, so the floor was "
+            f"re-anchored to a sparsely captured horizontal band at z={best_z:.2f} "
+            f"({cam_z - best_z:.2f} m below the cameras); the floor itself was "
+            "barely filmed and its height rests on this band"
+        )
+    return float(best_z)
 
 
 def _inlier_count(xyz: np.ndarray, plane: Plane) -> int:
@@ -1598,6 +1735,8 @@ def analyze(
     planes: list[Plane] | None = None,
     normals: np.ndarray | None = None,
     grid: Any | None = None,
+    camera_positions: np.ndarray | None = None,
+    notes: list[str] | None = None,
     seed: int = 0,
 ) -> Structure:
     """Read a canonical cloud as a room.
@@ -1616,22 +1755,115 @@ def analyze(
         planes = detect_planes(cloud, normals=normals, seed=seed)
 
     labelled = label_planes(list(planes), cloud)
-    floor_z, ceiling_z = find_floor_ceiling(cloud, labelled)
-    footprint = floor_footprint(cloud, floor_z, ceiling_z=ceiling_z, grid=grid)
+    # Collapse the slab-stack RANSAC cuts through a thick or bowed wall before
+    # the planes are recorded: a stereo wall 3 cm thick under a 3 cm inlier
+    # band comes back half a dozen times at slightly different offsets, and a
+    # twin that reports "16 walls" for a four-walled room misleads every
+    # consumer that counts them -- including its own QA.
+    walls = merge_duplicate_walls([p for p in labelled if p.kind == "wall"])
+    labelled = [p for p in labelled if p.kind != "wall"] + walls
+    floor_z, ceiling_z = find_floor_ceiling(
+        cloud, labelled, camera_positions=camera_positions, notes=notes
+    )
+
+    # Where the capture came with camera poses, the room is read off the space
+    # they proved was empty rather than off the returns. On a LiDAR export the
+    # two answers agree to within a centimetre and this is a refinement; on a
+    # video reconstruction it is the difference between a room and a handful of
+    # confetti, because the surfaces that define a room -- plaster, cabinet
+    # doors, ceilings -- are exactly the ones dense stereo cannot see.
+    fit = None
+    ceiling_inferred = None
+    ceiling_source = "returns" if ceiling_z is not None else "none"
+    if camera_positions is not None and len(np.asarray(camera_positions)) >= 6:
+        fit = roommod.fit_room(
+            cloud,
+            camera_positions,
+            floor_z=floor_z,
+            ceiling_z=ceiling_z,
+            grid=grid,
+            normals=normals,
+            notes=notes,
+            seed=seed,
+        )
+
+    had_poses = camera_positions is not None and len(np.asarray(camera_positions)) >= 6
+    if fit is not None and fit.walls:
+        walls = fit.walls
+        labelled = [p for p in labelled if p.kind != "wall"] + walls
+        if ceiling_z is None:
+            ceiling_z = fit.ceiling_z
+            ceiling_inferred = fit.ceiling_z_inferred
+            ceiling_source = fit.ceiling_source
+
+    # The footprint the room solve read off the wall arrangement is the only
+    # one a shell may be extruded from: its edges are fitted walls or named
+    # frontier, so it cannot be a blob. The rastered contour survives as an
+    # area estimate -- and, on a pose-less import whose returns are dense
+    # everywhere, as a usable outline -- but a video capture whose room solve
+    # declined gets `raster-sparse`, which downstream reads as "do not draw a
+    # room out of this".
+    edge_sources: list[str] | None = None
+    fp_inferred: np.ndarray | None = None
+    if fit is not None and fit.footprint is not None and len(fit.footprint) >= 3:
+        footprint = fit.footprint
+        edge_sources = list(fit.edge_sources)
+        footprint_source = "cells"
+        weight = {"returns": 0.0, "carve": 1.0, "frontier": 1.0}
+        ew = [weight.get(s, 1.0) for s in edge_sources]
+        fp_inferred = np.array(
+            [min(ew[i - 1], ew[i]) for i in range(len(ew))], dtype=np.float32
+        )
+    else:
+        footprint = floor_footprint(cloud, floor_z, ceiling_z=ceiling_z, grid=grid)
+        if len(footprint) >= 3 and fit is not None and fit.lines:
+            footprint, snap_inferred = roommod.straighten_footprint(footprint, fit.lines)
+            if len(snap_inferred) == len(footprint):
+                fp_inferred = snap_inferred.astype(np.float32)
+        footprint_source = (
+            "none" if len(footprint) < 3 else ("raster-sparse" if had_poses else "raster")
+        )
+        if footprint_source == "raster-sparse" and notes is not None:
+            notes.append(
+                "the room solve declined, so the footprint is a rastered outline; "
+                "it is good enough for an area estimate and no room shell will be "
+                "drawn from it"
+            )
+
     openings = detect_openings(
         cloud,
-        merge_duplicate_walls([p for p in labelled if p.kind == "wall"]),
+        walls,
         floor_z=floor_z,
         ceiling_z=ceiling_z,
         seed=seed,
     )
-    return Structure(
+    if fit is not None and fit.openings:
+        # The two detectors answer different questions and fail differently.
+        # Reasoning from absent returns finds apertures in a dense scan and
+        # invents them wherever stereo went blind; looking through the wall
+        # with the carve cannot invent one, but only sees a doorway the camera
+        # actually looked through. Neither is redundant. Seen-through evidence
+        # wins a tie, because it is positive.
+        openings = _dedupe(list(fit.openings) + list(openings))
+    struct = Structure(
         floor_z=float(floor_z),
         ceiling_z=None if ceiling_z is None else float(ceiling_z),
         planes=labelled,
         openings=openings,
         footprint=footprint if len(footprint) >= 3 else None,
+        ceiling_z_inferred=ceiling_inferred,
+        ceiling_source=ceiling_source,
+        footprint_source=footprint_source,
+        footprint_edge_sources=edge_sources,
+        footprint_inferred=(
+            fp_inferred
+            if fp_inferred is not None and len(footprint) >= 3
+            and len(fp_inferred) == len(footprint)
+            else None
+        ),
     )
+
+    return struct
 
 
 __all__ = [

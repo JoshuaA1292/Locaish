@@ -65,8 +65,29 @@ SEQUENTIAL_OVERLAP = 30
 # right for photo collections; on a sweep, a frame that fails here breaks the
 # chain and everything after it lands in a separate fragment, so the threshold
 # is lowered -- a marginal registration constrained by its neighbours beats an
-# amputated half of the room.
+# amputated half of the room. Only the incremental fallback mapper reads this.
 MAPPER_MIN_INLIERS = 15
+
+# The global mapper (GLOMAP, shipped inside COLMAP 4.x as `global_mapper`) is
+# preferred over incremental mapping wherever the build offers it. Two reasons,
+# both load-bearing for a room walk. Rotation averaging solves every camera's
+# orientation *jointly*, so the loop-closure error of a walk that circles the
+# room is distributed around the whole trajectory instead of accumulating to
+# the last frame -- which is exactly the drift that bows the walls of a twin
+# and shows up in QA's 0.5 m plane-residual tiles. And it is one to two orders
+# of magnitude faster, because it never replays the sweep frame by frame.
+# Below this fraction of frames registered, the global solve is judged to have
+# fallen apart (weak parallax breaks rotation averaging before it breaks
+# incremental chaining) and the incremental mapper is run instead.
+GLOBAL_MAPPER_MIN_REGISTERED = 0.5
+
+# Stamped into the workspace beside the frame fingerprint, and bumped whenever
+# the *solve* itself changes behaviour. Frame identity alone is not enough to
+# reuse solved poses: the poses of the same frames under a better solver are
+# different poses, and a workspace stamped by the old solver must not be
+# mistaken for this one's output. 2: view-graph focal calibration before the
+# global mapper.
+SOLVE_VERSION = 2
 
 # Vocabulary tree for loop detection: when the walk comes back to where it
 # started, this is what tells the matcher to close the loop instead of letting
@@ -187,6 +208,33 @@ def supports_cuda() -> bool:
     return "without CUDA" not in out
 
 
+def supports_global_mapper(exe: str | None = None) -> bool:
+    """Whether this COLMAP build ships GLOMAP's global mapper.
+
+    GLOMAP was upstreamed into COLMAP (the standalone repository is archived),
+    so the test is simply whether `global_mapper` is a registered command.
+    """
+    try:
+        out = subprocess.run(
+            [exe or executable(), "help"], capture_output=True, text=True, timeout=30
+        )
+    except (ColmapError, OSError, subprocess.SubprocessError):
+        return False
+    return "global_mapper" in (out.stdout + out.stderr)
+
+
+def mapper_used(work_dir: str | Path) -> str | None:
+    """Which mapper solved the poses in this workspace, if it recorded one."""
+    stamp = Path(work_dir) / "frames_used.json"
+    if not stamp.exists():
+        return None
+    try:
+        data = json.loads(stamp.read_text())
+    except ValueError:
+        return None
+    return data.get("mapper") if isinstance(data, dict) else None
+
+
 def vocab_tree(progress=None) -> Path | None:
     """The loop-detection vocabulary, downloaded once and cached. None if offline.
 
@@ -252,12 +300,16 @@ def run_sfm(
         stamp = work_dir / "frames_used.json"
         models = sorted(p for p in sparse.iterdir()
                         if p.is_dir() and not p.name.endswith("_txt"))
-        if (
-            stamp.exists()
-            and json.loads(stamp.read_text()) == _frames_fingerprint(image_dir)
-            and models
-            and any(_count_registered(m) > 0 for m in models)
-        ):
+        stamped = json.loads(stamp.read_text()) if stamp.exists() else None
+        # The stamp grew a "mapper" key when the global mapper landed; a bare
+        # fingerprint list is a solve from before that, and re-solving it is
+        # the point of the upgrade rather than a cache accident.
+        frames_match = (
+            isinstance(stamped, dict)
+            and stamped.get("frames") == _frames_fingerprint(image_dir)
+            and stamped.get("solve_version") == SOLVE_VERSION
+        )
+        if frames_match and models and any(_count_registered(m) > 0 for m in models):
             if progress:
                 progress("reusing solved camera poses")
             return _largest_model(models)
@@ -302,29 +354,93 @@ def run_sfm(
         ]
     _run(matching, work_dir / "matching.log", "sequential_matcher")
 
-    if progress:
-        progress("colmap mapping")
-    _run(
-        [
-            exe, "mapper",
-            "--database_path", str(database),
-            "--image_path", str(image_dir),
-            "--output_path", str(sparse),
-            "--Mapper.abs_pose_min_num_inliers", str(MAPPER_MIN_INLIERS),
-        ],
-        work_dir / "mapping.log",
-        "mapper",
-    )
+    n_frames = len(_frames_fingerprint(image_dir))
+    mapper = "incremental"
+    models: list[Path] = []
+    if supports_global_mapper(exe):
+        # Video frames carry no EXIF focal length, and the global mapper's own
+        # log says it "depends on reasonably good focal length priors". The
+        # view-graph calibrator solves the focals from the two-view geometries
+        # already in the database -- cheap next to matching, and focal error
+        # is a direct cause of walls bowing, since a wrong focal bends every
+        # triangulation consistently outward. Best-effort: a build without
+        # the command just maps from the uncalibrated priors as before.
+        try:
+            if progress:
+                progress("colmap view-graph calibration")
+            _run(
+                [
+                    exe, "view_graph_calibrator",
+                    "--database_path", str(database),
+                ],
+                work_dir / "calibration.log",
+                "view_graph_calibrator",
+            )
+        except ColmapError:
+            pass
+        if progress:
+            progress("colmap global mapping (glomap)")
+        try:
+            _run(
+                [
+                    exe, "global_mapper",
+                    "--database_path", str(database),
+                    "--image_path", str(image_dir),
+                    "--output_path", str(sparse),
+                ],
+                work_dir / "mapping_global.log",
+                "global_mapper",
+            )
+        except ColmapError:
+            pass  # the log stays on disk; the incremental mapper runs below
+        else:
+            models = _model_dirs(sparse)
+            registered = max((_count_registered(m) for m in models), default=0)
+            if registered >= GLOBAL_MAPPER_MIN_REGISTERED * max(n_frames, 1):
+                mapper = "global"
+            else:
+                # A global solve that lost half the sweep is not a model to
+                # keep -- rotation averaging degrades all at once where the
+                # incremental chain merely fragments. Start the sparse
+                # directory over so the fallback cannot mix the two.
+                models = []
+                shutil.rmtree(sparse)
+                sparse.mkdir(parents=True)
 
-    models = sorted(p for p in sparse.iterdir() if p.is_dir())
+    if mapper != "global":
+        if progress:
+            progress("colmap mapping (incremental fallback)")
+        _run(
+            [
+                exe, "mapper",
+                "--database_path", str(database),
+                "--image_path", str(image_dir),
+                "--output_path", str(sparse),
+                "--Mapper.abs_pose_min_num_inliers", str(MAPPER_MIN_INLIERS),
+            ],
+            work_dir / "mapping.log",
+            "mapper",
+        )
+        models = _model_dirs(sparse)
+
     if not models:
         raise ColmapError(
             "colmap registered no images at all. The sweep has too little "
             "texture or too little parallax for feature matching -- see "
             "CAPTURE.md on walking rather than panning."
         )
-    (work_dir / "frames_used.json").write_text(json.dumps(_frames_fingerprint(image_dir)))
+    (work_dir / "frames_used.json").write_text(
+        json.dumps({
+            "frames": _frames_fingerprint(image_dir),
+            "mapper": mapper,
+            "solve_version": SOLVE_VERSION,
+        })
+    )
     return _largest_model(models)
+
+
+def _model_dirs(sparse: Path) -> list[Path]:
+    return sorted(p for p in sparse.iterdir() if p.is_dir() and not p.name.endswith("_txt"))
 
 
 def _frames_fingerprint(image_dir: Path) -> list[list]:

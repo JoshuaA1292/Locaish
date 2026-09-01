@@ -707,8 +707,28 @@ def _contact_fractions(
 #
 # Both terms scale with |cos| to the candidate axis, so a hint at right angles
 # to the axis under test contributes nothing rather than contributing noise.
+#
+# The sign weight additionally scales with the hint's *measured* coherence
+# when the producer reported one (the video front-end measures how
+# consistently the phone was held across every frame of the sweep). At the
+# 0.75 floor the producer enforces, the weight is the baseline; approaching
+# 1.0 it grows past the combined geometric votes, because a phone held upright
+# through three hundred frames is accelerometer-grade evidence about which way
+# was down, while the clutter votes it overrides are exactly the ones a
+# partial capture inverts -- a sweep of bookshelves with no floor in frame
+# puts the "clutter-heavy end" at the top and votes, confidently and wrongly,
+# to hang the room from its ceiling.
 _W_UP_HINT = 0.3
 _W_SIGN_UP_HINT = 2.0
+_W_SIGN_UP_HINT_MAX = 6.0
+_HINT_COHERENCE_FLOOR = 0.75
+
+
+def _sign_hint_weight(coherence: float | None) -> float:
+    if coherence is None:
+        return _W_SIGN_UP_HINT
+    ramp = (min(float(coherence), 1.0) - _HINT_COHERENCE_FLOOR) / (1.0 - _HINT_COHERENCE_FLOOR)
+    return _W_SIGN_UP_HINT + max(0.0, ramp) * (_W_SIGN_UP_HINT_MAX - _W_SIGN_UP_HINT)
 
 
 def find_up(
@@ -717,6 +737,7 @@ def find_up(
     *,
     camera_positions: np.ndarray | None = None,
     up_hint: np.ndarray | None = None,
+    up_hint_coherence: float | None = None,
 ) -> GravitySolution:
     """Recover the up vector in (already metric) source coordinates.
 
@@ -838,7 +859,8 @@ def find_up(
         )
 
     axis, sign_margin, sign_how = _resolve_sign(
-        axis, xyz, clutter, usable, cams, up_hint=up_hint
+        axis, xyz, clutter, usable, cams,
+        up_hint=up_hint, up_hint_coherence=up_hint_coherence,
     )
     if sign_margin < _SIGN_MARGIN_WARN:
         warnings.append(
@@ -871,6 +893,7 @@ def _resolve_sign(
     planes: list[Plane],
     camera_positions: np.ndarray | None,
     up_hint: np.ndarray | None = None,
+    up_hint_coherence: float | None = None,
 ) -> tuple[np.ndarray, float, str]:
     """Point a known axis from floor to ceiling. Returns (axis, margin, how).
 
@@ -904,7 +927,11 @@ def _resolve_sign(
         # can see. It still cannot outvote the room unaided -- a phone waved at
         # the ceiling reports a tilted up -- so it is worth twice a clutter vote
         # and no more.
-        votes.append((float(np.dot(axis, up_hint)), _W_SIGN_UP_HINT, "declared camera orientation"))
+        votes.append((
+            float(np.dot(axis, up_hint)),
+            _sign_hint_weight(up_hint_coherence),
+            "declared camera orientation",
+        ))
 
     votes.append((_band_asymmetry(t, lo, hi, _CLUTTER_SKIN_M), 1.0, "clutter band"))
     votes.append((_band_asymmetry(t[clutter], lo, hi, 0.0), 1.0, "clutter mass"))
@@ -1108,6 +1135,8 @@ def canonicalize(
     normals: np.ndarray | None = None,
     camera_positions: np.ndarray | None = None,
     up_hint: np.ndarray | None = None,
+    up_hint_coherence: float | None = None,
+    trust_up_hint: bool = False,
     unit_hint: str | None = None,
     unit_hint_confidence: float | None = None,
     unit_hint_evidence: list[str] | None = None,
@@ -1169,10 +1198,36 @@ def canonicalize(
 
     sample_cloud = _sample_cloud(metric, seed=seed)
 
-    gravity = find_up(metric, planes, camera_positions=cams, up_hint=up_hint)
+    gravity = find_up(
+        metric, planes, camera_positions=cams,
+        up_hint=up_hint, up_hint_coherence=up_hint_coherence,
+    )
     up = gravity.up
     method.update(gravity.method)
     warnings += gravity.warnings
+
+    # An explicit escape hatch, never a default: when the caller says the
+    # device hint is to be believed -- a contested axis on a sparse room,
+    # where the operator has looked at the twin and knows it is sideways --
+    # gravity snaps to whichever of the room's own axes lies closest to the
+    # hint. The floor refit below still runs, so precision is unchanged; only
+    # the axis *decision* is overridden, and the override is recorded.
+    if trust_up_hint and up_hint is not None:
+        hint = np.asarray(up_hint, dtype=np.float64).reshape(3)
+        n = float(np.linalg.norm(hint))
+        if n > 1e-9:
+            hint = hint / n
+            axes = manhattan_axes(planes, normals=metric.normals) or [up]
+            cands = [s * a for a in axes for s in (1.0, -1.0)]
+            forced = max(cands, key=lambda a: float(np.dot(a, hint)))
+            swing = math.degrees(math.acos(min(1.0, abs(float(np.dot(forced, up))))))
+            if swing > 1.0:
+                warnings.append(
+                    f"gravity axis overridden by the device up hint "
+                    f"(trust_up_hint): moved {swing:.1f} deg off the geometric vote"
+                )
+            up = forced
+            method["gravity_override"] = "trust_up_hint: axis forced to the camera up hint"
 
     # The axis is now settled, so the most precise estimate of gravity available
     # is the normal of the heaviest surface perpendicular to it -- the floor in
@@ -1554,3 +1609,27 @@ def apply(
     moved = cloud.transformed(canon.transform)
     moved_mesh = None if mesh is None else mesh.transformed(canon.transform)
     return moved, moved_mesh
+
+
+def footprint_yaw(footprint: np.ndarray) -> float:
+    """Residual yaw of a solved footprint's dominant edge, radians in [-pi/4, pi/4).
+
+    The cell-solved footprint is the definitive wall arrangement; when its
+    longest edge is off-axis, that residual is what `find_yaw` got wrong --
+    its vote runs over RANSAC wall planes, and a dense cloud feeds that vote
+    cabinet fronts, counter sides and through-door geometry. Folding modulo
+    90 degrees reports the rotation to the NEAREST axis, which is the only
+    yaw a Manhattan frame can meaningfully owe.
+    """
+    poly = np.asarray(footprint, dtype=np.float64).reshape(-1, 2)
+    edges = np.roll(poly, -1, axis=0) - poly
+    lengths = np.linalg.norm(edges, axis=1)
+    d = edges[int(np.argmax(lengths))]
+    theta = math.atan2(float(d[1]), float(d[0]))
+    return (theta + math.pi / 4.0) % (math.pi / 2.0) - math.pi / 4.0
+
+
+def yaw_matrix(angle: float) -> np.ndarray:
+    """Rotation about +Z by `angle` radians, as a 3x3."""
+    c, s = math.cos(angle), math.sin(angle)
+    return np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])

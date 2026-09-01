@@ -6,16 +6,20 @@ between them is the dense stage, and it is pure photometric geometry: for every
 pixel of one view, search along the corresponding line in another view for the
 patch that looks the same, and the disparity where it matches gives the depth.
 
-Two implementations, because the good one needs hardware that a laptop does not
-have.
+Several implementations, because the good one needs hardware that a laptop
+does not have.
 
-**PatchMatch stereo**, COLMAP's own, is the better of the two by a wide margin:
-it optimises depth *and* surface normal per pixel, propagates good hypotheses
+**PatchMatch stereo**, COLMAP's own, is the best of them by a wide margin: it
+optimises depth *and* surface normal per pixel, propagates good hypotheses
 between neighbours, and enforces consistency across many views at once. It is
-also CUDA-only, which makes it the right answer on a GPU host and no answer at
-all on a Mac.
+also CUDA-only, which makes it the right answer on a GPU host, the reason the
+`remote` module can ship this one stage to a GCP GPU instance, and no answer
+at all on a bare Mac.
 
-**Semi-global block matching**, from OpenCV, is the CPU fallback. It rectifies
+**OpenMVS** (`densify_openmvs`) is the same family of algorithm implemented
+for the CPU, and the strongest local option on a machine without CUDA.
+
+**Semi-global block matching**, from OpenCV, is the CPU floor. It rectifies
 one pair at a time so the search is along image rows, matches blocks along those
 rows, and regularises the result along eight directions through the image. It is
 a 2005 algorithm, it runs anywhere, and it is markedly weaker on the textureless
@@ -28,6 +32,7 @@ similarities, with no trained parameters anywhere.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -181,11 +186,22 @@ def densify_openmvs(
 ) -> np.ndarray:
     """OpenMVS patch-match stereo over the COLMAP model. Returns (N, 6) xyz+rgb.
 
-    Three steps: undistort to a pinhole COLMAP workspace (OpenMVS, like every
+    Four steps: undistort to a pinhole COLMAP workspace (OpenMVS, like every
     MVS, assumes no radial distortion), convert the workspace to an .mvs scene,
-    densify. `resolution_level` is OpenMVS's own knob -- each level halves the
-    image, and level 1 on 2400 px frames matches at 1200 px, which is where the
-    quality/time trade sits for a room sweep on a CPU.
+    densify, then filter the dense cloud on visibility.
+
+    The settings are tuned for *reliability on a hand-held indoor sweep*, not
+    for detail, because the frames do not carry reliable detail: they are
+    low-light, motion-blurred, and mostly pointed at painted walls. That
+    reverses two earlier choices. `resolution_level` defaults to 1 (half
+    resolution) rather than 0 -- matching blurry 2400 px frames at full
+    resolution buys correlated noise, not surfaces, and costs double the
+    runtime. And fusion demands three agreeing views per point rather than
+    OpenMVS's permissive default, plus three geometric-consistency iterations,
+    because a mismatched patch is seen once and a wall is seen thirty times --
+    the extra agreement is what removes the speckle fog that a 2-view fusion
+    lets through. `LOCAISH_MVS_LEVEL=0` restores full-resolution matching for
+    a tripod-quality capture that can actually use it.
     """
     from .colmap import ColmapError, executable
 
@@ -200,14 +216,51 @@ def densify_openmvs(
     work_dir = Path(work_dir).resolve()
     if resolution_level is None:
         # Each level halves the matching resolution and quarters the work.
-        # Level 1 (half of the 2400 px frames) is right on a laptop; a small
-        # cloud CPU can set LOCAISH_MVS_LEVEL=2 and still beat block matching.
+        # Level 1 (1200 px from 2400 px frames) is the default: on hand-held
+        # low-light footage, level 0 matches blur against blur and returns
+        # noise dressed as density, at twice the runtime. LOCAISH_MVS_LEVEL=0
+        # is for captures sharp enough to deserve it.
         resolution_level = int(os.environ.get("LOCAISH_MVS_LEVEL", "1"))
+    # How many neighbour views weigh in on each depth map. OpenMVS's default
+    # is 5; 8 buys measurably more floor and ceiling -- the surfaces a walking
+    # sweep only ever sees at grazing angles, where any single pair is weak
+    # and the extra baselines are what push a match over the line.
+    number_views = int(os.environ.get("LOCAISH_MVS_VIEWS", "8"))
+    # Depth estimates that survive fusion must agree across this many views.
+    # This is the single most effective fog killer in the stage: a hallucinated
+    # patch match agrees with nothing, a wall agrees with every frame that
+    # walked past it.
+    number_views_fuse = int(os.environ.get("LOCAISH_MVS_VIEWS_FUSE", "3"))
+    # Extra rounds of geometric-consistency refinement between depth maps.
+    geometric_iters = int(os.environ.get("LOCAISH_MVS_GEOMETRIC_ITERS", "3"))
     interface = str(Path(binary).parent / "InterfaceCOLMAP")
 
     exe = executable()
     work_dir = Path(work_dir)
     dense = work_dir / "dense"
+    # A finished OpenMVS workspace is minutes of depth estimation, and the
+    # depth maps in it feed the mining stage downstream; a cache miss in the
+    # *post-processing* must not throw it away. The stamp records the knobs
+    # that shape the stereo itself -- re-run only when one of those changed.
+    stamp_path = dense / "densify_stamp.json"
+    stamp = {
+        "resolution_level": resolution_level,
+        "number_views": number_views,
+        "number_views_fuse": number_views_fuse,
+        "geometric_iters": geometric_iters,
+    }
+    if stamp_path.exists():
+        for cand in ("scene_dense_filtered.ply", "scene_dense.ply"):
+            cached = dense / cand
+            if cached.exists():
+                try:
+                    if json.loads(stamp_path.read_text()) == stamp:
+                        if progress:
+                            progress("reusing dense stereo")
+                        return _read_fused(cached)
+                except (ValueError, OSError):
+                    pass
+                break
     if dense.exists():
         shutil.rmtree(dense)
     dense.mkdir(parents=True)
@@ -238,16 +291,55 @@ def densify_openmvs(
 
     if progress:
         progress("openmvs densify")
-    run([
+    densify_args = [
         binary, str(dense / "scene.mvs"),
         "-o", str(dense / "scene_dense.mvs"),
         "--resolution-level", str(resolution_level),
+        "--number-views", str(number_views),
+        "--number-views-fuse", str(number_views_fuse),
+        "--geometric-iters", str(geometric_iters),
         "-w", str(dense),
-    ], "densify", cwd=str(dense))
+    ]
+    try:
+        run(densify_args, "densify", cwd=str(dense))
+    except ColmapError as exc:
+        # An older OpenMVS build rejects the whole command line over one flag
+        # it has never heard of; the geometric refinement is the only recent
+        # one here, and losing it beats losing the stage.
+        if "geometric-iters" not in str(exc):
+            raise
+        densify_args.remove("--geometric-iters")
+        densify_args.remove(str(geometric_iters))
+        run(densify_args, "densify", cwd=str(dense))
 
     fused = dense / "scene_dense.ply"
     if not fused.exists():
         raise ColmapError("OpenMVS produced no dense cloud")
+
+    # Second pass: OpenMVS's own visibility filter, which deletes points that
+    # the depth maps of the views that should see them contradict. Best-effort
+    # -- a filter that fails leaves the unfiltered cloud, never no cloud.
+    if progress:
+        progress("openmvs filter")
+    try:
+        run([
+            binary, str(dense / "scene_dense.mvs"),
+            "--filter-point-cloud", "1",
+            "-o", str(dense / "scene_dense_filtered.mvs"),
+            "-w", str(dense),
+        ], "filter", cwd=str(dense))
+        filtered = dense / "scene_dense_filtered.ply"
+        if filtered.exists():
+            fused = filtered
+    except ColmapError:
+        pass
+
+    stamp_path.write_text(json.dumps(stamp))
+    return _read_fused(fused)
+
+
+def _read_fused(fused: Path) -> np.ndarray:
+    """The fused cloud as the (N, 6) xyz+rgb array the caller merges."""
     from ..formats.ply import read_ply
 
     scan = read_ply(fused)

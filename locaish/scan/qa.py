@@ -45,7 +45,7 @@ import numpy as np
 from scipy import ndimage
 from scipy.spatial import cKDTree
 
-from ..types import Opening, Plane, QAReport, Twin, chunked
+from ..types import Opening, Plane, QAReport, Structure, Twin, chunked
 
 # ---------------------------------------------------------------------------
 # thresholds
@@ -962,9 +962,14 @@ def assess(twin: Twin, *, grid: Any = None, normals: np.ndarray | None = None, s
     """
     report = QAReport()
     m = report.metrics
-    xyz = twin.points.xyz
+    # Measured returns only. Points resampled onto fitted planes by the wall
+    # completion sit on those planes *by construction*, so letting them into a
+    # residual analysis would be QA grading the plane fit against itself --
+    # the same circularity as verifying a value with a check derived from it.
+    measured = twin.points.measured()
+    xyz = measured.xyz
     if normals is None:
-        normals = twin.points.normals
+        normals = measured.normals
     if normals is not None and len(normals) != len(xyz):
         normals = None
 
@@ -1099,7 +1104,65 @@ def assess(twin: Twin, *, grid: Any = None, normals: np.ndarray | None = None, s
         footprint_source=footprint_source,
         cell=cell,
     )
+    _check_room_solve(report, struct)
     return report.finalize()
+
+
+def _check_room_solve(report: QAReport, struct: Structure) -> None:
+    """Whether the drawn room stands on a solved outline or on a raster.
+
+    The room solve failing is not itself a defect -- a capture can be too thin
+    to support it -- but it must never fail *silently*, because the difference
+    decides whether the twin gets a shell or a point cloud, and a location
+    manager reading the report needs to know which picture they are looking at.
+    """
+    src = struct.footprint_source
+    if src == "cells":
+        edges = struct.footprint_edge_sources or []
+        counted = {s: edges.count(s) for s in ("returns", "carve", "frontier")}
+        report.metrics["footprint_edges_returns"] = float(counted["returns"])
+        report.metrics["footprint_edges_carve"] = float(counted["carve"])
+        report.metrics["footprint_edges_frontier"] = float(counted["frontier"])
+        status = "pass" if counted["returns"] >= 2 else "warn"
+        report.add(
+            "room_solve",
+            status,
+            f"The room outline was solved from the wall arrangement: "
+            f"{counted['returns']} edge(s) stand on measured walls, "
+            f"{counted['carve']} on carved ones, {counted['frontier']} on the "
+            "frontier of the sweep."
+            + (
+                ""
+                if status == "pass"
+                else " Fewer than two edges stand on returns; the shape is "
+                "mostly inference and its dimensions should not be quoted."
+            ),
+        )
+    elif src == "raster-sparse":
+        verts = 0 if struct.footprint is None else len(struct.footprint)
+        report.add(
+            "room_solve",
+            "warn",
+            "The capture carried camera poses but the room solve declined, so "
+            f"the footprint is a rastered contour of {verts} vertices covering "
+            f"{struct.floor_area:.1f} m2, and no room shell is drawn from it. "
+            "A slower sweep with more wall coverage usually fixes this.",
+        )
+    elif src == "raster":
+        verts = 0 if struct.footprint is None else len(struct.footprint)
+        report.add(
+            "room_solve",
+            "info",
+            "No camera poses were available, so the footprint is the rastered "
+            f"outline of the returns ({verts} vertices, {struct.floor_area:.1f} m2) "
+            "-- normal for a LiDAR or mesh import.",
+        )
+    else:
+        report.add(
+            "room_solve",
+            "warn",
+            "No footprint could be established at all: 0 usable outline vertices.",
+        )
 
 
 def _fmt(value: float, digits: int = 3, unit: str = "") -> str:
@@ -1773,7 +1836,10 @@ def verify_measurement(
     distance = float(np.linalg.norm(b - a))
 
     metrics = dict(twin.qa.metrics or {})
-    xyz = twin.points.xyz
+    # Inferred plane-fill points lie exactly on the fitted walls and would
+    # report a drift of zero for surfaces nobody measured.
+    measured_cloud = twin.points.measured()
+    xyz = measured_cloud.xyz
 
     # -- spacing ---------------------------------------------------------
     spacing = float(metrics.get("median_spacing_m", float("nan")))
@@ -1792,7 +1858,7 @@ def verify_measurement(
         measured = [
             f.drift
             for f in (
-                _wall_residual_analysis(w, xyz, twin.points.normals, twin.structure.openings)
+                _wall_residual_analysis(w, xyz, measured_cloud.normals, twin.structure.openings)
                 for w in walls
             )
             if f is not None and math.isfinite(f.drift)
