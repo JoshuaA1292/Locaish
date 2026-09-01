@@ -155,6 +155,19 @@ label.slider .val { font-family: var(--mono); color: var(--ink); min-width: 34px
 }
 #legend.shifted { right: 356px; }
 #legend b { color: var(--ink-dim); font-weight: 500; }
+/* viewfinder: the sensor's rectangle, masked out of whatever shape the
+   iframe happens to be, so the frame you see is the frame the lens gives */
+#letterbox { position: fixed; inset: 0; pointer-events: none; z-index: 3; display: none; }
+#letterbox.on { display: block; }
+#letterbox .mask { position: absolute; background: rgba(6,7,8,0.78); }
+#letterbox .frame { position: absolute; border: 1px solid rgba(216,219,223,0.55); box-sizing: border-box; }
+#letterbox .frame i { position: absolute; background: rgba(216,219,223,0.25); }
+#letterbox .frame i.v { top: 0; bottom: 0; width: 1px; }
+#letterbox .frame i.h { left: 0; right: 0; height: 1px; }
+#letterbox .tag {
+  position: absolute; left: 8px; top: 6px; font: 10px/1 var(--mono); letter-spacing: .08em;
+  text-transform: uppercase; color: rgba(216,219,223,0.7);
+}
 #fallback {
   position: fixed; inset: 0; display: none; place-items: center; padding: 40px;
   text-align: center; color: var(--ink-dim); font-size: 14px; line-height: 1.7;
@@ -163,6 +176,8 @@ label.slider .val { font-family: var(--mono); color: var(--ink); min-width: 34px
   #panel { width: auto; left: 12px; top: auto; height: 45%; }
   #legend { display: none; }
 }
+body.embed #toolbar > :not(#btn-splat):not(#btn-both):not(#btn-viewfinder) { display: none !important; }
+body.embed #toolbar { padding: 6px 8px; }
 </style>
 </head>
 <body>
@@ -170,19 +185,31 @@ label.slider .val { font-family: var(--mono); color: var(--ink); min-width: 34px
 <div id="labels"></div>
 
 <div id="toolbar">
+  <button class="tool" id="btn-solid" aria-pressed="false">Solid<span class="k">0</span></button>
   <button class="tool" id="btn-points" aria-pressed="false">Points<span class="k">1</span></button>
   <button class="tool" id="btn-mesh" aria-pressed="false">Mesh<span class="k">2</span></button>
   <button class="tool" id="btn-both" aria-pressed="true">Both<span class="k">3</span></button>
+  <button class="tool" id="btn-splat" aria-pressed="false">Splat<span class="k">5</span></button>
   <span class="sep"></span>
   <button class="tool" id="btn-grid" aria-pressed="true">Grid<span class="k">G</span></button>
+  <button class="tool" id="btn-room" aria-pressed="true">Room<span class="k">4</span></button>
   <button class="tool" id="btn-planes" aria-pressed="false">Planes<span class="k">P</span></button>
   <button class="tool" id="btn-openings" aria-pressed="true">Openings<span class="k">O</span></button>
   <button class="tool" id="btn-bounds" aria-pressed="false">Capture<span class="k">B</span></button>
   <button class="tool" id="btn-extents" aria-pressed="true">Extents<span class="k">E</span></button>
   <span class="sep"></span>
   <button class="tool" id="btn-measure" aria-pressed="false">Measure<span class="k">M</span></button>
+  <button class="tool" id="btn-inside">Inside<span class="k">I</span></button>
   <button class="tool" id="btn-frame">Frame<span class="k">F</span></button>
+  <button class="tool" id="btn-viewfinder" aria-pressed="false">Viewfinder<span class="k">V</span></button>
   <button class="tool" id="btn-panel" aria-pressed="true">Panel<span class="k">H</span></button>
+</div>
+
+<div id="letterbox">
+  <div class="mask" id="lb-t"></div><div class="mask" id="lb-b"></div>
+  <div class="mask" id="lb-l"></div><div class="mask" id="lb-r"></div>
+  <div class="frame" id="lb-f"><i class="v" style="left:33.333%"></i><i class="v" style="left:66.667%"></i>
+    <i class="h" style="top:33.333%"></i><i class="h" style="top:66.667%"></i><span class="tag" id="lb-tag"></span></div>
 </div>
 
 <aside id="panel">
@@ -199,12 +226,17 @@ label.slider .val { font-family: var(--mono); color: var(--ink); min-width: 34px
 <div id="readout"><span class="hint">Drag to orbit · right-drag or shift-drag to pan · scroll to zoom · WASD/QE to fly</span></div>
 
 <div id="legend">
+  <b>5</b><span>photoreal splat</span>
+  <b>0</b><span>solid room</span>
   <b>1/2/3</b><span>points / mesh / both</span>
+  <b>I</b><span>stand inside the room</span>
   <b>G</b><span>ground grid</span>
+  <b>4</b><span>the fitted room</span>
   <b>P O B E</b><span>planes openings capture extents</span>
   <b>M</b><span>measure two points</span>
   <b>R</b><span>reset camera</span>
   <b>F</b><span>frame geometry</span>
+  <b>V [ ]</b><span>viewfinder · lens</span>
   <b>H</b><span>hide panel</span>
 </div>
 
@@ -408,14 +440,19 @@ layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aNrm;
 layout(location = 2) in vec3 aRgb;
 layout(location = 3) in vec2 aUv;
+// Per-vertex texture weight: 1 on panels the video textured, 0 on panels it
+// never saw, which then keep their provenance tint. Meshes that bind no
+// buffer here get the constant attribute 1.0 set at init.
+layout(location = 4) in float aTexW;
 uniform mat4 uVP;
 out vec3 vNrm;
 out vec3 vPos;
 out vec3 vRgb;
 out vec2 vUv;
+out float vTexW;
 void main() {
   gl_Position = uVP * vec4(aPos, 1.0);
-  vNrm = aNrm; vPos = aPos; vRgb = aRgb; vUv = aUv;
+  vNrm = aNrm; vPos = aPos; vRgb = aRgb; vUv = aUv; vTexW = aTexW;
 }`;
 
 const FS_MESH = `#version 300 es
@@ -424,6 +461,7 @@ in vec3 vNrm;
 in vec3 vPos;
 in vec3 vRgb;
 in vec2 vUv;
+in float vTexW;
 uniform vec3 uEye;
 uniform int uUseVertexColor;
 uniform int uUseTexture;
@@ -433,7 +471,7 @@ out vec4 fragColor;
 void main() {
   vec3 base = vec3(0.55, 0.57, 0.60);
   if (uUseVertexColor == 1) base = vRgb;
-  if (uUseTexture == 1) base = texture(uTex, vUv).rgb;
+  if (uUseTexture == 1) base = mix(base, texture(uTex, vUv).rgb, vTexW);
   vec3 n = normalize(vNrm);
   vec3 v = normalize(uEye - vPos);
   // abs() on the headlight term: a room shell is wound with its normals
@@ -442,6 +480,77 @@ void main() {
   float lam = abs(dot(n, v));
   float shade = 0.32 + 0.68 * lam;
   fragColor = vec4(base * shade, uAlpha);
+}`;
+
+// Gaussian splats, rendered as gaussians: instanced screen-space ellipses
+// with EWA covariance projection, alpha-blended back to front. This is the
+// same picture the splat trainer optimised against, so it is the one view
+// with no holes by construction -- a gap would have cost the optimiser loss.
+const VS_SPLAT = `#version 300 es
+layout(location = 0) in vec3 aCenter;
+layout(location = 1) in vec4 aColor;   // u8 normalized rgba, a = opacity
+layout(location = 2) in vec3 aScale;   // stdevs, metres
+layout(location = 3) in vec4 aQuat;    // (w, x, y, z), unit
+uniform mat4 uViewM;
+uniform mat4 uProjM;
+uniform vec2 uViewport;
+out vec4 vColor;
+out vec2 vPos;
+const vec2 QUAD[4] = vec2[4](vec2(-2.,-2.), vec2(2.,-2.), vec2(-2.,2.), vec2(2.,2.));
+void main() {
+  vec4 cam = uViewM * vec4(aCenter, 1.0);
+  vec4 clip = uProjM * cam;
+  float lim = 1.3 * clip.w;
+  if (clip.z < -lim || clip.x < -lim || clip.x > lim || clip.y < -lim || clip.y > lim) {
+    gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+    vColor = vec4(0.0);
+    vPos = vec2(0.0);
+    return;
+  }
+  float w = aQuat.x, x = aQuat.y, y = aQuat.z, z = aQuat.w;
+  mat3 R = mat3(
+    1.-2.*(y*y+z*z), 2.*(x*y+w*z),   2.*(x*z-w*y),
+    2.*(x*y-w*z),    1.-2.*(x*x+z*z), 2.*(y*z+w*x),
+    2.*(x*z+w*y),    2.*(y*z-w*x),    1.-2.*(x*x+y*y));
+  mat3 S = mat3(aScale.x,0.,0., 0.,aScale.y,0., 0.,0.,aScale.z);
+  mat3 M = R * S;
+  mat3 Vrk = M * transpose(M);
+  float zc = -cam.z;
+  vec2 focal = 0.5 * uViewport * vec2(uProjM[0][0], uProjM[1][1]);
+  mat3 J = mat3(
+    focal.x / zc, 0., 0.,
+    0., focal.y / zc, 0.,
+    focal.x * cam.x / (zc*zc), focal.y * cam.y / (zc*zc), 0.);
+  mat3 W = transpose(mat3(uViewM));
+  mat3 T = W * J;
+  mat3 cov = transpose(T) * Vrk * T;
+  float cxx = cov[0][0] + 0.3, cyy = cov[1][1] + 0.3, cxy = cov[0][1];
+  float mid = 0.5 * (cxx + cyy);
+  float rad = length(vec2(0.5 * (cxx - cyy), cxy));
+  float l1 = mid + rad, l2 = max(mid - rad, 0.02);
+  vec2 dir = normalize(vec2(cxy, l1 - cxx));
+  vec2 major = min(sqrt(2.0 * l1), 512.0) * dir;
+  vec2 minor = min(sqrt(2.0 * l2), 512.0) * vec2(dir.y, -dir.x);
+  vec2 q = QUAD[gl_VertexID];
+  vPos = q;
+  vColor = aColor;
+  vec2 centerPx = clip.xy / clip.w;
+  gl_Position = vec4(
+    centerPx + (q.x * major + q.y * minor) / uViewport * 2.0,
+    clip.z / clip.w, 1.0);
+}`;
+
+const FS_SPLAT = `#version 300 es
+precision highp float;
+in vec4 vColor;
+in vec2 vPos;
+out vec4 fragColor;
+void main() {
+  float a = -dot(vPos, vPos);
+  if (a < -4.0) discard;
+  float alpha = exp(a) * vColor.a;
+  if (alpha < 0.02) discard;
+  fragColor = vec4(vColor.rgb * alpha, alpha);
 }`;
 
 const VS_FLAT = `#version 300 es
@@ -480,14 +589,19 @@ let needsRedraw = true;
 const view = mat4(), proj = mat4(), viewProj = mat4();
 let meshTexReady = false;
 
-let progPoints = null, progMesh = null, progFlat = null;
+let progPoints = null, progMesh = null, progFlat = null, progSplat = null;
 if (gl) {
   progPoints = program(VS_POINTS, FS_POINTS, ["uVP", "uPointScale", "uMaxSize", "uColorMode", "uZSpan"]);
   progMesh = program(VS_MESH, FS_MESH, ["uVP", "uEye", "uUseVertexColor", "uUseTexture", "uTex", "uAlpha"]);
   progFlat = program(VS_FLAT, FS_FLAT, ["uVP", "uAlphaMul", "uEye", "uPull"]);
+  progSplat = program(VS_SPLAT, FS_SPLAT, ["uViewM", "uProjM", "uViewport"]);
   gl.enable(gl.DEPTH_TEST);
   gl.depthFunc(gl.LEQUAL);
   gl.clearColor(0.043, 0.047, 0.051, 1.0);
+  // Attribute 4 (texture weight) has no buffer on the scanned mesh; the
+  // constant must be 1.0 or the mix() in FS_MESH would silently kill its
+  // texture path.
+  gl.vertexAttrib1f(4, 1.0);
 }
 
 /* ------------------------------------------------------------------ *
@@ -556,6 +670,12 @@ const PT_SPACING = Math.max(P.points.spacing_m || 0.02, 1e-4);
 let ptsVAO = null, ptsCount = 0, ptsXYZ = null, ptsHasRgb = false;
 let meshVAO = null, meshIndexCount = 0, meshTex = null, meshHasRgb = false, meshHasUv = false;
 let meshPos = null, meshIdx = null;
+let roomVAO = null, roomIndexCount = 0;
+let shellTex = null, shellHasUv = false, shellTexReady = false;
+let shellPos = null, shellIdx = null;
+let splatVAO = null, splatCount = 0, splatSrc = null, splatSorted = null;
+let splatBuf = null, splatDepth = null, splatOrder = null;
+let splatLastDir = [0, 0, 0], splatLastEye = [1e9, 0, 0], splatLastSort = 0;
 
 if (gl) {
   // --- point cloud ---
@@ -578,6 +698,120 @@ if (gl) {
     gl.vertexAttribPointer(1, 3, gl.UNSIGNED_BYTE, true, 0, 0);
   }
   gl.bindVertexArray(null);
+
+  // --- the fitted room shell ---
+  //
+  // Shares the mesh program: it is a lit, vertex-coloured triangle soup like
+  // any other, and the only thing that makes it a room is where its vertices
+  // came from. Drawn translucent so the cloud stays visible inside it -- the
+  // whole point of showing both is to let someone see the returns sitting on
+  // the surface the fitter put there, or failing to.
+  const SH = P.structure && P.structure.shell;
+  if (SH && SH.index_count > 0) {
+    roomIndexCount = SH.index_count | 0;
+    shellPos = b64F32(SH.xyz);
+    shellIdx = b64U32(SH.index);
+    roomVAO = gl.createVertexArray();
+    gl.bindVertexArray(roomVAO);
+    const rp = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, rp);
+    gl.bufferData(gl.ARRAY_BUFFER, shellPos, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    const rn = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, rn);
+    gl.bufferData(gl.ARRAY_BUFFER, b64F32(SH.normal), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
+    const rc = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, rc);
+    gl.bufferData(gl.ARRAY_BUFFER, b64U8(SH.rgb), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(2);
+    gl.vertexAttribPointer(2, 3, gl.UNSIGNED_BYTE, true, 0, 0);
+    // The baked video texture, when the pipeline produced one. Panels the
+    // video never covered carry weight 0 in the `textured` buffer and keep
+    // the provenance tint through the shader's mix().
+    if (SH.uv && SH.texture) {
+      shellHasUv = true;
+      const ub = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, ub);
+      gl.bufferData(gl.ARRAY_BUFFER, b64F32(SH.uv), gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(3);
+      gl.vertexAttribPointer(3, 2, gl.FLOAT, false, 0, 0);
+      if (SH.textured) {
+        const tb = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, tb);
+        gl.bufferData(gl.ARRAY_BUFFER, b64U8(SH.textured), gl.STATIC_DRAW);
+        gl.enableVertexAttribArray(4);
+        gl.vertexAttribPointer(4, 1, gl.UNSIGNED_BYTE, true, 0, 0);
+      }
+    }
+    const ri = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ri);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, shellIdx, gl.STATIC_DRAW);
+    gl.bindVertexArray(null);
+
+    if (shellHasUv) {
+      shellTex = gl.createTexture();
+      const img = new Image();
+      img.onload = () => {
+        gl.bindTexture(gl.TEXTURE_2D, shellTex);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+        gl.generateMipmap(gl.TEXTURE_2D);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        shellTexReady = true;
+        needsRedraw = true;
+      };
+      img.onerror = () => { shellHasUv = false; needsRedraw = true; };
+      img.src = SH.texture;
+    }
+  }
+
+  // --- gaussian splats ---
+  //
+  // Instance data lives in JS arrays as the source of truth; the GL buffers
+  // hold a depth-sorted copy that is rewritten when the camera has moved
+  // enough for the blend order to matter. A 16-bucket-bit counting sort on
+  // 900k gaussians is ~15 ms, so sorting is throttled, not workered.
+  if (P.splat && P.splat.count > 0) {
+    splatCount = P.splat.count | 0;
+    splatSrc = {
+      xyz: b64F32(P.splat.xyz),
+      rgba: b64U8(P.splat.rgba),
+      scale: b64F32(P.splat.scale),
+      quat: b64F32(P.splat.quat),
+    };
+    splatSorted = {
+      xyz: new Float32Array(splatCount * 3),
+      rgba: new Uint8Array(splatCount * 4),
+      scale: new Float32Array(splatCount * 3),
+      quat: new Float32Array(splatCount * 4),
+    };
+    splatDepth = new Float32Array(splatCount);
+    splatOrder = new Uint32Array(splatCount);
+    splatVAO = gl.createVertexArray();
+    gl.bindVertexArray(splatVAO);
+    splatBuf = {};
+    const spec = [
+      ["xyz", 0, 3, gl.FLOAT, false, splatSorted.xyz],
+      ["rgba", 1, 4, gl.UNSIGNED_BYTE, true, splatSorted.rgba],
+      ["scale", 2, 3, gl.FLOAT, false, splatSorted.scale],
+      ["quat", 3, 4, gl.FLOAT, false, splatSorted.quat],
+    ];
+    for (const [name, loc, size, type, norm, arr] of spec) {
+      const b = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, b);
+      gl.bufferData(gl.ARRAY_BUFFER, arr.byteLength, gl.DYNAMIC_DRAW);
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, size, type, norm, 0, 0);
+      gl.vertexAttribDivisor(loc, 1);
+      splatBuf[name] = b;
+    }
+    gl.bindVertexArray(null);
+  }
 
   // --- mesh ---
   if (P.mesh && P.mesh.index_count > 0) {
@@ -806,7 +1040,10 @@ if (gl) { buildGrid(); buildPlanes(); buildOpenings(); buildBounds(); buildExten
  * camera: damped orbit with fly controls
  * ------------------------------------------------------------------ */
 
-const FOV = 50 * Math.PI / 180;
+// Mutable: the viewfinder swaps it for the lens's own field of view and
+// puts it back on exit. Everything that scales by FOV reads it live.
+const DEFAULT_FOV = 50 * Math.PI / 180;
+let FOV = DEFAULT_FOV;
 const DEFAULT_YAW = -2.3, DEFAULT_PITCH = 0.42;
 
 const cam = {
@@ -827,6 +1064,23 @@ function frameGeometry(instant) {
 function resetCamera() {
   cam.gYaw = DEFAULT_YAW; cam.gPitch = DEFAULT_PITCH;
   frameGeometry(false);
+}
+// Stand inside the room at eye height: target the footprint centroid, pull
+// the orbit distance to its minimum so orbiting reads as looking around, and
+// level the pitch. WASD already walks the target, so this *is* a first-person
+// mode; it just never stopped being an orbit camera.
+function enterInterior() {
+  let cx = CENTER[0], cy = CENTER[1];
+  const fp = P.structure && P.structure.footprint;
+  if (fp && fp.length >= 3) {
+    cx = fp.reduce((a, p) => a + p[0], 0) / fp.length;
+    cy = fp.reduce((a, p) => a + p[1], 0) / fp.length;
+  }
+  const fz = (P.structure && isFinite(P.structure.floor_z)) ? P.structure.floor_z : 0;
+  cam.gTarget = [cx, cy, fz + 1.6];
+  cam.gDist = 0.06;
+  cam.gPitch = 0.0;
+  needsRedraw = true;
 }
 frameGeometry(true);
 
@@ -912,8 +1166,64 @@ function rayFromPixel(px, py, invVP, eye) {
 // a 14 mm cloud is most of the tunnelling this constant exists to stop.
 const PICK_PITCHES = 2.0;
 
+// Depth-sort the gaussian field and refresh its GL buffers. Counting sort
+// over 4096 buckets, back to front (view-space z is negative in front, so
+// ascending z is farthest first); throttled, because the order only decays
+// as the camera moves, it does not break.
+function sortSplats() {
+  if (!splatCount) return;
+  const fx = view[2], fy = view[6], fz = view[10];
+  const moved =
+    Math.abs(fx - splatLastDir[0]) + Math.abs(fy - splatLastDir[1]) +
+      Math.abs(fz - splatLastDir[2]) > 0.002 ||
+    Math.hypot(cam.eye[0] - splatLastEye[0], cam.eye[1] - splatLastEye[1],
+      cam.eye[2] - splatLastEye[2]) > 0.05;
+  const nowT = performance.now();
+  if (splatLastSort && (!moved || nowT - splatLastSort < 250)) return;
+  splatLastSort = nowT;
+  splatLastDir = [fx, fy, fz];
+  splatLastEye = cam.eye.slice();
+  const X = splatSrc.xyz, n = splatCount, D = splatDepth;
+  let mn = Infinity, mx = -Infinity;
+  for (let i = 0, j = 0; i < n; i++, j += 3) {
+    const d = fx * X[j] + fy * X[j + 1] + fz * X[j + 2];
+    D[i] = d;
+    if (d < mn) mn = d;
+    if (d > mx) mx = d;
+  }
+  const K = 4096, counts = new Uint32Array(K);
+  const sc = (K - 1) / Math.max(mx - mn, 1e-9);
+  for (let i = 0; i < n; i++) counts[((D[i] - mn) * sc) | 0]++;
+  let acc = 0;
+  for (let k = 0; k < K; k++) { const c = counts[k]; counts[k] = acc; acc += c; }
+  for (let i = 0; i < n; i++) splatOrder[counts[((D[i] - mn) * sc) | 0]++] = i;
+  const o = splatOrder, S = splatSrc, T = splatSorted;
+  for (let i = 0; i < n; i++) {
+    const g = o[i], g3 = g * 3, g4 = g * 4, i3 = i * 3, i4 = i * 4;
+    T.xyz[i3] = S.xyz[g3]; T.xyz[i3 + 1] = S.xyz[g3 + 1]; T.xyz[i3 + 2] = S.xyz[g3 + 2];
+    T.scale[i3] = S.scale[g3]; T.scale[i3 + 1] = S.scale[g3 + 1]; T.scale[i3 + 2] = S.scale[g3 + 2];
+    T.quat[i4] = S.quat[g4]; T.quat[i4 + 1] = S.quat[g4 + 1]; T.quat[i4 + 2] = S.quat[g4 + 2]; T.quat[i4 + 3] = S.quat[g4 + 3];
+    T.rgba[i4] = S.rgba[g4]; T.rgba[i4 + 1] = S.rgba[g4 + 1]; T.rgba[i4 + 2] = S.rgba[g4 + 2]; T.rgba[i4 + 3] = S.rgba[g4 + 3];
+  }
+  for (const [name, arr] of [["xyz", T.xyz], ["rgba", T.rgba], ["scale", T.scale], ["quat", T.quat]]) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, splatBuf[name]);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, arr);
+  }
+}
+
+// How many points the current view draws. The solid view draws the in-room
+// prefix of the buffer (the builder partitioned it): the returns carry the
+// room's contents and their depth, and the photographed shell behind them
+// is what guarantees there is never a hole. The evidence views always draw
+// everything.
+function drawnPtsCount() {
+  if (viewMode !== "room") return ptsCount;
+  return (P.points.solid_count != null) ? (P.points.solid_count | 0) : ptsCount;
+}
+
 function pickPoints(ray) {
   if (!ptsXYZ || ptsCount === 0) return null;
+  const count = drawnPtsCount();
   const ox = ray.o[0], oy = ray.o[1], oz = ray.o[2];
   const rx = ray.d[0], ry = ray.d[1], rz = ray.d[2];
   // The tolerance is 6 px of screen — the click slop a person expects, and it
@@ -932,7 +1242,7 @@ function pickPoints(ray) {
 
   // Pass one asks only how deep the first surface is.
   let bestT = Infinity;
-  for (let i = 0, j = 0; i < ptsCount; i++, j += 3) {
+  for (let i = 0, j = 0; i < count; i++, j += 3) {
     const dx = A[j] - ox, dy = A[j + 1] - oy, dz = A[j + 2] - oz;
     const t = dx * rx + dy * ry + dz * rz;
     if (t <= 0.02 || t >= bestT) continue;
@@ -952,7 +1262,7 @@ function pickPoints(ray) {
   const window = Math.max(4 * PT_SPACING, 0.004 * bestT);
   const tMax = bestT + window;
   let bi = -1, bestPerp2 = Infinity, hitT = bestT;
-  for (let i = 0, j = 0; i < ptsCount; i++, j += 3) {
+  for (let i = 0, j = 0; i < count; i++, j += 3) {
     const dx = A[j] - ox, dy = A[j + 1] - oy, dz = A[j + 2] - oz;
     const t = dx * rx + dy * ry + dz * rz;
     if (t <= 0.02 || t > tMax) continue;
@@ -965,22 +1275,25 @@ function pickPoints(ray) {
   return { t: hitT, p: [A[bi * 3], A[bi * 3 + 1], A[bi * 3 + 2]], src: "point" };
 }
 
-function pickMesh(ray) {
-  if (!meshPos || !meshIdx) return null;
+function pickTris(ray, pos, idx, count, src, cullBack) {
+  if (!pos || !idx) return null;
   const ox = ray.o[0], oy = ray.o[1], oz = ray.o[2];
   const dx = ray.d[0], dy = ray.d[1], dz = ray.d[2];
   let bestT = Infinity;
-  // Moller-Trumbore, double-sided: a room shell is viewed from the inside
-  // and a back-face cull here would make every wall unclickable.
-  for (let f = 0; f < meshIndexCount; f += 3) {
-    const i0 = meshIdx[f] * 3, i1 = meshIdx[f + 1] * 3, i2 = meshIdx[f + 2] * 3;
-    const e1x = meshPos[i1] - meshPos[i0], e1y = meshPos[i1 + 1] - meshPos[i0 + 1], e1z = meshPos[i1 + 2] - meshPos[i0 + 2];
-    const e2x = meshPos[i2] - meshPos[i0], e2y = meshPos[i2 + 1] - meshPos[i0 + 1], e2z = meshPos[i2 + 2] - meshPos[i0 + 2];
+  // Moller-Trumbore. Double-sided by default: a room shell is viewed from
+  // the inside and a back-face cull would make every wall unclickable.
+  // `cullBack` mirrors the solid view's dollhouse cut, so the measure tool
+  // cannot land on a wall the renderer just removed from between the eye
+  // and the room (det > 0 is exactly the front-facing case there).
+  for (let f = 0; f < count; f += 3) {
+    const i0 = idx[f] * 3, i1 = idx[f + 1] * 3, i2 = idx[f + 2] * 3;
+    const e1x = pos[i1] - pos[i0], e1y = pos[i1 + 1] - pos[i0 + 1], e1z = pos[i1 + 2] - pos[i0 + 2];
+    const e2x = pos[i2] - pos[i0], e2y = pos[i2 + 1] - pos[i0 + 1], e2z = pos[i2 + 2] - pos[i0 + 2];
     const px = dy * e2z - dz * e2y, py = dz * e2x - dx * e2z, pz = dx * e2y - dy * e2x;
     const det = e1x * px + e1y * py + e1z * pz;
-    if (Math.abs(det) < 1e-12) continue;
+    if (cullBack ? det < 1e-12 : Math.abs(det) < 1e-12) continue;
     const inv = 1 / det;
-    const tx = ox - meshPos[i0], ty = oy - meshPos[i0 + 1], tz = oz - meshPos[i0 + 2];
+    const tx = ox - pos[i0], ty = oy - pos[i0 + 1], tz = oz - pos[i0 + 2];
     const u = (tx * px + ty * py + tz * pz) * inv;
     if (u < -1e-6 || u > 1 + 1e-6) continue;
     const qx = ty * e1z - tz * e1y, qy = tz * e1x - tx * e1z, qz = tx * e1y - ty * e1x;
@@ -990,8 +1303,9 @@ function pickMesh(ray) {
     if (t > 0.02 && t < bestT) bestT = t;
   }
   if (!isFinite(bestT)) return null;
-  return { t: bestT, p: [ox + dx * bestT, oy + dy * bestT, oz + dz * bestT], src: "mesh" };
+  return { t: bestT, p: [ox + dx * bestT, oy + dy * bestT, oz + dz * bestT], src };
 }
+function pickMesh(ray) { return pickTris(ray, meshPos, meshIdx, meshIndexCount, "mesh"); }
 
 function pick(px, py) {
   const invVP = mat4Invert(mat4(), viewProj);
@@ -999,9 +1313,19 @@ function pick(px, py) {
   const ray = rayFromPixel(px, py, invVP, cam.eye);
   let best = null;
   if (viewMode !== "mesh") best = pickPoints(ray);
-  if (viewMode !== "points") {
+  if (viewMode === "mesh" || viewMode === "both") {
     const m = pickMesh(ray);
     if (m && (!best || m.t < best.t)) best = m;
+  }
+  // The solid room is a measurable surface too: whenever it is drawn opaque
+  // the measure tool lands on the fitted wall, with the same dollhouse cut
+  // as the renderer so an invisible near wall never swallows a click.
+  const evidenceVisible =
+    ((viewMode === "points" || viewMode === "both") && ptsCount > 0) ||
+    ((viewMode === "mesh" || viewMode === "both") && meshIndexCount > 0);
+  if (show.room && roomIndexCount > 0 && (viewMode === "room" || !evidenceVisible)) {
+    const s = pickTris(ray, shellPos, shellIdx, roomIndexCount, "room", viewMode === "room");
+    if (s && (!best || s.t < best.t)) best = s;
   }
   return best;
 }
@@ -1078,6 +1402,221 @@ function setMeasureMode(on) {
 }
 
 /* ------------------------------------------------------------------ *
+ * viewfinder: look through a named lens from a named spot
+ *
+ * The studio posts a row of the shot table -- camera, subject mark, focal
+ * length -- and the page becomes a director's viewfinder: the eye is put
+ * exactly there, the projection takes the lens's field of view, and the
+ * canvas is masked to the sensor's rectangle. The orbit camera is kept
+ * rather than replaced so dragging re-aims the lens around the eyeline,
+ * which is what a DP does with a viewfinder in hand.
+ * ------------------------------------------------------------------ */
+
+// Recorded areas in millimetres; the same table optics.py carries.
+const SENSORS = {
+  "super35":       { name: "Super 35",        w: 24.89, h: 14.00 },
+  "super35-4perf": { name: "Super 35 4-perf", w: 24.89, h: 18.66 },
+  "fullframe":     { name: "Full frame",      w: 36.00, h: 24.00 },
+  "m43":           { name: "Micro 4/3",       w: 17.30, h: 13.00 },
+  "phone-main":    { name: "Phone main",      w: 9.80,  h: 7.35  },
+};
+const PRIMES = [16, 25, 35, 50, 75, 100];
+const SUBJECT_H = 1.75, EYELINE = 0.94;
+
+const vf = { on: false, focal: 35, sensor: "super35", label: "", subj: null, marks: [], lastSig: "", lastPost: 0 };
+let vfBatch = null;
+if (gl) vfBatch = flatBatch(gl.LINES);
+
+function vfSensor() { return SENSORS[vf.sensor] || SENSORS["super35"]; }
+function floorInternal() {
+  const fz = (P.structure && isFinite(P.structure.floor_z)) ? P.structure.floor_z : 0;
+  return fz - ORIGIN[2];
+}
+
+// The canvas's vertical FOV such that the sensor rectangle inside it sees
+// exactly the lens's field: the rectangle is either full height (then the
+// canvas fovy is the lens fovy) or full width (then the lens's horizontal
+// field spans the canvas and fovy follows from the canvas aspect).
+function vfCanvasFov(w, h) {
+  const s = vfSensor();
+  const aspect = w / Math.max(h, 1);
+  if (aspect >= s.w / s.h) return 2 * Math.atan(s.h / (2 * vf.focal));
+  const hfov = 2 * Math.atan(s.w / (2 * vf.focal));
+  return 2 * Math.atan(Math.tan(hfov / 2) / aspect);
+}
+
+function layoutLetterbox() {
+  const box = document.getElementById("letterbox");
+  box.classList.toggle("on", vf.on);
+  if (!vf.on) return;
+  const W = canvas.clientWidth, H = canvas.clientHeight, s = vfSensor();
+  let rw, rh;
+  if (W / Math.max(H, 1) >= s.w / s.h) { rh = H; rw = H * s.w / s.h; } else { rw = W; rh = W * s.h / s.w; }
+  const x0 = (W - rw) / 2, y0 = (H - rh) / 2;
+  const px = v => Math.round(v) + "px";
+  const set = (id, l, t, w, h) => {
+    const e = document.getElementById(id);
+    e.style.left = px(l); e.style.top = px(t); e.style.width = px(w); e.style.height = px(h);
+  };
+  set("lb-t", 0, 0, W, y0);
+  set("lb-b", 0, y0 + rh, W, H - y0 - rh);
+  set("lb-l", 0, y0, x0, rh);
+  set("lb-r", x0 + rw, y0, W - x0 - rw, rh);
+  set("lb-f", x0, y0, rw, rh);
+  document.getElementById("lb-tag").textContent = vf.focal + " mm · " + s.name;
+  FOV = vfCanvasFov(W, H);
+  needsRedraw = true;
+}
+
+function vfEye() { return camEye(); }
+function vfTargetTwin() { return twinCoord(cam.gTarget); }
+
+function vfReadout() {
+  const eye = twinCoord(camEye()), tgt = vfTargetTwin();
+  const dist = len3(sub3(tgt, eye));
+  const height = eye[2] - (floorInternal() + ORIGIN[2]);
+  setReadout(
+    '<div class="big">' + vf.focal + " mm</div>" +
+    "<div>" + (vf.label ? vf.label + " · " : "") + vfSensor().name +
+    " · " + fmt(dist, 2) + " m to subject · h " + fmt(height, 2) + " m</div>" +
+    '<div class="hint">drag to re-aim · [ ] lens · V exit</div>'
+  );
+}
+
+// Stand-ins at the marks: stature line, shoulder bar facing the lens, head.
+// Rebuilt as the camera moves because the shoulders always face it.
+function rebuildFigures() {
+  if (!vfBatch) return;
+  const b = Builder();
+  if (vf.on && vf.subj) {
+    const fz = floorInternal();
+    const eye = camEye();
+    const all = [vf.subj].concat(vf.marks);
+    for (let i = 0; i < all.length; i++) {
+      const m = all[i];
+      const col = i === 0 ? [0.431, 0.659, 0.996, 0.95] : [0.898, 0.753, 0.482, 0.85];
+      const fwd = norm3([m[0] - eye[0], m[1] - eye[1], 0]);
+      const lat = norm3(cross3(fwd, [0, 0, 1]));
+      const feet = [m[0], m[1], fz], top = [m[0], m[1], fz + SUBJECT_H];
+      seg(b, feet, top, col);
+      const sz = fz + 0.82 * SUBJECT_H, hw = 0.23;
+      seg(b, [m[0] - lat[0] * hw, m[1] - lat[1] * hw, sz], [m[0] + lat[0] * hw, m[1] + lat[1] * hw, sz], col);
+      // head: a ring in the plane facing the camera, chin to crown
+      const cz = fz + 0.5 * (1.64 + 1.75) * (SUBJECT_H / 1.75), r = 0.11 * SUBJECT_H / 1.75;
+      let prev = null;
+      for (let k = 0; k <= 16; k++) {
+        const a = k / 16 * Math.PI * 2;
+        const q = [m[0] + lat[0] * r * Math.cos(a), m[1] + lat[1] * r * Math.cos(a), cz + r * Math.sin(a)];
+        if (prev) seg(b, prev, q, col);
+        prev = q;
+      }
+    }
+  }
+  commit(vfBatch, b);
+  needsRedraw = true;
+}
+
+function postVfState(force) {
+  if (window.parent === window) return;
+  const eye = camEye(), tgt = cam.gTarget;
+  const yaw = Math.atan2(tgt[1] - eye[1], tgt[0] - eye[0]);
+  const d = sub3(tgt, eye), dist = len3(d);
+  const pitch = Math.asin(clamp(d[2] / Math.max(dist, 1e-9), -1, 1));
+  const sig = [vf.on, vf.focal, vf.sensor, eye.map(v => v.toFixed(3)).join(","), tgt.map(v => v.toFixed(3)).join(",")].join("|");
+  const now = performance.now();
+  if (!force && (sig === vf.lastSig || now - vf.lastPost < 100)) return;
+  vf.lastSig = sig; vf.lastPost = now;
+  const te = twinCoord(eye);
+  window.parent.postMessage({
+    type: "locaish:viewfinder-state", on: vf.on,
+    cam: te, target: twinCoord(tgt),
+    focal_mm: vf.focal, sensor: vf.sensor,
+    yaw_deg: yaw * 180 / Math.PI, pitch_deg: pitch * 180 / Math.PI,
+    distance_m: dist, height_m: te[2] - (floorInternal() + ORIGIN[2]),
+  }, "*");
+}
+
+function setLens(f) {
+  vf.focal = Math.max(1, +f || 35);
+  if (vf.on) { layoutLetterbox(); vfReadout(); postVfState(true); }
+}
+function stepLens(dir) {
+  const i = PRIMES.findIndex(p => p >= vf.focal - 1e-6);
+  let j = i < 0 ? PRIMES.length - 1 : i;
+  if (dir > 0) j = Math.min(PRIMES.length - 1, (PRIMES[j] > vf.focal + 1e-6 ? j : j + 1));
+  else j = Math.max(0, j - 1);
+  setLens(PRIMES[j]);
+}
+
+// Put the orbit camera's eye exactly at `eye` looking at `target`, both in
+// page coordinates, with no damping: a viewfinder snaps, it does not glide.
+function placeCamera(eye, target) {
+  const d = sub3(eye, target), dist = Math.max(len3(d), 0.05);
+  cam.gTarget = target.slice(); cam.target = target.slice();
+  cam.gDist = cam.dist = dist;
+  cam.gYaw = cam.yaw = Math.atan2(d[1], d[0]);
+  cam.gPitch = cam.pitch = clamp(Math.asin(d[2] / dist), -1.53, 1.53);
+  needsRedraw = true;
+}
+
+function enterViewfinder(msg) {
+  msg = msg || {};
+  const fz = floorInternal();
+  if (msg.cam && msg.subj) {
+    const eye = [msg.cam[0] - ORIGIN[0], msg.cam[1] - ORIGIN[1], msg.cam[2] - ORIGIN[2]];
+    vf.subj = [msg.subj[0] - ORIGIN[0], msg.subj[1] - ORIGIN[1]];
+    placeCamera(eye, [vf.subj[0], vf.subj[1], fz + EYELINE * SUBJECT_H]);
+  } else {
+    // No setup given: frame from where the camera already is, with the
+    // subject 2.5 m ahead on the floor, so there is something to look at.
+    const { fwd } = camBasis();
+    const eye = camEye();
+    const flat = norm3([fwd[0], fwd[1], 0]);
+    vf.subj = [eye[0] + flat[0] * 2.5, eye[1] + flat[1] * 2.5];
+    placeCamera(eye, [vf.subj[0], vf.subj[1], fz + EYELINE * SUBJECT_H]);
+  }
+  vf.marks = (msg.marks || []).map(m => [m[0] - ORIGIN[0], m[1] - ORIGIN[1]]);
+  vf.focal = +msg.focal_mm || vf.focal || 35;
+  vf.sensor = (msg.sensor && SENSORS[msg.sensor]) ? msg.sensor : "super35";
+  vf.label = msg.label || "";
+  if (!vf.on) {
+    // A viewfinder is the frame and nothing else: the panel and the key
+    // legend come back when it is put down.
+    vf.hadPanel = show.panel;
+    if (show.panel) { show.panel = false; syncToolbar(); }
+    document.getElementById("legend").style.display = "none";
+  }
+  vf.on = true;
+  if (measureMode) setMeasureMode(false);
+  document.getElementById("btn-viewfinder").setAttribute("aria-pressed", "true");
+  layoutLetterbox();
+  rebuildFigures();
+  vfReadout();
+  postVfState(true);
+}
+
+function exitViewfinder() {
+  if (!vf.on) return;
+  vf.on = false;
+  FOV = DEFAULT_FOV;
+  document.getElementById("legend").style.display = "";
+  if (vf.hadPanel && !show.panel) { show.panel = true; syncToolbar(); }
+  document.getElementById("btn-viewfinder").setAttribute("aria-pressed", "false");
+  layoutLetterbox();
+  rebuildFigures();
+  setReadout('<span class="hint">Drag to orbit · right-drag or shift-drag to pan · scroll to zoom · WASD/QE to fly</span>');
+  postVfState(true);
+  needsRedraw = true;
+}
+
+addEventListener("message", e => {
+  const m = e.data;
+  if (!m || typeof m !== "object") return;
+  if (m.type === "locaish:viewfinder") { if (m.off) exitViewfinder(); else enterViewfinder(m); }
+  else if (m.type === "locaish:lens") setLens(m.focal_mm);
+});
+
+/* ------------------------------------------------------------------ *
  * projected labels
  * ------------------------------------------------------------------ */
 
@@ -1121,18 +1660,50 @@ function positionLabels() {
  * toggles and keyboard
  * ------------------------------------------------------------------ */
 
-// Points by default even when a mesh exists: the cloud is the measurement
-// and the mesh is an interpretation of it, so the instrument opens on the
-// evidence. "Both" is one keypress away and is where the two get compared.
-let viewMode = (P.points.count > 0) ? "points" : "mesh";
-const show = { grid: true, planes: false, openings: true, bounds: false, extents: true, panel: true };
-let pointBoost = 1.0;
+// When the pipeline textured the shell, the page opens on the room itself --
+// solid, photographed walls, no evidence drawn -- because that is the thing
+// the person filmed. The evidence views stay one keypress away (1/2/3), and
+// a twin with no texture still opens on the points: the cloud is the
+// measurement and the instrument opens on the evidence it has.
+const SHELL_TEXTURED = !!(P.structure && P.structure.shell && P.structure.shell.texture);
+const HAS_SPLAT = !!(P.splat && P.splat.count > 0);
+let viewMode = HAS_SPLAT ? "splat"
+             : SHELL_TEXTURED ? "room"
+             : (P.points.count > 0) ? "points" : "mesh";
+// Embedded in the studio (?embed=1) the twin is the picture, not the
+// instrument: the data panel and the key legend start hidden and come back
+// on H / the toolbar, exactly as they would if the user had hidden them.
+const EMBED = /[?&]embed=1/.test(location.search);
+const show = { grid: true, room: true, planes: false, openings: true, bounds: false, extents: !EMBED, panel: !EMBED,
+               structure: /[?&]structure=1/.test(location.search) };
+if (EMBED) {
+  document.getElementById("legend").style.display = "none";
+  document.body.classList.add("embed");
+  // Embedded, the instrument is two questions: what am I looking at, and
+  // through what. Everything else stays on its key. "Structure" here is
+  // not another view: it lays the fitted room -- shell, planes, openings,
+  // extents -- over the photoreal field, so the measurement is read
+  // against the picture it came from.
+  document.getElementById("btn-splat").innerHTML = 'Photoreal<span class="k">5</span>';
+  document.getElementById("btn-both").innerHTML = 'Structure<span class="k">3</span>';
+  if (show.structure) { show.planes = show.extents = show.bounds = true; }
+}
+function toggleStructure() {
+  show.structure = !show.structure;
+  show.planes = show.extents = show.bounds = show.structure;
+  show.openings = true;
+  if (HAS_SPLAT) viewMode = "splat";
+  syncToolbar(); syncLabels();
+}
+let pointBoost = (P.points && P.points.default_boost) || 1.0;
 
 function syncToolbar() {
+  document.getElementById("btn-splat").setAttribute("aria-pressed", String(viewMode === "splat"));
+  document.getElementById("btn-solid").setAttribute("aria-pressed", String(viewMode === "room"));
   document.getElementById("btn-points").setAttribute("aria-pressed", String(viewMode === "points"));
   document.getElementById("btn-mesh").setAttribute("aria-pressed", String(viewMode === "mesh"));
-  document.getElementById("btn-both").setAttribute("aria-pressed", String(viewMode === "both"));
-  for (const k of ["grid", "planes", "openings", "bounds", "extents", "panel"]) {
+  document.getElementById("btn-both").setAttribute("aria-pressed", String(EMBED ? show.structure : viewMode === "both"));
+  for (const k of ["grid", "room", "planes", "openings", "bounds", "extents", "panel"]) {
     document.getElementById("btn-" + k).setAttribute("aria-pressed", String(show[k]));
   }
   document.getElementById("panel").classList.toggle("collapsed", !show.panel);
@@ -1142,22 +1713,31 @@ function syncToolbar() {
 function setViewMode(m) { viewMode = m; syncToolbar(); }
 function toggle(k) { show[k] = !show[k]; syncToolbar(); syncLabels(); }
 
+if (!HAS_SPLAT) document.getElementById("btn-splat").style.display = "none";
+document.getElementById("btn-splat").onclick = () => { if (HAS_SPLAT) setViewMode("splat"); };
+document.getElementById("btn-solid").onclick = () => setViewMode("room");
 document.getElementById("btn-points").onclick = () => setViewMode("points");
 document.getElementById("btn-mesh").onclick = () => setViewMode("mesh");
-document.getElementById("btn-both").onclick = () => setViewMode("both");
-for (const k of ["grid", "planes", "openings", "bounds", "extents", "panel"]) {
+document.getElementById("btn-both").onclick = () => EMBED ? toggleStructure() : setViewMode("both");
+for (const k of ["grid", "room", "planes", "openings", "bounds", "extents", "panel"]) {
   document.getElementById("btn-" + k).onclick = () => toggle(k);
 }
 document.getElementById("btn-measure").onclick = () => setMeasureMode(!measureMode);
+document.getElementById("btn-inside").onclick = () => enterInterior();
 document.getElementById("btn-frame").onclick = () => frameGeometry(false);
+document.getElementById("btn-viewfinder").onclick = () => { if (vf.on) exitViewfinder(); else enterViewfinder(); };
 
 addEventListener("keydown", e => {
   if (!e.key) return;
   if (e.target && /^(input|textarea|select)$/i.test(e.target.tagName)) return;
   const k = e.key.toLowerCase();
-  if (k === "1") setViewMode("points");
+  if (k === "5") { if (HAS_SPLAT) setViewMode("splat"); }
+  else if (k === "0") setViewMode("room");
+  else if (k === "1") setViewMode("points");
   else if (k === "2") setViewMode("mesh");
-  else if (k === "3") setViewMode("both");
+  else if (k === "3") { if (EMBED) toggleStructure(); else setViewMode("both"); }
+  else if (k === "4") toggle("room");
+  else if (k === "i") enterInterior();
   else if (k === "g") toggle("grid");
   else if (k === "p") toggle("planes");
   else if (k === "o") toggle("openings");
@@ -1167,7 +1747,10 @@ addEventListener("keydown", e => {
   else if (k === "m") setMeasureMode(!measureMode);
   else if (k === "r") resetCamera();
   else if (k === "f") frameGeometry(false);
-  else if (k === "escape") setMeasureMode(false);
+  else if (k === "v") { if (vf.on) exitViewfinder(); else enterViewfinder(); }
+  else if (k === "[" && vf.on) stepLens(-1);
+  else if (k === "]" && vf.on) stepLens(+1);
+  else if (k === "escape") { if (vf.on) exitViewfinder(); else setMeasureMode(false); }
   else if ("wasdqe".includes(k) || k === "shift") { keys.add(k); return; }
   else return;
   e.preventDefault();
@@ -1417,6 +2000,7 @@ function resize() {
   if (canvas.width !== w || canvas.height !== h) {
     canvas.width = w; canvas.height = h;
     needsRedraw = true;
+    if (vf.on) layoutLetterbox();
   }
 }
 addEventListener("resize", () => { resize(); needsRedraw = true; });
@@ -1476,6 +2060,9 @@ function step() {
   if (!needsRedraw || !gl) return;
   needsRedraw = false;
   resize();
+  // The viewfinder's stand-ins face the lens and its readout quotes the
+  // distance, so both follow the camera; the parent is told at ~10/s.
+  if (vf.on) { rebuildFigures(); needsRedraw = false; vfReadout(); postVfState(false); }
   render();
 }
 
@@ -1500,7 +2087,11 @@ function render() {
   if (show.grid) drawFlat(gridBatch, true, true, 1.0);
 
   // 2. opaque geometry
-  if (viewMode !== "mesh" && ptsCount > 0) {
+  //
+  // The solid view draws the points too: the shell guarantees there is no
+  // hole -- anything the returns missed shows the photographed wall behind
+  // it -- and the cloud standing inside it is what gives the room its depth.
+  if (viewMode !== "mesh" && viewMode !== "splat" && ptsCount > 0) {
     gl.useProgram(progPoints.prog);
     gl.uniformMatrix4fv(progPoints.u.uVP, false, viewProj);
     // pixels per metre at one metre of depth, from the vertical FOV
@@ -1518,10 +2109,48 @@ function render() {
     gl.uniform2f(progPoints.u.uZSpan, LO[2], HI[2]);
     gl.depthMask(true);
     gl.bindVertexArray(ptsVAO);
-    gl.drawArrays(gl.POINTS, 0, ptsCount);
+    gl.drawArrays(gl.POINTS, 0, drawnPtsCount());
     gl.bindVertexArray(null);
   }
-  if (viewMode !== "points" && meshIndexCount > 0) {
+  if (viewMode !== "splat" && show.room && roomIndexCount > 0) {
+    gl.useProgram(progMesh.prog);
+    gl.uniformMatrix4fv(progMesh.u.uVP, false, viewProj);
+    gl.uniform3f(progMesh.u.uEye, cam.eye[0], cam.eye[1], cam.eye[2]);
+    gl.uniform1i(progMesh.u.uUseVertexColor, 1);
+    const shellUseTex = (shellHasUv && shellTexReady) ? 1 : 0;
+    gl.uniform1i(progMesh.u.uUseTexture, shellUseTex);
+    if (shellUseTex) {
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, shellTex);
+      gl.uniform1i(progMesh.u.uTex, 0);
+    }
+    // The solid view draws the shell opaque with its outward faces culled:
+    // every wall between the eye and the room disappears, the far walls
+    // stay, and the cloud inside keeps its depth -- the dollhouse cut. The
+    // winding makes this free: every shell face fronts into the room, so
+    // culling back faces culls exactly the walls that would block the view.
+    // In the evidence views the shell is instead a translucent container, so
+    // the returns can be checked against the surface the fitter claimed.
+    const solid = viewMode === "room";
+    const evidenceVisible =
+      ((viewMode === "points" || viewMode === "both") && ptsCount > 0) ||
+      ((viewMode === "mesh" || viewMode === "both") && meshIndexCount > 0);
+    const roomAlpha = (solid || !evidenceVisible) ? 1.0 : 0.45;
+    gl.uniform1f(progMesh.u.uAlpha, roomAlpha);
+    gl.depthMask(roomAlpha >= 1.0);
+    if (solid) {
+      gl.enable(gl.CULL_FACE);
+      gl.cullFace(gl.BACK);
+    } else {
+      gl.disable(gl.CULL_FACE);
+    }
+    gl.bindVertexArray(roomVAO);
+    gl.drawElements(gl.TRIANGLES, roomIndexCount, gl.UNSIGNED_INT, 0);
+    gl.bindVertexArray(null);
+    gl.disable(gl.CULL_FACE);
+    gl.depthMask(true);
+  }
+  if ((viewMode === "mesh" || viewMode === "both") && meshIndexCount > 0) {
     gl.useProgram(progMesh.prog);
     gl.uniformMatrix4fv(progMesh.u.uVP, false, viewProj);
     gl.uniform3f(progMesh.u.uEye, cam.eye[0], cam.eye[1], cam.eye[2]);
@@ -1545,10 +2174,49 @@ function render() {
     gl.depthMask(true);
   }
 
+  // 2b. the gaussian field, the view with no holes by construction: sorted
+  //     back to front and alpha-composited exactly as it was optimised
+  if (viewMode === "splat" && splatCount > 0) {
+    sortSplats();
+    gl.useProgram(progSplat.prog);
+    gl.uniformMatrix4fv(progSplat.u.uViewM, false, view);
+    gl.uniformMatrix4fv(progSplat.u.uProjM, false, proj);
+    gl.uniform2f(progSplat.u.uViewport, w, h);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.depthMask(false);
+    gl.disable(gl.DEPTH_TEST);
+    gl.bindVertexArray(splatVAO);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, splatCount);
+    gl.bindVertexArray(null);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthMask(true);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  }
+
+  // 2c. the structure over the field: the fitted shell as a translucent
+  //     container, drawn after the gaussians so it reads as the measurement
+  //     laid on the picture rather than a wall in front of it
+  if (viewMode === "splat" && show.structure && roomIndexCount > 0) {
+    gl.useProgram(progMesh.prog);
+    gl.uniformMatrix4fv(progMesh.u.uVP, false, viewProj);
+    gl.uniform3f(progMesh.u.uEye, cam.eye[0], cam.eye[1], cam.eye[2]);
+    gl.uniform1i(progMesh.u.uUseVertexColor, 1);
+    gl.uniform1i(progMesh.u.uUseTexture, 0);
+    gl.uniform1f(progMesh.u.uAlpha, 0.12);
+    gl.depthMask(false);
+    gl.disable(gl.CULL_FACE);
+    gl.bindVertexArray(roomVAO);
+    gl.drawElements(gl.TRIANGLES, roomIndexCount, gl.UNSIGNED_INT, 0);
+    gl.bindVertexArray(null);
+    gl.depthMask(true);
+  }
+
   // 3. translucent overlays: depth-tested but not depth-writing, so they
   //    layer over each other without punching holes in one another
-  if (show.planes) { drawFlat(planeFill, true, false, 1.0); drawFlat(planeEdge, true, false, 1.0); }
-  if (show.bounds) { drawFlat(boundsFill, true, false, 1.0); drawFlat(boundsEdge, true, false, 1.0); }
+  // Over the photoreal field the structure is lines, not fills: a filled
+  // plane tints the picture it is meant to be checked against.
+  if (show.planes) { if (!show.structure) drawFlat(planeFill, true, false, 1.0); drawFlat(planeEdge, true, false, 1.0); }
+  if (show.bounds) { if (!show.structure) drawFlat(boundsFill, true, false, 1.0); drawFlat(boundsEdge, true, false, 1.0); }
   if (show.openings) drawFlat(openingBatch, true, false, 1.0);
   if (show.extents) drawFlat(extentBatch, true, false, 1.0);
 
@@ -1569,6 +2237,14 @@ function render() {
   drawFlat(measureBatch, false, false, 0.18, 0.0);
   drawFlat(measureBatch, true, false, 1.0, 2.0 * PT_SPACING);
 
+  // 6. the viewfinder's stand-ins, same two passes for the same reason: a
+  //    mark behind a wall is a mark the setup cannot see, and the ghost
+  //    says so where a solid figure would lie.
+  if (vf.on) {
+    drawFlat(vfBatch, false, false, 0.22, 0.0);
+    drawFlat(vfBatch, true, false, 1.0, 2.0 * PT_SPACING);
+  }
+
   gl.disable(gl.BLEND);
   positionLabels();
 }
@@ -1579,6 +2255,14 @@ function render() {
 
 buildPanel();
 syncToolbar();
+// A gaussian field reads as fog from outside and as the room from within,
+// so a splat twin opens standing inside it, instantly.
+if (HAS_SPLAT) {
+  enterInterior();
+  cam.target = cam.gTarget.slice();
+  cam.dist = cam.gDist;
+  cam.pitch = cam.gPitch;
+}
 syncLabels();
 resize();
 if (gl) requestAnimationFrame(step);

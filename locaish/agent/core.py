@@ -40,7 +40,7 @@ from .. import warehouse
 from ..types import Twin
 
 APP_NAME = "locaish"
-DEFAULT_MODEL = os.environ.get("LOCAISH_GEMINI_MODEL", "gemini-3.5-flash")
+DEFAULT_MODEL = os.environ.get("LOCAISH_GEMINI_MODEL", "gemini-3.6-flash")
 
 
 class AgentUnavailable(RuntimeError):
@@ -152,7 +152,7 @@ def render_frame(
     focal_mm: float,
     tool_context: ToolContext = None,
 ) -> dict:
-    """Render the actual frame a camera setup would capture, from the twin's points.
+    """Render the actual frame a camera setup would capture, from the twin itself.
 
     Use this to show the user what a setup from the shot table looks like: pass
     the row's cam_x/cam_y/cam_z, subj_x/subj_y and focal_mm. A stand-in figure
@@ -183,8 +183,9 @@ def render_frame(
     return {
         "status": "success",
         "image_url": f"/shot-image/{tool_context.state.get('job_id', name)}/{fname}",
-        "note": "the frame is rendered from the twin's own measured points; "
-        "dark regions are parts of the room the capture never saw",
+        "note": "the frame is rendered from the twin's own reconstruction (its "
+        "gaussian field when it has one, else its points); blurred or dark "
+        "regions are parts of the room the capture never saw",
     }
 
 
@@ -300,12 +301,33 @@ position and height, a subject mark, and a lens. Columns:
 - surveyed (0/1 -- camera stands on ground the capture actually saw)
 - clearance_m (room around the camera), headroom_m
 - window_in_frame, window_behind_subject (0/1 -- backlight risk)
+- key_quality (front | three-quarter | side | rim | back | none: where the
+  brightest window sits relative to the lens axis, measured at the subject;
+  three-quarter and side are the flattering keys, front is flat, back is a
+  silhouette), key_angle_deg
+- background_depth_m (how far the lens axis runs on behind the subject before
+  it hits something; 12 = out of the capture), backup_room_m (how far the
+  camera can pull back), axis_wall_angle_deg (0 = square onto a wall, 45 =
+  into a corner: the deeper picture), portrait_ok (0/1: tight framings from
+  at least 1.4 m, so the face is not stretched)
 - score (0-100 tie-breaker; prefer ORDER BY score DESC, then your own criteria)
+See docs/CINEMATOGRAPHY.md for the conventions behind these columns.
 
 Typical query: SELECT cam_x, cam_y, cam_z, subj_x, subj_y, focal_mm, distance_m,
 score FROM {warehouse.database()}.{warehouse.TABLE} WHERE location = '...' AND
 shot_size = 'cu' AND visible = 1 AND window_behind_subject = 0 ORDER BY score
 DESC LIMIT 5. Always LIMIT.
+
+## Planned coverage (ClickHouse, via run_query)
+The studio's coverage planner writes every shot it places into
+`{warehouse.database()}.{warehouse.PLANS_TABLE}`: one row per planned shot with
+location, plan_id, plan_title, shot_no, description, subject, wanted_size,
+placed (0/1), shot_size, focal_mm, cam_x/cam_y/cam_z, distance_m,
+window_behind_subject, candidates (how many setups matched), relaxed (what
+was given up), review_score (Gemini's 0-10 verdict on the rendered frame, -1
+if none) and review_notes. Use it for "which of our locations holds this
+scene", "what did we compromise on", and "how many setups did shot 3 have to
+choose from". GROUP BY location, plan_id for a cross-location comparison.
 
 ## Natural light
 sun_schedule gives sunrise/sunset, golden hours and per-window direct-sun

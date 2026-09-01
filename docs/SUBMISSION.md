@@ -16,6 +16,9 @@ just verifies the thing runs and uses what it claims to use.
   2026-08-21; window opened 2026-07-27).
 - [x] **Open-source license at repo top** (LICENSE).
 - [x] **Public repo** with all source and run instructions (README).
+- [ ] **Billing on the Vertex project** — as of 2026-09-01 Gemini calls on
+  gen-lang-client-0144049817 return 403 "billing must be enabled"; the
+  studio's coverage planner and scout chat need it (or `GOOGLE_API_KEY`).
 - [ ] **Hosted project URL.** Deploy with `gcloud run deploy` (command in
   README, Dockerfile included). Needs: a GCP project with Vertex AI enabled,
   and a ClickHouse Cloud instance (or any reachable ClickHouse).
@@ -32,10 +35,17 @@ just verifies the thing runs and uses what it claims to use.
 2. **(0:20–1:00)** Phone video of a real room dropped on the studio page.
    Quiet progress line; the twin appears with its QA verdict — point out that
    the pipeline says *how far to trust it*.
-3. **(1:00–2:20)** Ask the scout. One brief that shows the whole stack:
-   "Find the cleanest 75mm medium shot with no window behind the subject."
-   Let the activity feed show run_query hitting ClickHouse, then the rendered
-   frame coming back. Follow with "when does golden hour hit the glass?"
+3. **(1:00–2:20)** Scout the scene. Paste the scene page, hit *Scout the
+   scene*, and watch the twin: the viewfinder flies through the candidates
+   ClickHouse returned for each shot, settles on the pick, and the caption
+   gives the reason in a DP's words ("35 mm from 1.5 m; the window keys from
+   three-quarter; matches the reverse's lens and distance"). Gemini's
+   verdict on the rendered frame ("adjust: too tight, go to the 35") and the
+   retry show in the caption. Then the cards, the camera plan, "what this
+   room holds", and *How it decided* with the SQL. One line: every placed
+   shot is a row in `shot_plans`, so "which of our five locations holds this
+   scene" is a GROUP BY. Name-drop docs/CINEMATOGRAPHY.md: the rules are
+   sourced, not invented.
 4. **(2:20–3:00)** One sentence on architecture (every number traces to a ray
    cast, an ephemeris, or a ClickHouse query — never to the model), and the
    scale: hundreds of thousands of physically-checked setups per room,

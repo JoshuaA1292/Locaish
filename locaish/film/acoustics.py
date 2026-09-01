@@ -142,7 +142,9 @@ def estimate(twin: Twin) -> Acoustics:
 
     height = structure.ceiling_height
     if height is None or height <= 0:
-        span = float(np.percentile(twin.points.xyz[:, 2], 99.5) - structure.floor_z)
+        span = float(
+            np.percentile(twin.points.measured().xyz[:, 2], 99.5) - structure.floor_z
+        )
         height = max(span, 0.1)
         warnings.append(
             f"no ceiling was captured, so the volume assumes the room stops at "

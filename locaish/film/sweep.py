@@ -69,6 +69,32 @@ WORKING_APERTURE_F = 2.8
 SUBJECT_HEIGHT_M = 1.75
 EYELINE_RATIO = 0.94
 
+# How far the ray behind the subject, and behind the camera, is followed
+# before the answer is "open": past these the room is not the limit.
+MAX_DEPTH_M = 12.0
+MAX_BACKUP_M = 8.0
+
+# Faces closer than this read as wide-angle portraits whatever the glass.
+PORTRAIT_MIN_DISTANCE_M = 1.4
+TIGHT_SIZES = ("ecu", "bcu", "cu", "mcu")
+
+
+def KEY_QUALITY(angle_deg: float) -> str:
+    """Where the brightest window sits relative to the lens axis, in the
+    words a gaffer uses. The angle is measured at the subject, between the
+    direction to the camera and the direction to the window."""
+    if angle_deg < 0:
+        return "none"
+    if angle_deg < 25:
+        return "front"
+    if angle_deg < 70:
+        return "three-quarter"
+    if angle_deg < 110:
+        return "side"
+    if angle_deg < 150:
+        return "rim"
+    return "back"
+
 # Caps that keep the sweep bounded on a big room. Applied by even subsampling,
 # never by truncation, so coverage of the room survives the cap.
 MAX_CAMERA_CELLS = 700
@@ -203,6 +229,15 @@ def sweep(
     openings = getattr(twin.structure, "openings", None) or []
     win_in_frame, win_behind_subj = _window_flags(openings, a_all, b_all, sensor)
 
+    # -- what a DP reads off the room, per pair -------------------------
+    if progress:
+        progress("sweep depth and light")
+    view_n = view / np.maximum(d_all[:, None], 1e-9)
+    bg_depth = _first_hit_batch(grid, gorigin, gcell, b_all, view_n, MAX_DEPTH_M)
+    backup = _first_hit_batch(grid, gorigin, gcell, a_all, -view_n, MAX_BACKUP_M)
+    key_angle = _key_angle(openings, a_all, b_all)
+    wall_angle = _axis_wall_angle(getattr(twin.structure, "footprint", None), a_all, b_all)
+
     n_pairs = len(d_all)
     n_lens = len(primes_mm)
     total = n_pairs * n_lens
@@ -237,6 +272,13 @@ def sweep(
     size_fit = np.exp(-np.abs(log_fh - size_logs[nearest]) * 3.0)
 
     keep = (fill >= MIN_SUBJECT_FILL) & (fill <= MAX_SUBJECT_FILL)
+
+    # Perspective on a face is set by distance, not focal length: a close-up
+    # taken from inside about a metre and a half enlarges the nose however
+    # long the lens. Tight framings closer than that are flagged, so the
+    # planner reaches for the longer lens from farther back when it can.
+    tight = np.isin(shot_size, list(TIGHT_SIZES))
+    portrait_ok = ~tight | (dist >= PORTRAIT_MIN_DISTANCE_M)
 
     clear = tile(cam_clear[c_all])
     head = tile(cam_head[c_all])
@@ -283,6 +325,12 @@ def sweep(
         "headroom_m": head.astype(np.float32),
         "window_in_frame": tile(win_in_frame).astype(np.uint8),
         "window_behind_subject": tile(win_behind_subj).astype(np.uint8),
+        "background_depth_m": tile(bg_depth).astype(np.float32),
+        "backup_room_m": tile(backup).astype(np.float32),
+        "key_angle_deg": tile(key_angle).astype(np.float32),
+        "key_quality": np.array([KEY_QUALITY(k) for k in tile(key_angle)], dtype=object),
+        "axis_wall_angle_deg": tile(wall_angle).astype(np.float32),
+        "portrait_ok": portrait_ok.astype(np.uint8),
         "score": score.astype(np.float32),
     }
     columns = {k: v[keep] for k, v in columns.items()}
@@ -374,3 +422,95 @@ def _window_flags(openings, a, b, sensor) -> tuple[np.ndarray, np.ndarray]:
         in_frame |= seen
         behind |= seen & (d > subj_dist)
     return in_frame, behind
+
+
+def _first_hit_batch(grid, origin, cell, start, direction, max_m: float, *, slack: float = 0.25) -> np.ndarray:
+    """Distance from each start along its direction to the first occupied
+    voxel, or `max_m` when nothing is hit inside the grid. One march, N rays.
+
+    The first `slack` metres are ignored: the start is on something (an
+    actor, a camera) and the question is what lies beyond it.
+    """
+    start = np.asarray(start, dtype=np.float64)
+    direction = np.asarray(direction, dtype=np.float64)
+    n = len(start)
+    if n == 0:
+        return np.zeros(0)
+    steps = max(2, int(math.ceil(max_m / (cell * 0.5))))
+    run = np.linspace(0.0, max_m, steps)                     # (T,)
+    pts = start[:, None, :] + run[None, :, None] * direction[:, None, :]
+    idx = np.floor((pts - origin) / cell).astype(np.int64)
+    hi = np.array(grid.shape) - 1
+    inb = np.all((idx >= 0) & (idx <= hi), axis=2)
+    idx = np.clip(idx, 0, hi)
+    hit = grid[idx[..., 0], idx[..., 1], idx[..., 2]] & inb & (run[None, :] > slack)
+    any_hit = hit.any(axis=1)
+    first = np.where(any_hit, hit.argmax(axis=1), steps - 1)
+    return np.where(any_hit, run[first], max_m)
+
+
+def _key_angle(openings, a, b) -> np.ndarray:
+    """Angle at the subject between the camera and the brightest window.
+
+    0 is a window straight behind the camera (flat front light), 45 the
+    classic three-quarter key, 90 side light, 180 straight behind the
+    subject. The window that wins is the one with the largest apparent size
+    from the subject's mark. -1 when the twin found no window.
+    """
+    n = len(a)
+    out = np.full(n, -1.0)
+    windows = [o for o in openings if getattr(o, "kind", "") == "window"]
+    if not windows or n == 0:
+        return out
+    to_cam = a[:, :2] - b[:, :2]
+    to_cam /= np.maximum(np.linalg.norm(to_cam, axis=1, keepdims=True), 1e-9)
+    best_size = np.zeros(n)
+    for o in windows:
+        c = np.asarray(o.center, dtype=np.float64)[:2]
+        rel = c[None, :] - b[:, :2]
+        d = np.maximum(np.linalg.norm(rel, axis=1), 0.3)
+        size = float(o.width * o.height) / (d * d)
+        cosang = np.einsum("ij,ij->i", rel / d[:, None], to_cam)
+        ang = np.degrees(np.arccos(np.clip(cosang, -1.0, 1.0)))
+        better = size > best_size
+        out = np.where(better, ang, out)
+        best_size = np.where(better, size, best_size)
+    return out
+
+
+def _axis_wall_angle(footprint, a, b) -> np.ndarray:
+    """Angle between the lens axis and the wall it ends on behind the subject.
+
+    0 means the camera looks square at a wall (or straight along one) -- the
+    flat background every guide warns against; 45 means it looks into a
+    corner, the longest sightline a rectangular room has. -1 without a
+    footprint.
+    """
+    n = len(a)
+    out = np.full(n, -1.0)
+    if footprint is None or len(footprint) < 3 or n == 0:
+        return out
+    poly = np.asarray(footprint, dtype=np.float64)[:, :2]
+    o = b[:, :2]
+    d = b[:, :2] - a[:, :2]
+    d /= np.maximum(np.linalg.norm(d, axis=1, keepdims=True), 1e-9)
+    best_t = np.full(n, np.inf)
+    for i in range(len(poly)):
+        p, q = poly[i], poly[(i + 1) % len(poly)]
+        e = q - p
+        denom = d[:, 0] * (-e[1]) - d[:, 1] * (-e[0])
+        ok = np.abs(denom) > 1e-9
+        rhs = p[None, :] - o
+        t = (rhs[:, 0] * (-e[1]) - rhs[:, 1] * (-e[0])) / np.where(ok, denom, 1.0)
+        u = (d[:, 0] * rhs[:, 1] - d[:, 1] * rhs[:, 0]) / np.where(ok, denom, 1.0)
+        valid = ok & (t > 0.05) & (u >= 0.0) & (u <= 1.0) & (t < best_t)
+        if valid.any():
+            normal = np.array([-e[1], e[0]]) / max(float(np.linalg.norm(e)), 1e-9)
+            cosang = np.abs(d @ normal)
+            ang = np.degrees(np.arccos(np.clip(cosang, -1.0, 1.0)))
+            # Folded: an axis running almost along a wall is as flat a
+            # picture as one square onto it; 45 is the diagonal.
+            ang = np.minimum(ang, 90.0 - ang)
+            out = np.where(valid, ang, out)
+            best_t = np.where(valid, t, best_t)
+    return out

@@ -38,6 +38,7 @@ from typing import Any
 
 import numpy as np
 
+from ..geom import shell as shellmod
 from ..types import Mesh, Opening, Plane, Twin, chunked
 
 PAYLOAD_VERSION = 1
@@ -413,6 +414,196 @@ def _mesh_payload(mesh: Mesh, origin: np.ndarray) -> dict[str, Any] | None:
     return payload
 
 
+def _in_room_mask(xyz: np.ndarray, s) -> np.ndarray | None:
+    """Which points stand inside the solved room volume, or None if unknowable.
+
+    Even-odd polygon test against the footprint plus a z gate at the drawn
+    ceiling. Used only to *order* the drawn cloud so the solid view can stop
+    at the room's contents: the fringe of returns behind walls and through
+    doorways is real evidence and stays in the evidence views, but drawn
+    inside a photographed room it reads as noise stuck to the outside of the
+    walls. A small margin keeps the returns sitting ON the walls.
+    """
+    if s.footprint is None or len(s.footprint) < 3 or s.footprint_source == "raster-sparse":
+        return None
+    poly = np.asarray(s.footprint, dtype=np.float64)
+    x, y = xyz[:, 0], xyz[:, 1]
+    inside = np.zeros(len(xyz), dtype=bool)
+    n = len(poly)
+    for i in range(n):
+        x0, y0 = poly[i - 1]
+        x1, y1 = poly[i]
+        dy = y0 - y1
+        if abs(dy) < 1e-12:
+            continue
+        cross = ((y1 > y) != (y0 > y)) & (x < (x0 - x1) * (y - y1) / dy + x1)
+        inside ^= cross
+    # points on the walls themselves sit within noise of the boundary; keep an
+    # apron of a few centimetres -- the fit tolerance plus range noise -- so
+    # the wall returns survive the cut without dragging in the smear that
+    # sits behind the wall
+    margin = 0.05
+    for i in range(n):
+        a = poly[i - 1]
+        b = poly[i]
+        seg = b - a
+        length = float(np.hypot(*seg))
+        if length < 1e-9:
+            continue
+        d = seg / length
+        rel_x = x - a[0]
+        rel_y = y - a[1]
+        along = rel_x * d[0] + rel_y * d[1]
+        perp = np.abs(rel_x * -d[1] + rel_y * d[0])
+        inside |= (along >= -margin) & (along <= length + margin) & (perp <= margin)
+    cap = s.drawable_ceiling_z
+    top = (cap if cap is not None else s.floor_z + 2.40) + margin
+    z = xyz[:, 2]
+    inside &= (z >= float(s.floor_z) - margin) & (z <= top)
+    return inside
+
+
+def _shell_atlas_uv(built, twin: Twin) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """Per-vertex atlas texcoords for the shell, from the baked layout.
+
+    The baker laid panels out by the same part keys and metre-uv convention
+    the shell carries, so this is bookkeeping and not geometry: look the
+    vertex's panel up in the layout, map its (u, v) into the panel's atlas
+    rect. Vertices of panels the bake declared untextured get weight 0 and
+    keep the provenance tint -- the mask is how "the video never saw this
+    wall" survives into the picture.
+
+    The page uploads textures with UNPACK_FLIP_Y_WEBGL, so texcoord t counts
+    from the *bottom* of the atlas image while the baker's rows count from
+    the top; the `1 -` below is that flip and nothing else.
+    """
+    layout = twin.shell_texture_layout
+    if (
+        twin.shell_texture is None
+        or not layout
+        or built.uv is None
+        or len(built.uv_part) != len(built.vertices)
+    ):
+        return None, None
+    panels = layout.get("panels") or {}
+    atlas_w = float(layout.get("atlas_w", 0))
+    atlas_h = float(layout.get("atlas_h", 0))
+    if atlas_w <= 0 or atlas_h <= 0 or not any(p.get("textured") for p in panels.values()):
+        return None, None
+
+    n = len(built.vertices)
+    uv_out = np.zeros((n, 2), dtype=np.float32)
+    mask = np.zeros(n, dtype=np.uint8)
+    for j in range(n):
+        entry = panels.get(built.uv_part[j])
+        if not entry or not entry.get("textured"):
+            continue
+        x, y, w, h = entry["rect"]
+        u0, v0, u1, v1 = entry["uv_bounds"]
+        du = max(u1 - u0, 1e-9)
+        dv = max(v1 - v0, 1e-9)
+        u, v = float(built.uv[j, 0]), float(built.uv[j, 1])
+        px = x + (u - u0) / du * w
+        row = y + (v1 - v) / dv * h
+        uv_out[j, 0] = px / atlas_w
+        uv_out[j, 1] = 1.0 - row / atlas_h
+        mask[j] = 255
+    return uv_out, mask
+
+
+def _quat_from_matrix(R: np.ndarray) -> np.ndarray:
+    """Unit quaternion (w, x, y, z) of a proper rotation matrix."""
+    t = np.trace(R)
+    if t > 0:
+        s = math.sqrt(t + 1.0) * 2.0
+        return np.array([0.25 * s, (R[2, 1] - R[1, 2]) / s, (R[0, 2] - R[2, 0]) / s, (R[1, 0] - R[0, 1]) / s])
+    i = int(np.argmax(np.diag(R)))
+    j, k = (i + 1) % 3, (i + 2) % 3
+    s = math.sqrt(max(R[i, i] - R[j, j] - R[k, k] + 1.0, 1e-12)) * 2.0
+    q = np.empty(4)
+    q[0] = (R[k, j] - R[j, k]) / s
+    q[1 + i] = 0.25 * s
+    q[1 + j] = (R[j, i] + R[i, j]) / s
+    q[1 + k] = (R[k, i] + R[i, k]) / s
+    return q
+
+
+def _quat_mul(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Hamilton product a x b, (w,x,y,z); a is (4,), b is (N,4)."""
+    aw, ax, ay, az = a
+    bw, bx, by, bz = b[:, 0], b[:, 1], b[:, 2], b[:, 3]
+    return np.stack(
+        [
+            aw * bw - ax * bx - ay * by - az * bz,
+            aw * bx + ax * bw + ay * bz - az * by,
+            aw * by - ax * bz + ay * bw + az * bx,
+            aw * bz + ax * by - ay * bx + az * bw,
+        ],
+        axis=1,
+    )
+
+
+# Splat payload budget: enough gaussians to carry the whole room, few enough
+# that the page stays loadable.
+_SPLAT_MAX = 900_000
+_SPLAT_OPACITY_MIN = 0.04
+_SPLAT_S1_CAP_M = 0.35
+
+
+def _splat_payload(twin: Twin, origin: np.ndarray) -> dict[str, Any] | None:
+    """The trained gaussians, transformed to view frame, packed for the page.
+
+    Rendering the gaussians themselves is what makes the room read as
+    continuous surface: a sampled point cloud always has gaps at some zoom,
+    an alpha-blended gaussian field does not. The transform chain is the
+    twin's own: metric scale then the canonical (and wall-squared) rotation,
+    the same numbers that placed every point in the twin.
+    """
+    path = (twin.provenance or {}).get("splat_ply")
+    if not path or not Path(path).exists():
+        return None
+    steps = (twin.provenance or {}).get("steps", {})
+    factor = ((steps.get("video") or {}).get("scale") or {}).get("factor")
+    if not factor:
+        return None
+    try:
+        from ..video.splat import read_gaussian_ply
+
+        g = read_gaussian_ply(path)
+    except Exception:
+        return None
+    M = np.asarray(twin.canonical_transform, dtype=np.float64)
+    R, t = M[:3, :3], M[:3, 3]
+    xyz = (g["xyz"] * float(factor)) @ R.T + t
+    scale = g["scale"] * float(factor)
+
+    s1 = scale.max(axis=1)
+    lo = twin.points.xyz.min(axis=0) - 0.4
+    hi = twin.points.xyz.max(axis=0) + 0.4
+    keep = (
+        (g["opacity"] >= _SPLAT_OPACITY_MIN)
+        & (s1 <= _SPLAT_S1_CAP_M)
+        & np.all((xyz >= lo) & (xyz <= hi), axis=1)
+    )
+    idx = np.flatnonzero(keep)
+    if len(idx) < 1000:
+        return None
+    if len(idx) > _SPLAT_MAX:
+        order = np.argsort(-g["opacity"][idx], kind="stable")
+        idx = idx[order[:_SPLAT_MAX]]
+    quat = _quat_mul(_quat_from_matrix(R), g["quat"][idx])
+    rgba = np.empty((len(idx), 4), dtype=np.uint8)
+    rgba[:, :3] = np.clip(g["rgb01"][idx] * 255.0 + 0.5, 0, 255).astype(np.uint8)
+    rgba[:, 3] = np.clip(g["opacity"][idx] * 255.0 + 0.5, 0, 255).astype(np.uint8)
+    return {
+        "count": int(len(idx)),
+        "xyz": _b64((xyz[idx] - origin).astype(np.float32), "<f4"),
+        "rgba": _b64(rgba, "u1"),
+        "scale": _b64(scale[idx].astype(np.float32), "<f4"),
+        "quat": _b64(quat.astype(np.float32), "<f4"),
+    }
+
+
 # ---------------------------------------------------------------------------
 # the payload
 # ---------------------------------------------------------------------------
@@ -440,10 +631,12 @@ def twin_to_payload(twin: Twin, *, max_points: int = 900_000) -> dict[str, Any]:
     # -- reject non-finite geometry before anything measures it ---------
     xyz = twin.points.xyz
     rgb = twin.points.rgb
+    inferred = twin.points.inferred
     finite, dropped_points = _finite_rows(xyz)
     if finite is not None:
         xyz = xyz[finite]
         rgb = None if rgb is None else rgb[finite]
+        inferred = None if inferred is None else inferred[finite]
     mesh, dropped_faces = _finite_mesh(twin.mesh)
 
     warnings: list[str] = []
@@ -481,15 +674,40 @@ def twin_to_payload(twin: Twin, *, max_points: int = 900_000) -> dict[str, Any]:
     if index is not None:
         xyz = xyz[index]
         rgb = None if rgb is None else rgb[index]
+        inferred = None if inferred is None else inferred[index]
+    # In-room points first, so the solid view can draw a prefix of the same
+    # buffer and show only the room's contents; the evidence views keep
+    # drawing everything. A stable partition, not a filter: nothing is lost.
+    solid_count = None
+    mask = _in_room_mask(xyz, twin.structure)
+    if mask is not None:
+        order = np.argsort(~mask, kind="stable")
+        xyz = xyz[order]
+        rgb = None if rgb is None else rgb[order]
+        inferred = None if inferred is None else inferred[order]
+        solid_count = int(mask.sum())
     drawn = (xyz - origin).astype(np.float32)
     points = {
         "count": int(len(drawn)),
+        "solid_count": solid_count,
+        # A very dense cloud is meant to read as surface, not as confetti:
+        # open it with fatter splats so the walls close up, exactly what the
+        # size slider does by hand.
+        "default_boost": 1.8 if len(drawn) > 4_000_000 else 1.0,
         "source_count": int(len(twin.points)),
         "dropped_nonfinite": dropped_points,
         "decimated": bool(index is not None),
         "spacing_m": _point_spacing(drawn),
         "xyz": _b64(drawn, "<f4"),
         "rgb": None if rgb is None else _b64(rgb, "u1"),
+        # Per-point inferred weight, same contract as the mesh's `filled`:
+        # a viewer that reads it can fade or toggle invented surface, and one
+        # that does not still shows it desaturated because the colours already
+        # are. None when the question was never asked.
+        "inferred": None if inferred is None else _b64(
+            np.clip(np.asarray(inferred, dtype=np.float32) * 255.0, 0, 255).astype(np.uint8),
+            "u1",
+        ),
     }
 
     # -- structure ------------------------------------------------------
@@ -532,6 +750,81 @@ def twin_to_payload(twin: Twin, *, max_points: int = 900_000) -> dict[str, Any]:
     if s.footprint is not None and len(s.footprint) >= 3:
         footprint = (s.footprint - origin[:2]).tolist()
 
+    # -- the room as a surface ------------------------------------------
+    #
+    # The point cloud is the evidence; this is the reading of it. Sent as its
+    # own buffer rather than folded into `mesh` because the two answer
+    # different questions -- the mesh is the surface of everything that was
+    # scanned, contents included, and this is only the architecture -- and
+    # because the page has to be able to draw one without the other.
+    shell_payload = None
+    # A shell is only drawn from a footprint whose edges mean something: the
+    # cell-derived outline, or a rastered one from a dense pose-less import.
+    # "raster-sparse" is a video capture whose room solve declined -- extruding
+    # that contour is how a twin ends up looking like a carved cylinder, so
+    # the honest picture there is points plus capture bounds and no shell.
+    drawable_footprint = (
+        not empty
+        and s.footprint is not None
+        and len(s.footprint) >= 3
+        and s.footprint_source != "raster-sparse"
+    )
+    if drawable_footprint:
+        built = shellmod.shell_from_structure(s)
+        if built is not None and len(built.faces):
+            shell_mesh = Mesh(vertices=built.vertices, faces=built.faces)
+            # Measured surface is drawn in the room's own warm grey; inferred
+            # surface in a cold, desaturated blue. The colour is the label: a
+            # viewer should be able to see, without reading a panel, which
+            # walls are a measurement and which are the fitter's reading of
+            # where the room must continue.
+            tint = np.empty((len(built.vertices), 3), dtype=np.uint8)
+            w = np.clip(built.inferred, 0.0, 1.0)[:, None]
+            tint[:] = ((1.0 - w) * np.array([196, 192, 184]) + w * np.array([86, 104, 132])).astype(
+                np.uint8
+            )
+            shell_payload = {
+                "xyz": _b64((built.vertices - origin).astype(np.float32), "<f4"),
+                "normal": _b64(_vertex_normals(shell_mesh), "<f4"),
+                "index": _b64(built.faces.astype(np.uint32), "<u4"),
+                "rgb": _b64(tint, "u1"),
+                "inferred": _b64(
+                    np.clip(built.inferred * 255.0, 0, 255).astype(np.uint8), "u1"
+                ),
+                "vertex_count": int(len(built.vertices)),
+                "index_count": int(built.faces.size),
+                "face_count": int(len(built.faces)),
+                "area_m2": float(built.area),
+                "measured_fraction": float(built.measured_fraction()),
+                "ceiling_source": s.ceiling_source,
+                # the height the shell was actually capped at, which is the
+                # fitted ceiling when there is one and a drawing default when
+                # there is not -- either way it is what the picture shows
+                "ceiling_drawn_z": float(built.vertices[:, 2].max() - origin[2]),
+                "ceiling_measured": s.ceiling_z is not None,
+                "parts": built.parts,
+                "uv": None,
+                "texture": None,
+                "textured": None,
+            }
+            uv_atlas, textured_mask = _shell_atlas_uv(built, twin)
+            if uv_atlas is not None:
+                fmt = (twin.shell_texture_format or "jpg").lower()
+                mime = "image/jpeg" if fmt in {"jpg", "jpeg"} else f"image/{fmt}"
+                shell_payload["uv"] = _b64(uv_atlas, "<f4")
+                shell_payload["textured"] = _b64(textured_mask, "u1")
+                shell_payload["texture"] = f"data:{mime};base64," + base64.b64encode(
+                    twin.shell_texture
+                ).decode("ascii")
+                cov = [
+                    p.get("coverage", 0.0)
+                    for p in (twin.shell_texture_layout or {}).get("panels", {}).values()
+                    if p.get("textured")
+                ]
+                shell_payload["textured_coverage"] = (
+                    float(np.mean(cov)) if cov else 0.0
+                )
+
     capture = None
     cb = twin.capture_bounds
     if cb is not None and len(cb.hull_xy) >= 3:
@@ -568,9 +861,17 @@ def twin_to_payload(twin: Twin, *, max_points: int = 900_000) -> dict[str, Any]:
             "planes": planes,
             "openings": openings,
             "footprint": footprint,
+            "footprint_source": s.footprint_source,
+            "fixture_count": len(s.fixtures),
             "wall_count": len(s.walls()),
+            "shell": shell_payload,
+            "ceiling_z_inferred": (
+                None if s.ceiling_z_inferred is None else float(s.ceiling_z_inferred)
+            ),
+            "ceiling_source": s.ceiling_source,
         },
         "capture_bounds": capture,
+        "splat": _splat_payload(twin, origin) if not empty else None,
         "qa": twin.qa.to_dict(),
         "georeference": None if twin.georeference is None else twin.georeference.to_dict(),
         "provenance": twin.provenance,

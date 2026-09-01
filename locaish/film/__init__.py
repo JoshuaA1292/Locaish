@@ -11,4 +11,4 @@ anything resting on a class-typical figure rather than a measured one says so.
 
 from __future__ import annotations
 
-__all__ = ["equipment", "optics", "space", "moves", "acoustics", "report"]
+__all__ = ["equipment", "optics", "space", "moves", "acoustics", "report", "sweep", "render", "coverage"]

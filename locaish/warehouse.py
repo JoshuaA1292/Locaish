@@ -62,12 +62,31 @@ CREATE TABLE IF NOT EXISTS {{db}}.{TABLE} (
     headroom_m             Float32,
     window_in_frame        UInt8,
     window_behind_subject  UInt8,
+    background_depth_m     Float32,
+    backup_room_m          Float32,
+    key_angle_deg          Float32,
+    key_quality            LowCardinality(String),
+    axis_wall_angle_deg    Float32,
+    portrait_ok            UInt8,
     score                  Float32
 )
 ENGINE = MergeTree
 PARTITION BY location
 ORDER BY (location, shot_size, focal_mm, setup_id)
 """
+
+# Columns added after the table first shipped. `ensure_schema` adds any that
+# an existing table lacks, so a warehouse created by an older sweep keeps
+# working -- its old rows read as zero/"none" on the new columns, which is
+# what "unmeasured" should look like until the location is re-swept.
+_ADDED_COLUMNS = (
+    ("background_depth_m", "Float32"),
+    ("backup_room_m", "Float32"),
+    ("key_angle_deg", "Float32"),
+    ("key_quality", "LowCardinality(String)"),
+    ("axis_wall_angle_deg", "Float32"),
+    ("portrait_ok", "UInt8"),
+)
 
 
 class WarehouseError(RuntimeError):
@@ -132,6 +151,8 @@ def ensure_schema(ch=None) -> None:
     db = database()
     ch.command(f"CREATE DATABASE IF NOT EXISTS {db}")
     ch.command(DDL.format(db=db))
+    for name, typ in _ADDED_COLUMNS:
+        ch.command(f"ALTER TABLE {db}.{TABLE} ADD COLUMN IF NOT EXISTS {name} {typ} AFTER window_behind_subject")
 
 
 def load_sweep(sweep, ch=None, progress=None) -> int:
@@ -184,3 +205,219 @@ def location_counts(ch=None) -> dict[str, int]:
         f"SELECT location, count() FROM {database()}.{TABLE} GROUP BY location"
     )
     return {row[0]: int(row[1]) for row in res.result_rows}
+
+
+# ---------------------------------------------------------------------------
+# planned coverage: what the planner decided, kept where it can be compared
+# ---------------------------------------------------------------------------
+
+PLANS_TABLE = "shot_plans"
+
+# One row per planned shot. The sweep table says what a room *could* hold;
+# this one says what a scene *asked* of it and what the room answered --
+# which setup, how many candidates there were, and what Gemini thought of
+# the frame. Kept per location so the question "which of our scanned
+# locations holds this scene" is a GROUP BY rather than a re-plan.
+PLANS_DDL = f"""
+CREATE TABLE IF NOT EXISTS {{db}}.{PLANS_TABLE} (
+    location               LowCardinality(String),
+    plan_id                String,
+    plan_title             String,
+    planner                LowCardinality(String),
+    planned_at             DateTime,
+    shot_no                UInt16,
+    description            String,
+    subject                String,
+    second_subject         String,
+    wanted_size            LowCardinality(String),
+    wanted_lens_mm         Float32,
+    wanted_height          LowCardinality(String),
+    placed                 UInt8,
+    setup_id               UInt32,
+    shot_size              LowCardinality(String),
+    focal_mm               Float32,
+    cam_x                  Float32,
+    cam_y                  Float32,
+    cam_z                  Float32,
+    subj_x                 Float32,
+    subj_y                 Float32,
+    distance_m             Float32,
+    yaw_deg                Float32,
+    dof_near_m             Float32,
+    dof_far_m              Float32,
+    dof_infinite           UInt8,
+    window_in_frame        UInt8,
+    window_behind_subject  UInt8,
+    size_fit               Float32,
+    score                  Float32,
+    candidates             UInt32,
+    relaxed                String,
+    attempts               UInt8,
+    review_score           Float32,
+    review_verdict         LowCardinality(String),
+    review_notes           String
+)
+ENGINE = MergeTree
+PARTITION BY location
+ORDER BY (location, plan_id, shot_no)
+"""
+
+
+def ensure_plans_schema(ch=None) -> None:
+    ch = ch or client()
+    db = database()
+    ch.command(f"CREATE DATABASE IF NOT EXISTS {db}")
+    ch.command(PLANS_DDL.format(db=db))
+
+
+def load_plan(plan, ch=None) -> int:
+    """Append a coverage plan's shots. Returns rows written."""
+    from datetime import datetime, timezone
+
+    ch = ch or client()
+    ensure_plans_schema(ch)
+    db = database()
+    try:
+        when = datetime.fromisoformat(plan.created_at)
+    except Exception:  # noqa: BLE001
+        when = datetime.now(timezone.utc)
+    when = when.replace(tzinfo=None)
+
+    rows = []
+    for ps in plan.shots:
+        sh = ps.shot
+        st = ps.setup or {}
+        rv = ps.review
+        rows.append([
+            plan.location, plan.plan_id, plan.title, plan.planner, when,
+            int(sh.number), sh.description, sh.subject, sh.second_subject or "",
+            sh.size, float(sh.lens_mm or 0.0), sh.height or "",
+            1 if ps.setup else 0,
+            int(st.get("setup_id", 0)), str(st.get("shot_size", "")), float(st.get("focal_mm", 0.0)),
+            float(st.get("cam_x", 0.0)), float(st.get("cam_y", 0.0)), float(st.get("cam_z", 0.0)),
+            float(st.get("subj_x", 0.0)), float(st.get("subj_y", 0.0)),
+            float(st.get("distance_m", 0.0)), float(st.get("yaw_deg", 0.0)),
+            float(st.get("dof_near_m", 0.0)), float(st.get("dof_far_m", 0.0)), int(st.get("dof_infinite", 0)),
+            int(st.get("window_in_frame", 0)), int(st.get("window_behind_subject", 0)),
+            float(st.get("size_fit", 0.0)), float(st.get("score", 0.0)),
+            int(ps.candidates), "; ".join(ps.relaxed), int(ps.attempts),
+            float(rv.score) if rv else -1.0, rv.verdict if rv else "", rv.notes if rv else "",
+        ])
+    if not rows:
+        return 0
+    names = [
+        "location", "plan_id", "plan_title", "planner", "planned_at",
+        "shot_no", "description", "subject", "second_subject",
+        "wanted_size", "wanted_lens_mm", "wanted_height",
+        "placed", "setup_id", "shot_size", "focal_mm",
+        "cam_x", "cam_y", "cam_z", "subj_x", "subj_y", "distance_m", "yaw_deg",
+        "dof_near_m", "dof_far_m", "dof_infinite", "window_in_frame", "window_behind_subject",
+        "size_fit", "score", "candidates", "relaxed", "attempts",
+        "review_score", "review_verdict", "review_notes",
+    ]
+    ch.insert(f"{db}.{PLANS_TABLE}", rows, column_names=names)
+    return len(rows)
+
+
+def capacity(location: str, ch=None) -> dict:
+    """What a room holds, by framing and lens -- the studio's coverage heatmap.
+
+    `clean` is the number a DP actually cares about: a clear sightline and
+    no window behind the subject. The per-location ranking underneath is the
+    same count for every room in the table, which is the multi-location
+    question answered without planning anything.
+    """
+    ch = ch or client()
+    ensure_schema(ch)
+    db = database()
+    res = ch.query(
+        f"""
+        SELECT shot_size, focal_mm, count() AS total,
+               countIf(visible = 1 AND window_behind_subject = 0) AS clean,
+               countIf(visible = 1 AND window_behind_subject = 1) AS backlit
+        FROM {db}.{TABLE}
+        WHERE location = %(loc)s
+        GROUP BY shot_size, focal_mm
+        ORDER BY shot_size, focal_mm
+        """,
+        parameters={"loc": location},
+    )
+    cells = [
+        {"shot_size": r[0], "focal_mm": float(r[1]), "total": int(r[2]), "clean": int(r[3]), "backlit": int(r[4])}
+        for r in res.result_rows
+    ]
+    locs = ch.query(
+        f"""
+        SELECT location, count() AS setups,
+               countIf(visible = 1 AND window_behind_subject = 0) AS clean
+        FROM {db}.{TABLE}
+        GROUP BY location
+        ORDER BY clean DESC
+        """
+    )
+    locations = [{"location": r[0], "setups": int(r[1]), "clean": int(r[2])} for r in locs.result_rows]
+    sizes = ["ecu", "bcu", "cu", "mcu", "ms", "mls", "ls", "els"]
+    lenses = sorted({c["focal_mm"] for c in cells})
+    return {
+        "location": location,
+        "total": sum(c["total"] for c in cells),
+        "clean": sum(c["clean"] for c in cells),
+        "sizes": sizes,
+        "lenses": lenses,
+        "cells": cells,
+        "locations": locations,
+    }
+
+
+def nearest_setup(location: str, x: float, y: float, z: float, focal_mm: float, ch=None) -> dict | None:
+    """The swept setup nearest a free camera pose on the same lens, with its distance.
+
+    What the viewfinder asks when the user has dragged the camera somewhere:
+    is there a scored row for roughly here, and what does it say.
+    """
+    ch = ch or client()
+    db = database()
+    res = ch.query(
+        f"""
+        SELECT setup_id, cam_x, cam_y, cam_z, subj_x, subj_y, distance_m, yaw_deg, pitch_deg,
+               focal_mm, shot_size, size_fit, visible, window_behind_subject, window_in_frame,
+               clearance_m, score,
+               sqrt(pow(cam_x - %(x)s, 2) + pow(cam_y - %(y)s, 2) + pow(cam_z - %(z)s, 2)) AS away_m
+        FROM {db}.{TABLE}
+        WHERE location = %(loc)s AND abs(focal_mm - %(f)s) < 0.01
+        ORDER BY away_m ASC
+        LIMIT 1
+        """,
+        parameters={"loc": location, "x": float(x), "y": float(y), "z": float(z), "f": float(focal_mm)},
+    )
+    if not res.result_rows:
+        return None
+    row = dict(zip(res.column_names, res.result_rows[0]))
+    return {k: (v.item() if hasattr(v, "item") else v) for k, v in row.items()}
+
+
+def plans_by_location(ch=None) -> list[dict]:
+    """Every plan in the table, summarised: the cross-location comparison."""
+    ch = ch or client()
+    ensure_plans_schema(ch)
+    db = database()
+    res = ch.query(
+        f"""
+        SELECT location, plan_id, any(plan_title), any(planner), max(planned_at),
+               count() AS n_shots, countIf(placed = 1) AS n_placed,
+               avgIf(review_score, review_score >= 0) AS gemini_avg,
+               countIf(placed = 1 AND window_behind_subject = 0) AS n_clean
+        FROM {db}.{PLANS_TABLE}
+        GROUP BY location, plan_id
+        ORDER BY max(planned_at) DESC
+        """
+    )
+    out = []
+    for r in res.result_rows:
+        out.append({
+            "location": r[0], "plan_id": r[1], "title": r[2], "planner": r[3],
+            "planned_at": str(r[4]), "shots": int(r[5]), "placed": int(r[6]),
+            "gemini_avg": None if r[7] is None or r[7] != r[7] else round(float(r[7]), 1),
+            "clean": int(r[8]),
+        })
+    return out

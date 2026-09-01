@@ -1,4 +1,7 @@
-# Locaish
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
+  <img src="assets/logo.svg" alt="Locaish" width="240">
+</picture>
 
 **Scan any room. Get a filming-ready digital twin and an instant tech scout
 report — camera angles, sun schedule, equipment fit, acoustics — before anyone
@@ -29,6 +32,47 @@ photo and a guess.
    grip fit against real equipment dimensions, an acoustic estimate.
 4. **Search** — an agent sweeps thousands of camera setups against a shot
    brief and returns a rendered frame with the physical reasoning behind it.
+
+## Coverage: the tedious day, done
+
+The job a DP spends the recce on is *coverage*: for every shot the scene
+needs, where the camera stands, at what height, on which lens, whether the
+sightline is clean, whether there is room to back up, whether a window ends
+up behind the actor -- then the overhead camera diagram and the typed shot
+list. Locaish does that day:
+
+1. **Breakdown** -- paste the scene (or a shot list). A Gemini agent turns it
+   into shots and puts each character on a mark the room actually has.
+2. **Placement loop** -- an ADK `LoopAgent` takes one shot at a time: asks
+   the ClickHouse shot table for candidates (the compiled filter, or its own
+   SQL through the official ClickHouse MCP server), places the best, renders
+   the frame from the twin's gaussian field, and **shows the frame to
+   Gemini**, which scores it as a DP would and can send the planner back to
+   the table for a different height or lens.
+3. **The deliverables** -- shot cards with the measured setup (lens, height,
+   distance, depth of field, backlight), an overhead camera plan (SVG), a
+   shot list (.txt), and every placed shot written to a `shot_plans` table
+   in ClickHouse so "which of our locations holds this scene" is a query.
+4. **The viewfinder** -- click any card to look through exactly that lens
+   from exactly that spot in the 3D twin; `[` `]` change lens, drag to
+   re-aim, and the page tells you the nearest swept setup to wherever you
+   ended up.
+
+**What it knows.** The ranking is not a guess: every rule is a working
+convention of cinematography and location scouting with a source, reduced
+to a measurement the twin makes — the 180-degree line as a cross-product
+predicate, matched reverses (same lens, same distance), over-the-shoulder
+geometry, the window as a three-quarter key (`key_quality`), depth behind
+the subject and shooting into corners (`background_depth_m`,
+`axis_wall_angle_deg`), room to back up, faces no closer than 1.4 m, and
+height from mood. See [docs/CINEMATOGRAPHY.md](docs/CINEMATOGRAPHY.md).
+What the table cannot hold — headroom, look room, what is actually in the
+background — Gemini judges by looking at the rendered frame.
+
+Without Gemini the same engine still plans a typed shot list
+deterministically (`locaish coverage room.twin --brief scene.txt`); without
+ClickHouse it plans against the in-memory sweep. Both backends answer the
+same predicates, so a plan is the same plan wherever it was computed.
 
 ## Hackathon alignment
 
@@ -71,6 +115,8 @@ it. See [CAPTURE.md](CAPTURE.md) for how to take the scan.
 pip install -e ".[video]"              # plus: brew install colmap ffmpeg
 
 locaish studio                          # the product: drop a room, ask the scout
+locaish studio --showcase               # hosted mode: gallery of scanned rooms, uploads off
+# Approve a scan in the studio to link it into twins/showcase; --showcase serves that root.
 locaish demo clean                     # whole pipeline on a room with known truth
 locaish ingest room.ply --lat 51.5074 --lon -0.1278 --heading 212
 locaish ingest sweep.mov --view         # a video of the room, reconstructed
@@ -78,6 +124,7 @@ locaish inspect twins/room.twin        # summary and QA report
 locaish view twins/room.twin           # self-contained WebGL viewer, no build step
 locaish measure twins/room.twin --from -1,0,1 --to 1,0,1
 locaish sweep twins/room.twin          # every camera setup, scored, into ClickHouse
+locaish coverage twins/room.twin --brief scene.txt --agent   # plan a scene's coverage
 locaish export twins/room.twin -o room.glb
 ```
 
@@ -260,6 +307,12 @@ The ten refusals are honest ones: the ceiling-plausibility check firing on rooms
   Dockerfile builds it automatically), and falls back to block matching only
   when neither exists — and block matching is markedly weaker on the blank
   walls rooms are made of.
+- **Install Brush for the photoreal layer (optional).** The gaussian-splat
+  view layer is trained per scene with [Brush](https://github.com/ArthurBrussee/brush)
+  — download a release binary and either put `brush_app` on PATH or point
+  `LOCAISH_BRUSH` at it. Without it the pipeline still produces the full
+  measured twin; the viewer just has no photoreal mode and the coverage
+  planner renders frames from the point cloud instead.
 - **A video twin's surfaces are centimetres thick, not millimetres.** The
   pipeline widens its plane tolerances to the reconstruction's declared noise
   (`noise_hint_m`), which recovers the floor and walls — but the finer

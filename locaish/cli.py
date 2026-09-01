@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import webbrowser
 from pathlib import Path
@@ -25,7 +26,28 @@ from pathlib import Path
 import numpy as np
 
 
+def _load_dotenv(path: Path = Path(".env")) -> None:
+    """KEY=VALUE lines from a .env in the working directory, never overriding
+    what the shell already set. Keys and hosts live here rather than in a
+    shell profile, so the studio starts the same way from any terminal."""
+    try:
+        text = path.read_text()
+    except OSError:
+        return
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):]
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
 def main(argv: list[str] | None = None) -> int:
+    _load_dotenv()
     parser = _build_parser()
     args = parser.parse_args(argv)
     if not getattr(args, "func", None):
@@ -79,7 +101,7 @@ def _build_parser() -> argparse.ArgumentParser:
     ing.add_argument("--elevation", type=float, default=0.0, help="floor height above sea level, m")
     ing.add_argument("--unit", help="force the source unit (m/cm/mm/in/ft) instead of inferring it")
     ing.add_argument("--voxel", type=float, default=0.05, help="occupancy voxel size in m")
-    ing.add_argument("--max-points", type=int, default=3_000_000)
+    ing.add_argument("--max-points", type=int, default=6_000_000)
     ing.add_argument("--force-mesh", action="store_true", help="re-derive the mesh even if the import had one")
     ing.add_argument("--no-mesh", action="store_true", help="skip mesh reconstruction entirely")
     ing.add_argument("--no-openings", action="store_true", help="skip window and door detection")
@@ -96,6 +118,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="how wide a hole the completion may bridge, in metres of radius "
         "(default 0.45, so gaps up to about 0.9 m). Larger closes more and "
         "smooths furniture away with it",
+    )
+    ing.add_argument(
+        "--no-fill-planes",
+        action="store_true",
+        help="do not resample points onto detected wall planes where the "
+        "camera proved unbroken wall; leaves textureless walls as the holes "
+        "the stereo matcher returned",
     )
     vid = ing.add_argument_group(
         "video",
@@ -144,7 +173,7 @@ def _build_parser() -> argparse.ArgumentParser:
     vw = sub.add_parser("view", help="render a self-contained HTML viewer")
     vw.add_argument("twin", type=Path)
     vw.add_argument("-o", "--out", type=Path)
-    vw.add_argument("--max-points", type=int, default=900_000)
+    vw.add_argument("--max-points", type=int, default=6_000_000)
     vw.add_argument("--no-open", action="store_true", help="write the file but do not open a browser")
     vw.set_defaults(func=cmd_view)
 
@@ -211,8 +240,10 @@ def _build_parser() -> argparse.ArgumentParser:
     st.add_argument("--port", type=int, default=8765)
     st.add_argument("--host", help="bind address (default 127.0.0.1; 0.0.0.0 for hosting)")
     st.add_argument("--root", type=Path, default=Path("twins/studio"), help="where jobs land")
-    st.add_argument("--max-points", type=int, default=1_500_000, dest="studio_max_points")
+    st.add_argument("--max-points", type=int, default=6_000_000, dest="studio_max_points")
     st.add_argument("--no-open", action="store_true", help="do not open a browser")
+    st.add_argument("--showcase", action="store_true",
+                    help="read-only gallery of scanned locations; uploads are off")
     st.set_defaults(func=cmd_studio)
 
     sw = sub.add_parser(
@@ -224,6 +255,21 @@ def _build_parser() -> argparse.ArgumentParser:
                     help="compute and summarise the sweep without touching ClickHouse")
     sw.add_argument("--json", action="store_true")
     sw.set_defaults(func=cmd_sweep)
+
+    cv = sub.add_parser(
+        "coverage",
+        help="plan a scene's coverage against a twin: shot list, frames, camera plan",
+    )
+    cv.add_argument("twin", type=Path)
+    cv.add_argument("--brief", type=Path, required=True,
+                    help="a text file: the scene, or one shot per line")
+    cv.add_argument("--title", default="")
+    cv.add_argument("--out", type=Path, default=None,
+                    help="plan directory (default: <twin dir>/plans/<id>)")
+    cv.add_argument("--agent", action="store_true",
+                    help="use the Gemini workflow (breakdown, placement loop, frame review)")
+    cv.add_argument("--no-render", action="store_true", help="skip rendering the frames")
+    cv.set_defaults(func=cmd_coverage)
 
     fx = sub.add_parser("fixtures", help="list the synthetic rooms used to validate accuracy")
     fx.set_defaults(func=cmd_fixtures)
@@ -259,6 +305,7 @@ def cmd_ingest(args) -> int:
         skip_openings=args.no_openings,
         fill_holes=not args.no_fill,
         fill_radius_m=args.fill_radius,
+        fill_planes=not args.no_fill_planes,
         progress=None if args.quiet else _progress,
         video_fps=args.fps,
         video_scale_factor=args.scale_factor,
@@ -387,7 +434,50 @@ def cmd_studio(args) -> int:
         host=args.host,
         max_points=args.studio_max_points,
         open_browser=not args.no_open,
+        showcase=args.showcase,
     )
+    return 0
+
+
+def cmd_coverage(args) -> int:
+    from . import warehouse
+    from .film import coverage as cov
+    from .film import sweep as sweepmod
+    from .types import Twin
+
+    twin = Twin.load(args.twin)
+    brief = args.brief.read_text()
+    if warehouse.configured() and warehouse.location_counts().get(twin.name):
+        source = cov.ClickHouseSetups()
+        _progress(f"setups from ClickHouse ({warehouse.connection_env()['CLICKHOUSE_HOST']})")
+    else:
+        _progress("setups from a local sweep (ClickHouse not configured or not loaded)")
+        source = cov.LocalSetups(sweepmod.sweep(twin, progress=_progress))
+    out = args.out or (args.twin.parent / "plans" / cov.new_plan_id())
+    if args.agent:
+        from .agent.coverage import plan_coverage
+
+        def on_event(e):
+            if e["kind"] == "call":
+                _progress(f"{e.get('agent', '')} -> {e['tool']}({json.dumps(e.get('args', {}))[:120]})")
+            elif e["kind"] == "result":
+                _progress(f"  <- {e.get('summary', '')}")
+            elif e["kind"] in ("stage", "agent", "note"):
+                _progress(str(e.get("text", "")))
+
+        plan = plan_coverage(twin, workdir=out, source=source, brief=brief, title=args.title,
+                             on_event=on_event)
+    else:
+        shots = cov.parse_shot_lines(brief)
+        plan = cov.plan(twin, shots, source, title=args.title, brief=brief, workdir=out,
+                        render=not args.no_render, progress=_progress)
+    if warehouse.configured():
+        try:
+            warehouse.load_plan(plan)
+        except Exception as exc:  # noqa: BLE001
+            _progress(f"could not record the plan in ClickHouse: {exc}")
+    print(cov.render_text(plan))
+    print(f"plan written to {out}")
     return 0
 
 

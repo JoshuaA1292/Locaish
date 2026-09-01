@@ -9,3 +9,6 @@ dist/
 twins/*.twin
 twins/*.html
 scans/
+.env
+*.log
+target/
