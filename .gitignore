@@ -12,3 +12,6 @@ scans/
 .env
 *.log
 target/
+deploy/ctx/
+deploy/rooms/
+deploy/data/

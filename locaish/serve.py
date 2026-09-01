@@ -174,9 +174,13 @@ class Studio:
                 except Exception:
                     pass
             scout = d / "scout.txt"
+            # A deployed gallery bakes the twin but not the multi-hundred-MB
+            # source video, so fall back to the twin's own name before the
+            # opaque job id.
             job = Job(
                 id=d.name,
-                name=source.name if source != d else d.name,
+                name=(source.name if source != d
+                      else twins[-1].stem if twins else d.name),
                 source=source,
                 workdir=d,
                 state="done",
