@@ -10,7 +10,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         curl ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && curl -fsSL https://clickhouse.com/ | sh \
-    && mv clickhouse /usr/local/bin/clickhouse
+    && mv clickhouse /usr/local/bin/clickhouse \
+    && clickhouse --version
 
 WORKDIR /app
 COPY pyproject.toml LICENSE README.md ./
