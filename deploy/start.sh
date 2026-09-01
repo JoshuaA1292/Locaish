@@ -18,4 +18,4 @@ clickhouse client --query "INSERT INTO locaish.shot_setups FORMAT Native" < /app
   && clickhouse client --query "INSERT INTO locaish.shot_plans FORMAT Native" < /app/chdata/shot_plans.native
 echo "shot table loaded: $(clickhouse client --query 'SELECT count() FROM locaish.shot_setups') setups"
 cd /app
-exec locaish studio --no-open --showcase --root /app/rooms
+exec locaish studio --no-open --showcase --root /app/rooms --max-points 800000

@@ -644,6 +644,25 @@ class _Handler(BaseHTTPRequestHandler):
             if not job or not job.viewer_path or not job.viewer_path.exists():
                 return self._json({"error": "no viewer for that job"}, 404)
             self.studio.refresh_viewer(job)
+            # A deployed gallery bakes a pre-gzipped viewer beside the page:
+            # hosts like Cloud Run cap responses (32 MiB) and the twin inlined
+            # as HTML is bigger than that raw. Serve the sibling only while it
+            # is at least as fresh as the page it compresses.
+            gz = job.viewer_path.with_suffix(".html.gz")
+            try:
+                if (gz.exists()
+                        and gz.stat().st_mtime >= job.viewer_path.stat().st_mtime
+                        and "gzip" in (self.headers.get("Accept-Encoding") or "")):
+                    data = gz.read_bytes()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Content-Encoding", "gzip")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
+            except OSError:
+                pass
             return self._file(job.viewer_path, "text/html; charset=utf-8")
         if parts[0] == "scout" and len(parts) == 2:
             job = self.studio.jobs.get(parts[1])
@@ -1591,7 +1610,7 @@ function show(id, s) {
   }).catch(() => {});
 
   $('heroactions').innerHTML = '<a href="/view/' + id + '" target="_blank">Full screen</a>'
-    + '<a href="/twin/' + id + '">.twin</a>';
+    + (SHOWCASE ? '' : '<a href="/twin/' + id + '">.twin</a>');
 
   // QA findings stay in the pipeline log, where a crew member who wants them looks.
   const checks = s.checks || {};

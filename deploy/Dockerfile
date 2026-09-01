@@ -19,6 +19,11 @@ COPY locaish ./locaish
 RUN pip install --no-cache-dir .
 
 COPY rooms /app/rooms
+# The baked viewer pages must read as newer than the installed template
+# (refresh_viewer re-renders otherwise), and the gzipped sibling newer than
+# the page it compresses.
+RUN find /app/rooms -name view.html -exec touch {} + \
+    && find /app/rooms -name view.html.gz -exec touch {} +
 COPY data /app/chdata
 COPY start.sh /app/start.sh
 RUN chmod +x /app/start.sh && mkdir -p /var/lib/clickhouse
