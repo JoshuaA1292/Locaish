@@ -329,6 +329,27 @@ class Studio:
                 raise ValueError("nothing to render a thumbnail from")
             shutil.copyfile(best[1], out)
 
+    def ensure_location(self, job: Job) -> str | None:
+        """A restored job never ran _run's agent registration; do it on demand.
+
+        The twin is on disk and the chat is the first thing that needs it, so
+        the first question to a restored room pays the twin load once and
+        registers the location with the agent's tool surface."""
+        if job.location:
+            return job.location
+        try:
+            twin = self.twin_of(job)
+        except Exception:  # noqa: BLE001 - no twin, no location
+            return None
+        try:
+            from .agent import register_location
+
+            register_location(twin.name, twin, job.workdir)
+        except Exception:  # noqa: BLE001 - agent().ask reports its own absence
+            pass
+        job.location = twin.name
+        return job.location
+
     def setups_for(self, job: Job):
         """Where this job's candidate setups come from: the warehouse when it
         holds the location, the in-memory sweep otherwise."""
@@ -877,7 +898,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _chat(self, job_id: str) -> None:
         job = self.studio.jobs.get(job_id)
-        if not job or job.state != "done" or not job.location:
+        if not job or job.state != "done" or not self.studio.ensure_location(job):
             return self._json({"error": "no finished twin on that job yet"}, 404)
         try:
             length = int(self.headers.get("Content-Length") or 0)
