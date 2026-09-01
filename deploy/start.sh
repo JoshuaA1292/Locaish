@@ -12,7 +12,10 @@ clickhouse client --query "SELECT 1" >/dev/null 2>&1 || {
   echo "clickhouse did not come up"; tail -20 /var/log/clickhouse.log; exit 1; }
 python -c "from locaish import warehouse; warehouse.ensure_schema(); warehouse.ensure_plans_schema()"
 clickhouse client --query "INSERT INTO locaish.shot_setups FORMAT Native" < /app/chdata/shot_setups.native
-clickhouse client --query "INSERT INTO locaish.shot_plans FORMAT Native" < /app/chdata/shot_plans.native
+# The plans dump ships empty when the gallery starts with a clean slate;
+# an empty INSERT is not worth risking the boot on.
+[ -s /app/chdata/shot_plans.native ] \
+  && clickhouse client --query "INSERT INTO locaish.shot_plans FORMAT Native" < /app/chdata/shot_plans.native
 echo "shot table loaded: $(clickhouse client --query 'SELECT count() FROM locaish.shot_setups') setups"
 cd /app
 exec locaish studio --no-open --showcase --root /app/rooms
