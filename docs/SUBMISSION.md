@@ -1,5 +1,7 @@
 # Devpost submission checklist — Agentic Cinema, ClickHouse track
 
+**Hosted URL:** https://locaish-564007129146.us-central1.run.app
+
 Deadline: **September 9, 2026, 2:00 PM PT**. Judging is two-stage; stage one
 just verifies the thing runs and uses what it claims to use.
 

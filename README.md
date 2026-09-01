@@ -3,6 +3,8 @@
   <img src="assets/logo.svg" alt="Locaish" width="240">
 </picture>
 
+**Live demo:** [locaish-564007129146.us-central1.run.app](https://locaish-564007129146.us-central1.run.app) — two scanned rooms, the Gemini scout, and the ClickHouse shot table, hosted on Cloud Run.
+
 **Scan any room. Get a filming-ready digital twin and an instant tech scout
 report — camera angles, sun schedule, equipment fit, acoustics — before anyone
 drives out.**
