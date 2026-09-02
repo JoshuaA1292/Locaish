@@ -2,8 +2,12 @@
 
 Locaish's coverage planner is not a scoring heuristic dreamed up in a
 notebook. Each rule below is a working convention of narrative
-cinematography and location scouting, stated with its source, and then the
-*measurement* the twin makes to apply it. Every rule reduces to a column in
+cinematography and location scouting, grounded in the standard texts of the
+craft (Brown's *Cinematography: Theory and Practice*; Katz's *Film Directing
+Shot by Shot*; Mascelli's *The Five C's of Cinematography*; Bowen's *Grammar
+of the Shot*; Block's *The Visual Story*; Alton's *Painting with Light*; the
+*American Cinematographer Manual*), with a linked source kept wherever a
+phrase is quoted, and then the *measurement* the twin makes to apply it. Every rule reduces to a column in
 the `shot_setups` table (`locaish/film/sweep.py`) or a predicate in the
 planner (`locaish/film/coverage.py`); the Gemini agent is told the rules in
 the same words (`locaish/agent/coverage.py`) and can overrule the ranking
@@ -12,11 +16,12 @@ for a stated reason, after looking at the frame.
 ## 1. Coverage: what a dialogue scene needs
 
 *Convention.* Standard coverage of a two-person scene is a master, a pair of
-over-the-shoulders and a pair of singles, intercut; "if you have the master,
-you have a scene." Singles are "about emotion" and want a close camera.
-— [Sony Cine: The Cinematographer and Scene Blocking](https://sony-cinematography.com/articles/the-cinematographer-and-scene-blocking-part-2/),
-[Soundstripe: Master Shot](https://www.soundstripe.com/blogs/master-shot),
-[MasterClass: Over-the-Shoulder Shot](https://www.masterclass.com/articles/over-the-shoulder-shot).
+over-the-shoulders and a pair of singles, intercut; the master carries the
+scene's geography and the singles carry its emotion, so the singles want the
+closer camera.
+— Katz, *Film Directing Shot by Shot* (the dialogue-staging chapters);
+Mascelli, *The Five C's of Cinematography* ("Camera Angles");
+[Sony Cine: The Cinematographer and Scene Blocking](https://sony-cinematography.com/articles/the-cinematographer-and-scene-blocking-part-2/).
 
 *In Locaish.* The breakdown agent is instructed to design exactly this when
 handed prose: master, OTS pair, singles at matching sizes, inserts for what
@@ -26,9 +31,9 @@ the text singles out. A typed shot list is honoured as written.
 
 *Convention.* Draw a line through the two characters; keep the camera on one
 side of it, or the cut flips who is looking left and who is looking right.
-— [learnaboutfilm: The 180 degree rule and eyeline match](https://learnaboutfilm.com/film-language/sequence/180-degree-rule/),
-[NFI: 180 Degree Rule](https://www.nfi.edu/180-degree-rule/),
-[Wikipedia](https://en.wikipedia.org/wiki/180-degree_rule).
+— Katz, *Film Directing Shot by Shot* (continuity and the line of action);
+Brown, *Cinematography: Theory and Practice*, 3rd ed. (screen direction);
+Mascelli, *The Five C's* ("Continuity").
 
 *In Locaish.* `PlanContext.line` is the line through the two marks; the
 first placed shot on either character fixes `line_side` from the sign of
@@ -43,8 +48,9 @@ it. It is the *last* thing the planner relaxes, and the shot list says
 size, distance from the subject, focal length, horizon and depth of field"
 and put both cameras "at a similar distance from the axis"; a standard or
 medium-telephoto lens connects the eyelines better than a wide.
-— [Backstage: Shot/Reverse Shot](https://www.backstage.com/magazine/article/what-is-shot-reverse-shot-film-examples-75550/),
-[learnaboutfilm](https://learnaboutfilm.com/film-language/sequence/180-degree-rule/).
+— [Backstage: Shot/Reverse Shot](https://www.backstage.com/magazine/article/what-is-shot-reverse-shot-film-examples-75550/) (the quoted checklist);
+Brown, *Cinematography: Theory and Practice* (shooting dialogue);
+Katz, *Shot by Shot* (matching reverses).
 
 *In Locaish.* When a single of A at size *s* has been placed and the planner
 reaches a single of B at size *s*, two soft predicates are added: `focal_mm
@@ -56,8 +62,8 @@ distance" when they held.
 
 *Convention.* An OTS is a medium close-up on one actor with part of the
 other's shoulder in the near foreground; it is shot as a pair.
-— [MasterClass](https://www.masterclass.com/articles/over-the-shoulder-shot),
-[Wikipedia: Over-the-shoulder shot](https://en.wikipedia.org/wiki/Over-the-shoulder_shot).
+— Katz, *Shot by Shot* (the A/B dialogue patterns);
+Bowen, *Grammar of the Shot*, 4th ed. (shot types).
 
 *In Locaish.* `Shot.ots`: the camera stands 0.45–1.6 m from the foreground
 actor's mark and nearer to it than to the subject, with the foreground mark
@@ -69,9 +75,10 @@ inside the full half-field-of-view (edge of frame). Pure geometry, in SQL.
 not focal length: the same close-up from a metre and from three metres
 renders the features differently, and the near one enlarges the nose. Rules
 of thumb put a flattering distance at 8 ft and more.
-— [American Cinematographer: Understanding Lens Distortion](https://theasc.com/article/understanding-lens-distortion/),
-[Cine Visuals: Super 35 vs Full Frame](https://cinevisuals.com/blog/super-35-vs-full-frame-how-sensor-format-affects-lens-choice/),
-[Previs Pro: Lens choice for character](https://wiki.previspro.com/shots/lens-choice-for-character).
+— [American Cinematographer: Understanding Lens Distortion](https://theasc.com/article/understanding-lens-distortion/);
+Brown, *Cinematography: Theory and Practice* (lens perspective and the
+close-up); *American Cinematographer Manual*, 11th ed. (optics and
+depth-of-field tables).
 
 *In Locaish.* `portrait_ok` = 1 for tight framings (ECU–MCU) only when
 `distance_m ≥ 1.4`. It is 30 % of the tight-shot ranking, so the planner
@@ -85,10 +92,10 @@ knowing what direction they are facing." A key at ~45° to the camera is
 the standard interview setup; short-side key (light from the side away from
 camera) gives dimension, front light is flat, a window behind the subject is
 a silhouette unless you want one.
-— [StudioBinder: Location Scouting Checklist](https://www.studiobinder.com/blog/ultimate-location-scouting-checklist-for-producers-and-ads/),
-[CineD: 8 Easy Rules To Enhance Your Interview Lighting](https://www.cined.com/8-cinematography-tips-making-interview/),
-[Neil Oseman: Introduction to Short Key Lighting](https://neiloseman.com/introduction-short-key-lighting/),
-[The Film Look: Short Side Lighting](https://www.thefilmlook.com/thefilmlook-video/learn-to-light-like-the-pros-short-side-lighting).
+— [StudioBinder: Location Scouting Checklist](https://www.studiobinder.com/blog/ultimate-location-scouting-checklist-for-producers-and-ads/) (the quoted scouting advice);
+Brown, *Cinematography: Theory and Practice* (lighting direction and key
+placement); Alton, *Painting with Light* (single-source interiors);
+[Neil Oseman (BSC-listed DP): Introduction to Short Key Lighting](https://neiloseman.com/introduction-short-key-lighting/).
 
 *In Locaish.* `key_angle_deg` is the angle at the subject between the
 camera and the largest-looking window; `key_quality` names the band
@@ -104,9 +111,9 @@ remains the hard flag for "you are shooting into the glass".
 corner; shooting corner-to-corner adds roughly 20 % of perceived depth,
 while "shooting straight across the narrow axis of a room makes it feel
 confined." Pull the subject off the wall to push the background back.
-— [Peek at This: Small Spaces, Cinematic Results](https://peekatthis.com/shooting-in-small-spaces-tips-limited-locations/),
-[Shutter Angle: Creating Depth](https://www.shutterangle.com/2013/creating-depth-light-color-deep-staging/),
-[Canon: Six ways to give your filmmaking more depth](https://cinemaeos.canon.ca/resources/six-ways-to-give-your-filmmaking-depth/).
+— [Peek at This: Small Spaces, Cinematic Results](https://peekatthis.com/shooting-in-small-spaces-tips-limited-locations/) (the quoted 20% figure);
+Block, *The Visual Story*, 2nd ed. (deep space and depth cues);
+Katz, *Shot by Shot* (staging in depth).
 
 *In Locaish.* `background_depth_m` marches the lens axis on past the
 subject through the twin's occupancy grid to the first surface (12 m means
@@ -130,8 +137,9 @@ already in the sweep; `check_dolly_move` simulates the track.
 
 *Convention.* Eye level is neutral; a low angle makes a character powerful,
 threatening or mythic; a high angle makes them small, fragile or judged.
-— [CineD: High and Low Angle Shots](https://www.cined.com/high-and-low-angle-shots-how-camera-height-creates-subjectivity/),
-[StudioBinder: Camera Angles](https://www.studiobinder.com/blog/types-of-camera-shot-angles-in-film/).
+— Katz, *Shot by Shot* (camera height and point of view);
+Mascelli, *The Five C's* ("Camera Angles");
+Brown, *Cinematography: Theory and Practice* (the frame and power).
 
 *In Locaish.* The breakdown maps mood to height; the shot-list parser reads
 "looms / dominant / menacing" as low and "vulnerable / cornered / small" as
@@ -142,8 +150,8 @@ top of that and the card says so.
 
 Headroom, look room (nose room) and the actual content of the background
 are compositional judgements the table cannot hold.
-— [Neil Oseman: Lead Room, Nose Room or Looking Space](https://neiloseman.com/lead-room-nose-room-or-looking-space/),
-[Wikipedia: Headroom](https://en.wikipedia.org/wiki/Headroom_(photographic_framing)).
+— Bowen, *Grammar of the Shot* (composition: headroom and look room);
+[Neil Oseman: Lead Room, Nose Room or Looking Space](https://neiloseman.com/lead-room-nose-room-or-looking-space/).
 
 *In Locaish.* Every placed setup is rendered from the gaussian field and
 shown to Gemini with the shot brief; its verdict (keep / adjust / reject,
