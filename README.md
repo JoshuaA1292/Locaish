@@ -418,8 +418,8 @@ Two external services, both free-tier friendly. Everything else is
 gcloud auth application-default login
 export GOOGLE_GENAI_USE_VERTEXAI=TRUE
 export GOOGLE_CLOUD_PROJECT=your-project-id
-export GOOGLE_CLOUD_LOCATION=us-central1
-# optional: export LOCAISH_GEMINI_MODEL=gemini-3.5-flash   (the default)
+export GOOGLE_CLOUD_LOCATION=global   # gemini-3.6-flash lives on the global endpoint
+# optional: export LOCAISH_GEMINI_MODEL=gemini-3.6-flash   (the default)
 ```
 
 **ClickHouse** — either ClickHouse Cloud:
@@ -451,12 +451,19 @@ chat goes live. Without `CLICKHOUSE_HOST` the studio still works — the agent
 says plainly that the shot table is offline and answers what the measurement
 tools can. Without Google credentials the chat explains what to set.
 
-**Deploying** — the `Dockerfile` builds a Cloud Run-ready image (CPU-only is
-fine; the dense stereo stage falls back from CUDA PatchMatch to semi-global
-matching automatically):
+**Deploying the showcase** (how the live demo ships): approve rooms in the
+studio, stage `deploy/ctx`, then `./deploy/deploy.sh <gcp-project>`. The
+image bundles the approved rooms, their splats, and a ClickHouse server
+loaded from baked dumps; Gemini runs through Vertex AI on the Cloud Run
+service identity, so no API key ships. Grant the service account
+`roles/aiplatform.user` once.
+
+**Deploying the full pipeline** — the root `Dockerfile` builds a Cloud
+Run-ready image with the reconstruction toolchain (CPU-only is fine; dense
+stereo falls back from CUDA PatchMatch to semi-global matching):
 
 ```bash
 gcloud run deploy locaish --source . --region us-central1 \
   --memory 8Gi --cpu 4 --timeout 3600 \
-  --set-env-vars GOOGLE_GENAI_USE_VERTEXAI=TRUE,CLICKHOUSE_HOST=...,CLICKHOUSE_PASSWORD=...
+  --set-env-vars GOOGLE_GENAI_USE_VERTEXAI=TRUE,GOOGLE_CLOUD_LOCATION=global,CLICKHOUSE_HOST=...,CLICKHOUSE_PASSWORD=...
 ```
