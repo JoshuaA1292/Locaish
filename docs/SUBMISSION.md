@@ -1,81 +1,142 @@
-# Devpost submission checklist — Agentic Cinema, ClickHouse track
+# Devpost submission: Agentic Cinema, ClickHouse track
+
+Everything below is paste-ready. The only field left blank is the video URL.
 
 **Hosted URL:** https://locaish-564007129146.us-central1.run.app
+**Repo:** https://github.com/JoshuaA1292/Locaish (public, MIT license at top)
+**Video:** _paste YouTube link here_
+**Deadline:** September 9, 2026, 2:00 PM PT. Late means disqualified, no drama, just gone.
 
-Deadline: **September 9, 2026, 2:00 PM PT**. Judging is two-stage; stage one
-just verifies the thing runs and uses what it claims to use.
+---
 
-## Must be true at submission (rule-by-rule)
+## Project name
 
-- [x] **Only Google AI models.** Gemini via `google-adk` is the only model in
-  the system; reconstruction is classical COLMAP + OpenCV. No other AI
-  vendor's code or weights anywhere in the repo or at runtime.
-- [x] **Gemini + Agent Builder.** `google-adk` `LlmAgent` on Vertex AI
-  (`locaish/agent/core.py`), an accepted package under the rules.
-- [x] **ClickHouse at runtime via official MCP server.** The agent's database
-  access is `mcp-clickhouse` spawned as a stdio toolset, read-only.
-- [x] **New project, built inside the contest window** (first commit
-  2026-08-21; window opened 2026-07-27).
-- [x] **Open-source license at repo top** (LICENSE).
-- [x] **Public repo** with all source and run instructions (README).
-- [ ] **Billing on the Vertex project** — as of 2026-09-01 Gemini calls on
-  gen-lang-client-0144049817 return 403 "billing must be enabled"; the
-  studio's coverage planner and scout chat need it (or `GOOGLE_API_KEY`).
-- [ ] **Hosted project URL.** Deploy with `gcloud run deploy` (command in
-  README, Dockerfile included). Needs: a GCP project with Vertex AI enabled,
-  and a ClickHouse Cloud instance (or any reachable ClickHouse).
-- [ ] **Demo video, ≤3 minutes,** on YouTube/Vimeo, public, English or
-  English subtitles. Only the first 3 minutes are judged.
-- [ ] **Written description** on Devpost: features, technologies, data
-  sources, learnings.
-- [ ] Team ≤4, all eligible; confirm no Google/partner employment conflicts.
+Locaish
 
-## Suggested 3-minute video beats
+## Tagline
 
-1. **(0:00–0:20)** The problem: a location scout's day rate exists because
-   someone has to stand in the room. Every finalist got picked from a photo.
-2. **(0:20–1:00)** Phone video of a real room dropped on the studio page.
-   Quiet progress line; the twin appears with its QA verdict — point out that
-   the pipeline says *how far to trust it*.
-3. **(1:00–2:20)** Scout the scene. Paste the scene page, hit *Scout the
-   scene*, and watch the twin: the viewfinder flies through the candidates
-   ClickHouse returned for each shot, settles on the pick, and the caption
-   gives the reason in a DP's words ("35 mm from 1.5 m; the window keys from
-   three-quarter; matches the reverse's lens and distance"). Gemini's
-   verdict on the rendered frame ("adjust: too tight, go to the 35") and the
-   retry show in the caption. Then the cards, the camera plan, "what this
-   room holds", and *How it decided* with the SQL. One line: every placed
-   shot is a row in `shot_plans`, so "which of our five locations holds this
-   scene" is a GROUP BY. Name-drop docs/CINEMATOGRAPHY.md: the rules are
-   sourced, not invented.
-4. **(2:20–3:00)** One sentence on architecture (every number traces to a ray
-   cast, an ephemeris, or a ClickHouse query — never to the model), and the
-   scale: hundreds of thousands of physically-checked setups per room,
-   searchable in milliseconds.
+The location scout you can send anywhere.
 
-## Draft Devpost description (edit to taste)
+## Devpost description (paste as-is, edit to taste)
 
-**Inspiration.** A location scout's trip happens after a location is already
-a finalist — which means every finalist got picked on a photo and a guess.
+### Inspiration
 
-**What it does.** Locaish turns a phone video of any room into a metric,
-gravity-aligned digital twin, then puts a Gemini agent in it as a virtual
-tech scout. It sweeps every physically-possible camera setup — position,
-height, lens, subject mark, sightline, depth of field, backlight — into
-ClickHouse, and answers shot briefs with real setups, rendered frames, and
-the physical reasoning behind them. Sun schedules come from solar ephemeris
-through the windows the twin actually detected.
+A location scout's day rate exists because someone has to physically stand
+in a room and answer real questions: does the dolly move fit, where does the
+sun come in, which lens works from which corner. That trip happens after a
+location is already a finalist. Which means every finalist got picked from a
+photo and a guess. We wanted the guess gone.
 
-**How we built it.** Classical structure-from-motion (COLMAP) and photometric
-stereo — no neural reconstruction, by rule and by design. The twin carries a
-QA report that refuses to be confident when the evidence isn't there. The
-agent is a `google-adk` LlmAgent on Vertex AI whose only database access is
-the official ClickHouse MCP server; its instruction forbids stating any number
-that didn't come from a tool.
+### What it does
 
-**Challenges.** Recovering metric scale from video without a depth network
-(camera-height and doorway anchors, combined with honest error bars); stereo
-pair ordering on hand-held walks; keeping the agent's claims traceable.
+Locaish turns a sixty-second phone walkthrough into a metric, gravity-aligned
+3D twin of a room, then hires a Gemini agent as its tech scout.
 
-**What's next.** Multi-location search ("which of our five candidates can
-hold this dolly move"), heading from ARKit exports, E57/LAS ingest.
+Every physically possible camera setup in the room gets swept into
+ClickHouse: position, height, lens, subject distance, sightline, depth of
+field, background depth, where the window light lands. One of our demo rooms
+holds 102,852 of them. Describe a scene in plain prose and the agent breaks
+it into coverage, queries ClickHouse for candidates, renders the actual view
+through each chosen lens, and then looks at that frame the way a
+cinematographer would. If the framing is wrong it says so, changes its
+constraints, and tries again. We have watched it reject its own pick with
+"16 mm is far too wide for an emotional close-up, go to the 35." It was
+right.
+
+The deliverable is what a crew actually uses: rendered frames, an overhead
+camera plan, lenses and marks, a written shot list. And a viewfinder, so you
+can stand in any setup yourself and look through the lens before anyone
+rents a van.
+
+Film craft is not vibes here. The 180 degree line is a SQL predicate.
+Matched reverses are a lens and distance constraint. Every rule in the
+ranking is sourced from working cinematography practice (docs/CINEMATOGRAPHY.md
+lists the citations) and compiled once into both SQL and numpy, so the
+database and the fallback planner cannot disagree.
+
+### How we built it
+
+The reconstruction is deliberately classical: COLMAP structure-from-motion,
+OpenMVS dense stereo, and a per-scene gaussian splat fit with Brush for the
+photoreal view layer. No pretrained models, no neural reconstruction. Partly
+because the rules say Google AI only, mostly because a measurement you can't
+audit is just a confident guess. The twin ships with a QA report that grades
+its own scan and says how far to trust it.
+
+The agent side is `google-adk`: a breakdown agent, a per-shot placer, and a
+frame reviewer, all Gemini. The agent's only database access is the official
+`mcp-clickhouse` MCP server, read-only, spawned as a stdio toolset. Its
+instructions forbid stating any number that did not come from a tool.
+
+Hosting is one Cloud Run container: the studio in showcase mode, a local
+ClickHouse loaded from baked dumps at startup, and the scanned rooms.
+Scanning itself runs locally (it wants a GPU and fifteen minutes), so the
+hosted gallery serves rooms we scanned and approved, and anyone who clones
+the repo can scan their own.
+
+### Challenges we ran into
+
+Metric scale from video without a depth network: we anchor on camera height
+and door leaves, because a door is a manufactured standard hiding in every
+room. Hand-held stereo on textureless walls: most of what stereo returns
+there is correlated noise, so we learned to delete it and let the splat
+carry the look while the crisp points carry the measurements. Cost: our
+first agent loop resent the whole conversation every shot and burned 85
+cents a scout; fresh sessions per shot and trimmed tool results got it to 31
+cents. Cloud Run: it caps responses at 32 MiB and our viewer page was 130 MB,
+so the hosted rooms serve an 800k-point render, pre-gzipped, under the cap.
+
+### Accomplishments we're proud of
+
+The agent argues with the database and wins for the right reasons. The
+craft rules survive being read by a film person. The whole thing runs
+end to end on a phone video of an ordinary kitchen. And when the scan is
+bad, Locaish says so instead of decorating a guess.
+
+### What we learned
+
+A self-check that reuses the thing it is checking will happily confirm an
+answer that is 90 degrees wrong; our gravity cross-check now compares two
+quantities that share no arithmetic. Phone cameras know which way is up
+better than sparse geometry does. ClickHouse partition drops make "reload
+this room's 100k setups" feel instant. And the fastest way to make an LLM
+trustworthy is to take away every excuse to guess: give it tools that
+measure, and instructions that forbid numbers from anywhere else.
+
+### What's next
+
+Scale the shot space: a production location library is thousands of rooms
+at 100k setups each, which is exactly the columnar search ClickHouse was
+built for. Multi-location answers ("which of our five candidates holds this
+scene" is already a GROUP BY away). Heading from ARKit so sun schedules work
+on every scan. And dolly moves as first-class citizens: sweep the track, not
+just the tripod.
+
+## Built with
+
+`python` `gemini` `google-adk` `google-genai` `clickhouse` `mcp-clickhouse`
+`cloud-run` `colmap` `openmvs` `brush-3dgs` `numpy` `scipy`
+
+## Data sources
+
+Everything is generated by the pipeline from our own phone captures: the
+twins, the swept setups, the plans. The cinematography ranking rules are
+sourced from public film-craft references, cited in docs/CINEMATOGRAPHY.md.
+Sun position comes from a solar ephemeris calculation, not an API.
+
+## Checklist (rule by rule)
+
+- [x] Only Google AI models: Gemini via `google-adk` and `google-genai`,
+  both on the accepted package list. Reconstruction is classical, no other
+  vendor's models or APIs anywhere.
+- [x] ClickHouse at runtime via the official `mcp-clickhouse` MCP server,
+  read-only, self-hosted cluster.
+- [x] Hosted URL live and public, uploads disabled, two scanned rooms,
+  scout and chat fully working: https://locaish-564007129146.us-central1.run.app
+- [x] Public repo, MIT LICENSE detectable at top, partner usage visible in
+  code (`locaish/agent/core.py`, `locaish/warehouse.py`).
+- [x] Built inside the contest window (first commit 2026-08-21).
+- [ ] Video: 3 minutes or less, public on YouTube or Vimeo, English.
+  Record the scout on the hosted URL so the address bar does the proving.
+- [ ] Paste this description into the Devpost form, add the video link,
+  submit before 2:00 PM PT on September 9.
