@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" width="1920" height="1080" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif">
+  <defs>
+    <linearGradient id="lg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6ea8fe"/><stop offset="1" stop-color="#a78bfa"/>
+    </linearGradient>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#5b9dff"/>
+    </marker>
+  </defs>
+
+  <rect width="1920" height="1080" fill="#0b0d10"/>
+
+  <!-- header -->
+  <g transform="translate(80,56) scale(1.45)">
+    <path d="M11 4H8a4 4 0 0 0-4 4v3M21 4h3a4 4 0 0 1 4 4v3M28 21v3a4 4 0 0 1-4 4h-3M11 28H8a4 4 0 0 1-4-4v-3" fill="none" stroke="url(#lg)" stroke-width="2.6" stroke-linecap="round"/>
+    <rect x="11" y="11" width="10" height="10" rx="2.6" transform="rotate(45 16 16)" fill="url(#lg)"/>
+  </g>
+  <text x="145" y="92" font-size="36" font-weight="700" letter-spacing="-0.8" fill="#eef1f5">Locaish</text>
+  <text x="1840" y="90" font-size="21" fill="#8a94a3" text-anchor="end">how a scene becomes a camera plan</text>
+
+  <!-- scene card -->
+  <g>
+    <rect x="80" y="430" width="330" height="200" rx="16" fill="#12151a" stroke="#232830"/>
+    <text x="112" y="480" font-size="15" letter-spacing="2.5" fill="#5c6672">THE ASK</text>
+    <text x="112" y="522" font-size="27" font-weight="600" fill="#eef1f5">A scene</text>
+    <text x="112" y="560" font-size="19" fill="#8a94a3">INT. APARTMENT — SUNSET.</text>
+    <text x="112" y="588" font-size="19" fill="#8a94a3">Maya stands beside the window.</text>
+  </g>
+
+  <!-- gemini card -->
+  <g>
+    <rect x="560" y="380" width="400" height="300" rx="16" fill="#12151a" stroke="#2c323b"/>
+    <rect x="592" y="416" width="120" height="38" rx="9" fill="url(#lg)"/>
+    <text x="652" y="442" font-size="20" font-weight="700" fill="#0b1220" text-anchor="middle">GEMINI</text>
+    <text x="592" y="496" font-size="27" font-weight="600" fill="#eef1f5">The agent</text>
+    <text x="592" y="526" font-size="18" fill="#8a94a3">Agent Development Kit</text>
+    <rect x="592" y="551" width="9" height="9" rx="2" transform="rotate(45 596.5 555.5)" fill="#5b9dff"/>
+    <text x="614" y="562" font-size="19" fill="#b8c4d3">breaks the scene into coverage</text>
+    <rect x="592" y="586" width="9" height="9" rx="2" transform="rotate(45 596.5 590.5)" fill="#5b9dff"/>
+    <text x="614" y="597" font-size="19" fill="#b8c4d3">decides which tools to call</text>
+    <rect x="592" y="621" width="9" height="9" rx="2" transform="rotate(45 596.5 625.5)" fill="#5b9dff"/>
+    <text x="614" y="632" font-size="19" fill="#b8c4d3">reviews every frame like a DP</text>
+  </g>
+
+  <!-- twin card -->
+  <g>
+    <rect x="1180" y="150" width="560" height="310" rx="16" fill="#12151a" stroke="#232830"/>
+    <text x="1212" y="200" font-size="15" letter-spacing="2.5" fill="#5c6672">THE MEASUREMENT ENGINE</text>
+    <text x="1212" y="244" font-size="27" font-weight="600" fill="#eef1f5">The digital twin</text>
+    <text x="1212" y="274" font-size="18" fill="#8a94a3">metric · gravity-aligned · classical reconstruction</text>
+    <rect x="1212" y="301" width="9" height="9" rx="2" transform="rotate(45 1216.5 305.5)" fill="#5b9dff"/>
+    <text x="1234" y="312" font-size="19" fill="#b8c4d3">ray casts — sightlines &amp; clearances</text>
+    <rect x="1212" y="336" width="9" height="9" rx="2" transform="rotate(45 1216.5 340.5)" fill="#5b9dff"/>
+    <text x="1234" y="347" font-size="19" fill="#b8c4d3">optics — lenses, distance, depth of field</text>
+    <rect x="1212" y="371" width="9" height="9" rx="2" transform="rotate(45 1216.5 375.5)" fill="#5b9dff"/>
+    <text x="1234" y="382" font-size="19" fill="#b8c4d3">sun schedule — solar ephemeris</text>
+    <rect x="1212" y="406" width="9" height="9" rx="2" transform="rotate(45 1216.5 410.5)" fill="#5b9dff"/>
+    <text x="1234" y="417" font-size="19" fill="#b8c4d3">rendered frames — the room, through a lens</text>
+  </g>
+
+  <!-- clickhouse card -->
+  <g>
+    <rect x="1180" y="620" width="560" height="310" rx="16" fill="#12151a" stroke="#232830"/>
+    <text x="1212" y="670" font-size="15" letter-spacing="2.5" fill="#5c6672">THE SHOT SPACE</text>
+    <text x="1212" y="714" font-size="27" font-weight="600" fill="#eef1f5">ClickHouse</text>
+    <text x="1212" y="744" font-size="18" fill="#8a94a3">102,852 swept setups in this room alone</text>
+    <rect x="1212" y="771" width="9" height="9" rx="2" transform="rotate(45 1216.5 775.5)" fill="#5b9dff"/>
+    <text x="1234" y="782" font-size="19" fill="#b8c4d3">every physically possible setup, scored</text>
+    <rect x="1212" y="806" width="9" height="9" rx="2" transform="rotate(45 1216.5 810.5)" fill="#5b9dff"/>
+    <text x="1234" y="817" font-size="19" fill="#b8c4d3">craft as SQL — 180° line, matched reverses</text>
+    <rect x="1212" y="841" width="9" height="9" rx="2" transform="rotate(45 1216.5 845.5)" fill="#5b9dff"/>
+    <text x="1234" y="852" font-size="19" fill="#b8c4d3">capacity — what each location holds</text>
+  </g>
+
+  <!-- plan card -->
+  <g>
+    <rect x="80" y="830" width="880" height="140" rx="16" fill="#12151a" stroke="#232830"/>
+    <text x="112" y="878" font-size="15" letter-spacing="2.5" fill="#5c6672">THE DELIVERABLE</text>
+    <text x="112" y="920" font-size="27" font-weight="600" fill="#eef1f5">The coverage plan</text>
+    <text x="112" y="950" font-size="19" fill="#8a94a3">rendered frames · overhead camera plan · lenses &amp; marks · written shot list</text>
+  </g>
+
+  <!-- arrows -->
+  <line x1="410" y1="530" x2="548" y2="530" stroke="#5b9dff" stroke-width="2.5" marker-end="url(#ah)"/>
+  <line x1="960" y1="470" x2="1168" y2="330" stroke="#5b9dff" stroke-width="2.5" marker-end="url(#ah)" marker-start="url(#ah)"/>
+  <line x1="960" y1="590" x2="1168" y2="750" stroke="#5b9dff" stroke-width="2.5" marker-end="url(#ah)" marker-start="url(#ah)"/>
+  <line x1="760" y1="680" x2="760" y2="818" stroke="#5b9dff" stroke-width="2.5" marker-end="url(#ah)"/>
+
+  <!-- mcp pill on the clickhouse arrow -->
+  <rect x="820" y="700" width="320" height="42" rx="21" fill="#171b21" stroke="#2c323b"/>
+  <text x="980" y="727" font-size="17" fill="#b8c4d3" text-anchor="middle">official mcp-clickhouse · read-only SQL</text>
+
+  <!-- tagline -->
+  <text x="960" y="1042" font-size="24" fill="#8a94a3" text-anchor="middle">Every number is a <tspan fill="#eef1f5">ray cast</tspan>, an <tspan fill="#eef1f5">optical calculation</tspan>, a <tspan fill="#eef1f5">solar ephemeris</tspan>, or a <tspan fill="#eef1f5">ClickHouse query</tspan> — never a model guessing.</text>
+</svg>
