@@ -139,6 +139,9 @@ Sun position comes from a solar ephemeris calculation, not an API.
   scout and chat fully working: https://locaish-564007129146.us-central1.run.app
 - [x] Public repo, MIT LICENSE detectable at top, partner usage visible in
   code (`locaish/agent/core.py`, `locaish/warehouse.py`).
+- [x] Runnable from a fresh clone with no scanning: `examples/IMG_6086.twin`
+  is a finished scan of a real room; drop it on the studio and the sweep,
+  scout and viewfinder all come alive.
 - [x] Built inside the contest window (first commit 2026-08-21).
 - [ ] Video: 3 minutes or less, public on YouTube or Vimeo, English.
   Record the scout on the hosted URL so the address bar does the proving.

@@ -447,7 +447,10 @@ locaish studio
 ```
 
 Drop a video. When the twin lands, the sweep is loaded automatically and the
-chat goes live. Without `CLICKHOUSE_HOST` the studio still works — the agent
+chat goes live. No room handy? Drop `examples/IMG_6086.twin` on the studio
+instead: a finished scan of a real kitchen (29 m², 102,852 swept setups)
+that skips reconstruction and lights up the whole product in a couple of
+minutes. Without `CLICKHOUSE_HOST` the studio still works — the agent
 says plainly that the shot table is offline and answers what the measurement
 tools can. Without Google credentials the chat explains what to set.
 

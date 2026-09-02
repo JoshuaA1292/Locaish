@@ -43,6 +43,7 @@ MAX_UPLOAD_BYTES = 4 << 30
 _MEDIA_SUFFIXES = {
     ".mov", ".mp4", ".m4v", ".avi", ".mkv", ".webm",
     ".ply", ".e57", ".las", ".laz", ".obj", ".glb", ".gltf", ".xyz", ".pts",
+    ".twin",
 }
 
 
@@ -469,18 +470,45 @@ class Studio:
             job.state = "running"
             job.emit("stage", "starting")
             try:
-                opts = IngestOptions(
-                    name=Path(job.name).stem,
-                    video_workdir=job.workdir / "recon",
-                    max_points=self.max_points,
-                    latitude=job.latitude,
-                    longitude=job.longitude,
-                    progress=lambda m: job.emit("stage", m),
-                )
-                result = ingest(job.source, opts)
-                twin = result.twin
+                if job.source.suffix.lower() == ".twin":
+                    # A finished twin needs no reconstruction: load it and go
+                    # straight to the parts a judge wants to see. This is how
+                    # the committed example room comes alive on a fresh clone.
+                    from .types import Twin
 
-                job.twin_path = twin.save(job.workdir / f"{twin.name}.twin")
+                    job.emit("stage", "reading the twin")
+                    twin = Twin.load(job.source)
+                    job.twin_path = job.source
+                    s, qa = twin.structure, twin.qa
+                    summary = {
+                        "name": twin.name,
+                        "verdict": qa.verdict,
+                        "points": len(twin.points),
+                        "floor_area_m2": None if s.floor_area is None else round(float(s.floor_area), 2),
+                        "ceiling_height_m": (
+                            None if s.ceiling_z is None or s.floor_z is None
+                            else round(float(s.ceiling_z - s.floor_z), 3)
+                        ),
+                        "openings": len(s.openings),
+                        "coverage_agent": _coverage_agent_configured(),
+                        "checks": {
+                            "fail": [c["name"] for c in qa.checks if c.get("status") == "fail"],
+                            "warn": [c["name"] for c in qa.checks if c.get("status") == "warn"],
+                        },
+                    }
+                else:
+                    opts = IngestOptions(
+                        name=Path(job.name).stem,
+                        video_workdir=job.workdir / "recon",
+                        max_points=self.max_points,
+                        latitude=job.latitude,
+                        longitude=job.longitude,
+                        progress=lambda m: job.emit("stage", m),
+                    )
+                    result = ingest(job.source, opts)
+                    twin = result.twin
+                    job.twin_path = twin.save(job.workdir / f"{twin.name}.twin")
+                    summary = _summarise(twin, result)
                 job.emit("stage", "rendering viewer")
                 # max_points must flow through: render_html's own default is a
                 # conservative 900k, which would silently thin the cloud the
@@ -504,7 +532,7 @@ class Studio:
                 except Exception as exc:  # noqa: BLE001 - a twin can be too thin to survey
                     job.emit("note", f"the location could not be surveyed: {exc}")
 
-                job.summary = _summarise(twin, result)
+                job.summary = summary
                 job.summary["scout"] = job.scout_path is not None
                 job.location = twin.name
 
@@ -525,8 +553,9 @@ class Studio:
                     job.emit("note", f"agent tools unavailable: {exc}")
                     job.summary["agent"] = False
 
-                for w in result.warnings:
-                    job.emit("note", w)
+                if job.source.suffix.lower() != ".twin":
+                    for w in result.warnings:
+                        job.emit("note", w)
                 job.state = "done"
                 job.emit("done", "complete", summary=job.summary)
             except Exception as exc:  # noqa: BLE001 - the browser has to see why
@@ -1373,9 +1402,9 @@ PAGE = """<!doctype html>
     <p class="lead" id="lead">Scan a room with your phone. Plan the scene before anyone drives out.</p>
     <div id="drop">
       <b>Drop a walkthrough video here</b>
-      <span>or a scan export &mdash; ply, glb, obj. Sixty seconds of walking is plenty.</span>
+      <span>or a scan export &mdash; ply, glb, obj &mdash; or a saved .twin. Sixty seconds of walking is plenty.</span>
       <span class="btn">Choose a file</span>
-      <input id="file" type="file" accept="video/*,.ply,.obj,.glb,.gltf,.stl,.mov,.mp4,.mkv" class="hidden">
+      <input id="file" type="file" accept="video/*,.ply,.obj,.glb,.gltf,.stl,.mov,.mp4,.mkv,.twin" class="hidden">
     </div>
     <label id="geo"><input type="checkbox" id="usegeo" checked>
       use my location so the sun schedule is real</label>

@@ -103,7 +103,11 @@ class FloorMaps:
 
 def floor_maps(twin: Twin, *, cell: float = DEFAULT_CELL_M) -> FloorMaps:
     """Raster the room into the maps every other question is answered from."""
-    xyz = np.asarray(twin.points.xyz, dtype=np.float64)
+    # The twin's own contract (types.PointCloud): anything measuring this
+    # cloud must exclude inferred points. The splat view layer and the
+    # wall-resample points cover what the scan could not measure; treating
+    # them as obstructions walls the room off with fog.
+    xyz = np.asarray(twin.points.measured().xyz, dtype=np.float64)
     if len(xyz) == 0:
         raise ValueError("twin has no points")
     floor_z = float(twin.structure.floor_z)

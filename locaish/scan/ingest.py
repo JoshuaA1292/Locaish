@@ -513,13 +513,14 @@ def ingest(
         )
     if extra_xyz is not None and len(extra_xyz):
         base = twin.points
-        inferred = (
-            None
-            if base.inferred is None
-            else np.concatenate(
-                [base.inferred, np.zeros(len(extra_xyz), dtype=np.float32)]
-            )
-        )
+        # The view layer is inferred by definition: no fit or measurement
+        # stands on it. Flagging it keeps the promise above for anyone who
+        # loads this twin later -- floor maps, sweeps, QA re-runs.
+        inferred = np.concatenate([
+            base.inferred if base.inferred is not None
+            else np.zeros(len(base.xyz), dtype=np.float32),
+            np.ones(len(extra_xyz), dtype=np.float32),
+        ])
         twin.points = PointCloud(
             xyz=np.concatenate([base.xyz, extra_xyz.astype(base.xyz.dtype)]),
             rgb=None
