@@ -144,8 +144,11 @@ class Studio:
             if not d.is_dir() or not viewer.exists():
                 continue
             twins = sorted(d.glob("*.twin"))
+            # splat.ply is the baked view layer, not the capture; naming a
+            # room after it would be like crediting the projector.
             source = next(
-                (p for p in sorted(d.iterdir()) if p.suffix.lower() in _MEDIA_SUFFIXES),
+                (p for p in sorted(d.iterdir())
+                 if p.suffix.lower() in _MEDIA_SUFFIXES and p.name != "splat.ply"),
                 d,
             )
             summary: dict = {"restored": True}
