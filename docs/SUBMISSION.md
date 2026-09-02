@@ -64,9 +64,11 @@ audit is just a confident guess. The twin ships with a QA report that grades
 its own scan and says how far to trust it.
 
 The agent side is `google-adk`: a breakdown agent, a per-shot placer, and a
-frame reviewer, all Gemini. The agent's only database access is the official
-`mcp-clickhouse` MCP server, read-only, spawned as a stdio toolset. Its
-instructions forbid stating any number that did not come from a tool.
+frame reviewer, all Gemini, served through Vertex AI on the hosted demo
+(the Cloud Run service account is the credential, so no key ships). The
+agent's only database access is the official `mcp-clickhouse` MCP server,
+read-only, spawned as a stdio toolset. Its instructions forbid stating any
+number that did not come from a tool.
 
 Hosting is one Cloud Run container: the studio in showcase mode, a local
 ClickHouse loaded from baked dumps at startup, and the scanned rooms.
@@ -127,8 +129,10 @@ Sun position comes from a solar ephemeris calculation, not an API.
 ## Checklist (rule by rule)
 
 - [x] Only Google AI models: Gemini via `google-adk` and `google-genai`,
-  both on the accepted package list. Reconstruction is classical, no other
-  vendor's models or APIs anywhere.
+  both on the accepted package list. The hosted demo serves Gemini through
+  Vertex AI using Cloud Run's service identity, so no API key ships with
+  the service. Reconstruction is classical, no other vendor's models or
+  APIs anywhere.
 - [x] ClickHouse at runtime via the official `mcp-clickhouse` MCP server,
   read-only, self-hosted cluster.
 - [x] Hosted URL live and public, uploads disabled, two scanned rooms,

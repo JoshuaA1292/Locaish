@@ -10,7 +10,8 @@ report — camera angles, sun schedule, equipment fit, acoustics — before anyo
 drives out.**
 
 Built for [Agentic Cinema: The Blockbuster Hackathon](https://agentic-cinema.devpost.com/),
-ClickHouse track. Gemini (via Google Cloud Agent Builder / Vertex AI) drives
+ClickHouse track. Gemini (through the Agent Development Kit, served by
+Vertex AI on the hosted demo) drives
 an agent over a real measurement engine — every number in the output traces
 to a ray cast, an ephemeris lookup, or a ClickHouse query, never to the model.
 
