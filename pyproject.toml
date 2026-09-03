@@ -18,7 +18,7 @@ dependencies = [
     # The agent: Gemini on Google Cloud's Agent Development Kit, with the
     # official ClickHouse MCP server as its tool surface and clickhouse-connect
     # for bulk-loading the shot sweep it searches.
-    "google-adk>=2.7",
+    "google-adk>=2.7,<2.8",
     "mcp-clickhouse>=0.4",
     "clickhouse-connect>=1.7",
 ]
