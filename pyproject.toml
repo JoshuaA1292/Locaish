@@ -19,7 +19,8 @@ dependencies = [
     # official ClickHouse MCP server as its tool surface and clickhouse-connect
     # for bulk-loading the shot sweep it searches.
     "google-adk>=2.7,<2.8",
-    "mcp-clickhouse>=0.4",
+    "mcp-clickhouse>=0.4,<0.5",
+    "mcp>=1.10,<2",
     "clickhouse-connect>=1.7",
 ]
 
