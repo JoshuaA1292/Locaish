@@ -1616,6 +1616,7 @@ function listen(id) {
 }
 
 function show(id, s) {
+  jobId = id;
   working.classList.add('hidden');
   landing.classList.add('hidden');
   result.classList.remove('hidden');
