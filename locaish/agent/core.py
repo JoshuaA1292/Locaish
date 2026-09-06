@@ -226,7 +226,7 @@ def check_dolly_move(
         name="dolly",
         subject_path=subject,
         focal_mm=focal_mm,
-        gear=equipment.get("dolly-doorway"),
+        gear=equipment.get("doorway-dolly"),
         on_track=True,
     )
     return {"status": "success", "move": report.summary()}
