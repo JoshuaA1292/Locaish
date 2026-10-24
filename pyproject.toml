@@ -22,6 +22,9 @@ dependencies = [
     "mcp-clickhouse>=0.4,<0.5",
     "mcp>=1.10,<2",
     "clickhouse-connect>=1.7",
+    # The Meta Model API (Muse Spark, Muse Wonder, Muse Image, SAM 3.1) over
+    # plain HTTP: locaish/meta/client.py. No SDK; the wire format is OpenAI's.
+    "httpx>=0.27",
 ]
 
 [project.optional-dependencies]
@@ -45,6 +48,13 @@ learned = [
     "huggingface_hub",
     "utils3d @ git+https://github.com/EasternJournalist/utils3d.git@3fab839f0be9931dac7c8488eb0e1600c236e183",
     "moge @ git+https://github.com/microsoft/MoGe.git@0744441",
+]
+
+# The open-weight SAM 3D models (Objects and Body) need a CUDA GPU and run on
+# Modal: locaish/meta/sam3d.py calls the deployed app over HTTP, so this extra
+# is only for the machine that deploys it.
+sam3d = [
+    "modal>=1.0",
 ]
 
 [project.scripts]

@@ -82,6 +82,51 @@ class Camera:
         )
 
 
+@dataclass
+class Figure:
+    """Something put into the room for this frame and nothing else: an actor
+    on a mark, a set piece moved from where the scan found it. Points with
+    colours, drawn as opaque gaussians of `radius_m`; or, when `cov` is given,
+    a real gaussian splat (what SAM 3D Objects emits), drawn as it is. In the
+    twin's frame, in metres. A figure never enters a measurement: it is drawn
+    into the frame so the frame shows what the plan claims, which is the
+    renderer's one job.
+    """
+
+    xyz: np.ndarray
+    rgb: np.ndarray
+    radius_m: float = 0.02
+    cov: np.ndarray | None = None
+    opacity: np.ndarray | None = None
+    label: str = ""
+
+    def __post_init__(self) -> None:
+        self.xyz = np.asarray(self.xyz, dtype=np.float64).reshape(-1, 3)
+        rgb = np.asarray(self.rgb)
+        if rgb.ndim == 1:
+            rgb = np.broadcast_to(rgb.reshape(1, 3), (len(self.xyz), 3))
+        if rgb.dtype.kind in "ui" or rgb.max(initial=0.0) > 1.0:
+            rgb = rgb.astype(np.float32) / 255.0
+        self.rgb = np.asarray(rgb, dtype=np.float32).reshape(-1, 3)
+        if len(self.rgb) != len(self.xyz):
+            raise ValueError("a figure needs one colour per point")
+
+    def as_gaussians(self) -> GaussianField:
+        n = len(self.xyz)
+        if self.cov is not None:
+            cov = np.asarray(self.cov, dtype=np.float32).reshape(n, 3, 3)
+        else:
+            cov = np.zeros((n, 3, 3), dtype=np.float32)
+            cov[:, 0, 0] = cov[:, 1, 1] = cov[:, 2, 2] = float(self.radius_m) ** 2
+        opa = (np.asarray(self.opacity, dtype=np.float32).reshape(n) if self.opacity is not None
+               else np.full(n, 0.98, dtype=np.float32))
+        return GaussianField(xyz=self.xyz, rgb=self.rgb, opacity=opa, cov=cov)
+
+    def translated(self, dx: float, dy: float, dz: float = 0.0) -> "Figure":
+        return Figure(self.xyz + np.array([dx, dy, dz]), self.rgb, self.radius_m, self.cov,
+                      self.opacity, self.label)
+
+
 def camera_at(
     cam_pos, aim_at, focal_mm: float, *, sensor_key: str = optics.DEFAULT_SENSOR,
     width_px: int = WIDTH_PX,
@@ -117,32 +162,47 @@ def render_shot(
     out: str | Path | None = None,
     draw_subject: bool = True,
     subject_marks=None,
+    figures: list["Figure"] | None = None,
+    subject_height_m: float = SUBJECT_HEIGHT_M,
+    exclude_points: np.ndarray | None = None,
 ):
     """Project the twin through a pinhole at the given setup. Returns a PIL image.
 
     The camera is aimed at the subject's eyeline, exactly as the sweep assumed
     when it scored the row being rendered. `subject_marks` may list further
     (x, y) marks to draw stand-ins at -- the other actor in a two-shot.
+
+    `figures` are drawn into the room as part of it (composited with the
+    gaussian field, or painted with the points), so an actor or a moved sofa
+    occludes and is occluded like the walls are. `subject_height_m` is the
+    stature the stand-in and the eyeline use; the sweep's 1.75 m unless the
+    cast is known. `exclude_points` is a boolean mask over `twin.points`
+    naming points to leave out of the frame -- the sofa where it used to be,
+    once a set piece has been moved; it applies to the point render only, the
+    gaussian field being a view layer that is masked in `figures` space.
     """
     from PIL import Image, ImageDraw
 
     floor_z = float(twin.structure.floor_z)
     subj = np.asarray(subject_xy, dtype=np.float64).reshape(2)
-    eye = np.array([subj[0], subj[1], floor_z + EYELINE_RATIO * SUBJECT_HEIGHT_M])
+    eye = np.array([subj[0], subj[1], floor_z + EYELINE_RATIO * float(subject_height_m)])
     cam = camera_at(cam_pos, eye, focal_mm, sensor_key=sensor_key, width_px=width_px)
 
     field = gaussian_field(twin)
     if field is not None:
+        if figures:
+            field = merge_fields([field] + [f.as_gaussians() for f in figures if len(f.xyz)])
         img = _render_gaussians(field, cam)
     else:
-        img = _render_points(twin, cam)
+        extra = [(f.xyz, (f.rgb * 255.0 + 0.5).astype(np.uint8)) for f in (figures or []) if len(f.xyz)]
+        img = _render_points(twin, cam, extra=extra, exclude=exclude_points)
 
     im = Image.fromarray(img)
     if draw_subject:
         draw = ImageDraw.Draw(im, "RGBA")
         marks = [subj] + [np.asarray(m, dtype=np.float64).reshape(2) for m in (subject_marks or [])]
         for i, m in enumerate(marks):
-            _draw_subject(draw, cam, m, floor_z, primary=(i == 0))
+            _draw_subject(draw, cam, m, floor_z, primary=(i == 0), height_m=float(subject_height_m))
 
     if out is not None:
         out = Path(out)
@@ -166,6 +226,23 @@ class GaussianField:
 
 _FIELD_CACHE: dict[str, GaussianField | None] = {}
 _FIELD_LOCK = threading.Lock()
+
+
+def merge_fields(fields: list[GaussianField]) -> GaussianField:
+    """Several gaussian fields in one frame become one field: the room and
+    whatever was put into it. Concatenation, nothing else, which is the
+    whole reason set pieces and the room share a representation."""
+    fields = [f for f in fields if f is not None and len(f.xyz)]
+    if not fields:
+        raise ValueError("nothing to merge")
+    if len(fields) == 1:
+        return fields[0]
+    return GaussianField(
+        xyz=np.concatenate([np.asarray(f.xyz, dtype=np.float64) for f in fields]),
+        rgb=np.concatenate([np.asarray(f.rgb, dtype=np.float32).reshape(-1, 3) for f in fields]),
+        opacity=np.concatenate([np.asarray(f.opacity, dtype=np.float32).reshape(-1) for f in fields]),
+        cov=np.concatenate([np.asarray(f.cov, dtype=np.float32).reshape(-1, 3, 3) for f in fields]),
+    )
 
 
 def gaussian_field(twin: Twin) -> GaussianField | None:
@@ -415,12 +492,19 @@ def _upsample(arr: np.ndarray, s: int, H: int, W: int) -> np.ndarray:
     return out
 
 
-def _render_points(twin: Twin, cam: Camera) -> np.ndarray:
+def _render_points(twin: Twin, cam: Camera, *, extra=None, exclude: np.ndarray | None = None) -> np.ndarray:
     W, H = cam.width_px, cam.height_px
     xyz = np.asarray(twin.points.xyz, dtype=np.float64)
     rgb = twin.points.rgb
     if rgb is None:
         rgb = np.full((len(xyz), 3), 170, dtype=np.uint8)
+    if exclude is not None and len(exclude) == len(xyz):
+        keep = ~np.asarray(exclude, dtype=bool)
+        xyz, rgb = xyz[keep], rgb[keep]
+    if extra:
+        xyz = np.concatenate([xyz] + [np.asarray(e[0], dtype=np.float64).reshape(-1, 3) for e in extra])
+        rgb = np.concatenate([np.asarray(rgb, dtype=np.uint8).reshape(-1, 3)]
+                             + [np.asarray(e[1], dtype=np.uint8).reshape(-1, 3) for e in extra])
 
     rel = xyz - cam.pos
     z = rel @ cam.fwd
@@ -460,14 +544,15 @@ def _render_points(twin: Twin, cam: Camera) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
-def _draw_subject(draw, cam: Camera, subj_xy, floor_z: float, *, primary: bool = True):
+def _draw_subject(draw, cam: Camera, subj_xy, floor_z: float, *, primary: bool = True,
+                  height_m: float = SUBJECT_HEIGHT_M):
     """A stand-in figure at the mark: feet, stature line, head, shoulder bar."""
     x, y = float(subj_xy[0]), float(subj_xy[1])
     feet = cam.project((x, y, floor_z))
-    head = cam.project((x, y, floor_z + SUBJECT_HEIGHT_M))
+    head = cam.project((x, y, floor_z + height_m))
     if feet is None or head is None:
         return
-    shoulder_z = floor_z + 0.82 * SUBJECT_HEIGHT_M
+    shoulder_z = floor_z + 0.82 * height_m
     lat = np.cross(cam.fwd, np.array([0.0, 0.0, 1.0]))
     n = float(np.linalg.norm(lat))
     lat = lat / n if n > 1e-9 else np.array([1.0, 0.0, 0.0])
@@ -482,7 +567,7 @@ def _draw_subject(draw, cam: Camera, subj_xy, floor_z: float, *, primary: bool =
     # The head is a real 0.11 m radius at the head's own depth -- projected,
     # not scaled from the stature line, which runs off the bottom of a low
     # angle and would make the head the size of the frame.
-    crown = floor_z + SUBJECT_HEIGHT_M - 0.11
+    crown = floor_z + height_m - 0.11
     side = cam.project((x + lat[0] * 0.11, y + lat[1] * 0.11, crown))
     mid = cam.project((x, y, crown))
     r = max(3.0, math.hypot(side[0] - mid[0], side[1] - mid[1])) if side and mid else 6.0
