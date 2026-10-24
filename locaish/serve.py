@@ -126,6 +126,7 @@ class Studio:
         self._lock = threading.Lock()
         self._agent = None
         self._agent_lock = threading.Lock()
+        self._stage = None
         # The product layer: projects, location details, share links, leads.
         from .product.store import Gate, Store
 
@@ -598,6 +599,15 @@ class Studio:
         finally:
             run.events.put(None)
 
+    @property
+    def stage(self):
+        """Cast, set pieces and rehearsals: locaish/product/stage.py."""
+        if self._stage is None:
+            from .product.stage import Stage
+
+            self._stage = Stage(self)
+        return self._stage
+
     def agent(self):
         """The scout agent, built on first use so a scan-only session never pays for it."""
         with self._agent_lock:
@@ -846,6 +856,11 @@ def _safe_name(name: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+_STAGE_GET = ("stage.js", "stage-status", "stage-plan", "cast", "headshot", "setpieces", "rehearsals",
+              "rehearsal", "rehearsal-events", "rehearsal-image")
+_STAGE_POST = ("cast", "setpieces", "rehearse", "rehearsal")
+
+
 class _Handler(BaseHTTPRequestHandler):
     studio: Studio
     server_version = "locaish"
@@ -893,6 +908,8 @@ class _Handler(BaseHTTPRequestHandler):
             return self._product_get(parts, parse_qs(url.query))
         if parts[0] == "thumb" and len(parts) == 2:
             return self._thumb(parts[1])
+        if parts[0] in _STAGE_GET:
+            return self._stage_get(parts, parse_qs(url.query))
         if parts[0] == "events" and len(parts) == 2:
             return self._events(parts[1])
         if parts[0] == "view" and len(parts) == 2:
@@ -1121,6 +1138,8 @@ class _Handler(BaseHTTPRequestHandler):
             return self._product_post(parts, parse_qs(url.query))
         if parts and parts[0] == "chat" and len(parts) == 2:
             return self._chat(parts[1])
+        if parts and parts[0] in _STAGE_POST:
+            return self._stage_post(parts)
         if parts and parts[0] == "plan" and len(parts) == 2:
             return self._plan(parts[1])
         if parts and parts[0] == "approve" and len(parts) == 2:
@@ -1310,7 +1329,136 @@ class _Handler(BaseHTTPRequestHandler):
             if not job:
                 return self._json({"error": "unknown job"}, 404)
             return self._json({"removed": labelsmod.remove_label(job.workdir, parts[2])})
+        if len(parts) == 3 and parts[0] in ("cast", "setpieces"):
+            job = self.studio.jobs.get(parts[1])
+            if not job:
+                return self._json({"error": "unknown job"}, 404)
+            stage = self.studio.stage
+            removed = stage.remove_actor(job, parts[2]) if parts[0] == "cast" else stage.remove_piece(job, parts[2])
+            return self._json({"removed": bool(removed)})
         self._json({"error": "not found"}, 404)
+
+    # -- the stage: cast, set pieces, rehearsals ------------------------------
+    def _stage_job(self, job_id: str):
+        job = self.studio.jobs.get(job_id)
+        if not job or job.state != "done" or not job.twin_path:
+            return None
+        return job
+
+    def _stage_get(self, parts: list[str], params: dict) -> None:
+        head = parts[0]
+        if head == "stage.js":
+            return self._file(Path(__file__).parent / "viewer" / "stage.js", "application/javascript; charset=utf-8")
+        if len(parts) < 2:
+            return self._json({"error": "not found"}, 404)
+        job = self._stage_job(parts[1])
+        if job is None:
+            return self._json({"error": "no finished twin on that job"}, 404)
+        stage = self.studio.stage
+        try:
+            if head == "stage-status":
+                return self._json(stage.status())
+            if head == "cast" and len(parts) == 2:
+                return self._json({"cast": stage.cast(job)})
+            if head == "headshot" and len(parts) == 3:
+                got = stage.headshot_bytes(job, parts[2])
+                if got is None:
+                    return self._json({"error": "no headshot"}, 404)
+                data, ctype = got
+                self.send_response(200)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Cache-Control", "private, max-age=60")
+                self.end_headers()
+                self.wfile.write(data)
+                return
+            if head == "setpieces" and len(parts) == 2:
+                return self._json({"pieces": stage.pieces(job)})
+            if head == "stage-plan":
+                return self._svg(stage.plan_svg(job))
+            if head == "rehearsals":
+                return self._json({"rehearsals": stage.rehearsals(job)})
+            if head == "rehearsal-events" and len(parts) == 3:
+                run = stage.run(job, parts[2])
+                if run is None:
+                    return self._json({"error": "no such rehearsal"}, 404)
+                return self._stream(
+                    run.events, run.state,
+                    done_item=lambda: {"kind": "done", "rehearsal_id": run.id, "listing": run.listing()},
+                    error_item=lambda: {"kind": "error", "text": run.error or "failed"},
+                )
+            if head == "rehearsal-image" and len(parts) == 4:
+                run = stage.run(job, parts[2])
+                name = Path(parts[3]).name
+                if run is None:
+                    return self._json({"error": "no such rehearsal"}, 404)
+                sub = "finish" if name.startswith("finish_") else "animatic"
+                img = run.workdir / sub / name
+                if not img.exists():
+                    return self._json({"error": "no such frame"}, 404)
+                return self._file(img, "image/png")
+            if head == "rehearsal" and len(parts) in (3, 4):
+                run = stage.run(job, parts[2])
+                if run is None:
+                    return self._json({"error": "no such rehearsal"}, 404)
+                if len(parts) == 3:
+                    if run.state != "done" or run.result is None:
+                        return self._json({"error": f"rehearsal is {run.state}", "detail": run.error}, 409)
+                    return self._json(run.result)
+                name = parts[3]
+                files = {"callsheet.txt": ("callsheet.txt", "text/plain; charset=utf-8"),
+                         "blocking.svg": ("blocking.svg", "image/svg+xml"),
+                         "rehearsal.json": ("rehearsal.json", "application/json"),
+                         "animatic.json": ("animatic/animatic.json", "application/json")}
+                if name not in files:
+                    return self._json({"error": "not found"}, 404)
+                f = run.workdir / files[name][0]
+                if not f.exists():
+                    return self._json({"error": "not yet"}, 404)
+                return self._file(f, files[name][1])
+        except Exception as exc:  # noqa: BLE001 - the page shows the reason
+            return self._json({"error": f"{type(exc).__name__}: {exc}"}, 500)
+        return self._json({"error": "not found"}, 404)
+
+    def _stage_post(self, parts: list[str]) -> None:
+        head = parts[0]
+        if len(parts) < 2:
+            return self._json({"error": "not found"}, 404)
+        job = self._stage_job(parts[1])
+        if job is None:
+            return self._json({"error": "no finished twin on that job"}, 404)
+        stage = self.studio.stage
+        try:
+            if head == "cast" and len(parts) == 4 and parts[3] == "headshot":
+                length = int(self.headers.get("Content-Length") or 0)
+                if length <= 0 or length > 25_000_000:
+                    return self._json({"error": "send the image as the request body"}, 400)
+                data = self.rfile.read(length)
+                return self._json(stage.headshot(job, parts[2], data))
+            body = self._body()
+            if head == "cast" and len(parts) == 2:
+                return self._json({"actor": stage.add_actor(job, body)})
+            if head == "setpieces" and len(parts) == 3 and parts[2] == "lift":
+                return self._json({"piece": stage.lift_piece(job, body.get("label_id"), xyz=body.get("xyz"), label=body.get("label"))})
+            if head == "setpieces" and len(parts) == 4 and parts[3] == "move":
+                return self._json(stage.move_piece(job, parts[2], body))
+            if head == "setpieces" and len(parts) == 4 and parts[3] == "lift3d":
+                return self._json(stage.lift_piece_3d(job, parts[2]))
+            if head == "rehearse" and len(parts) == 2:
+                run = stage.start_rehearsal(job, body)
+                return self._json({"rehearsal_id": run.id})
+            if head == "rehearsal" and len(parts) == 5 and parts[3] == "finish":
+                run = stage.run(job, parts[2])
+                if run is None or run.state != "done":
+                    return self._json({"error": "no finished rehearsal"}, 404)
+                return self._json(stage.finish(job, run, parts[4], body))
+        except KeyError as exc:
+            return self._json({"error": str(exc).strip("'")}, 404)
+        except ValueError as exc:
+            return self._json({"error": str(exc)}, 400)
+        except Exception as exc:  # noqa: BLE001
+            return self._json({"error": f"{type(exc).__name__}: {exc}"}, 500)
+        return self._json({"error": "not found"}, 404)
 
     def _body(self) -> dict:
         try:
@@ -1790,6 +1938,45 @@ PAGE = """<!doctype html>
   .lensbtn:hover { border-color: var(--line2); } .lensbtn:disabled { opacity: .5; cursor: default; }
   .lensbtn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
   .labelchips { display: flex; flex-wrap: wrap; gap: 8px; }
+  /* -- the stage -- */
+  .st_grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-top: 10px; }
+  .st_grid2 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-top: 12px; }
+  @media (max-width: 1000px) { .st_grid, .st_grid2 { grid-template-columns: 1fr; } }
+  .st_list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+  .st_row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+  .st_row input, .st_row select { background: var(--surface2); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; font: inherit; font-size: 13px; }
+  .st_runrow label input { margin-left: 4px; }
+  .st_runrow a { color: var(--mute); font-size: 12.5px; }
+  .st_runrow .primary { margin-left: auto; }
+  .st_actor, .st_piece { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: var(--surface2); font-size: 13px; }
+  .st_piece { justify-content: space-between; }
+  .st_head { width: 44px; height: 44px; border-radius: 8px; object-fit: cover; flex: none; display: block; }
+  .st_blank { opacity: .55; }
+  .st_actorbody { flex: 1; }
+  .st_acts { display: flex; gap: 8px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
+  .st_file { font-size: 12px; color: var(--dim); border: 1px dashed var(--line); border-radius: 8px; padding: 2px 8px; cursor: pointer; }
+  .st_file input { display: none; }
+  .st_x { background: none; border: 1px solid var(--line); color: var(--mute); border-radius: 8px; padding: 1px 8px; cursor: pointer; font: inherit; }
+  .st_tag { display: inline-block; font-size: 10.5px; letter-spacing: .05em; text-transform: uppercase; color: #c9b8ff; border: 1px dashed var(--line); border-radius: 999px; padding: 1px 7px; margin-left: 4px; }
+  .st_nudge { display: grid; grid-template-columns: repeat(4, 30px); gap: 4px; align-content: start; }
+  .st_nudge button { background: var(--surface); border: 1px solid var(--line); color: var(--ink); border-radius: 6px; padding: 3px 0; font: inherit; font-size: 12px; cursor: pointer; }
+  .st_nudge [data-reset], .st_nudge .lensbtn, .st_nudge .st_x { grid-column: span 2; }
+  .st_moved { color: var(--warn); font-size: 12.5px; }
+  .st_planbox svg { width: 100%; height: auto; }
+  .st_log { font: 12px/1.7 ui-monospace, Menlo, monospace; color: var(--dim); max-height: 160px; overflow-y: auto; margin-top: 8px; }
+  .st_head2 { display: flex; justify-content: space-between; align-items: baseline; margin: 16px 0 8px; font-size: 14px; }
+  .st_head2 span { color: var(--dim); font-size: 12.5px; }
+  .st_framerow { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 1000px) { .st_framerow { grid-template-columns: 1fr; } }
+  .st_framerow img { width: 100%; border-radius: 10px; display: block; background: #0a0c0f; }
+  .st_strip { display: flex; gap: 6px; overflow-x: auto; padding: 6px 0; }
+  .st_strip img { height: 64px; border-radius: 6px; cursor: pointer; opacity: .7; border: 2px solid transparent; }
+  .st_strip img.active { opacity: 1; border-color: var(--accent); }
+  .st_shot { border-top: 1px solid var(--line); padding: 8px 0; font-size: 13px; }
+  .st_shot:first-child { border-top: 0; }
+  .st_links { display: flex; gap: 18px; margin-top: 10px; font-size: 12.5px; }
+  .st_links a { color: var(--mute); }
+  #st_blocking svg { width: 100%; height: auto; }
   .chip { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--line); border-radius: 999px;
           padding: 4px 6px 4px 11px; font-size: 13px; background: var(--surface2); cursor: default; }
   .chip.model { border-style: dashed; color: #c9b8ff; }
@@ -2159,6 +2346,51 @@ PAGE = """<!doctype html>
       </div>
     </section>
 
+    <section id="stage">
+      <div class="sechead">
+        <div class="sub"><h2>Rehearse the scene in this room</h2>
+          <p>Cast it at real heights, move the furniture and watch the shot table change, then play the scene: actors walk the measured floor, lines take their time, the camera rides a dolly that fits, the sun is where the ephemeris puts it. The shoot day falls out.</p></div>
+      </div>
+      <div class="dim" id="st_status"></div>
+      <div class="st_grid">
+        <div class="panelbox"><h4>Cast</h4>
+          <div id="st_cast" class="st_list"></div>
+          <div class="st_row"><input id="st_name" placeholder="name"><input id="st_height" type="number" step="0.01" min="1.2" max="2.2" placeholder="height, m"><button id="st_add" class="lensbtn">Add</button></div>
+          <div class="dim" id="st_caststatus"></div>
+        </div>
+        <div class="panelbox"><h4>Set pieces</h4>
+          <div class="st_row"><select id="st_liftsel"></select><button id="st_lift" class="lensbtn">Lift into a set piece</button></div>
+          <div id="st_pieces" class="st_list"></div>
+          <div class="dim" id="st_piecestatus"></div>
+        </div>
+        <div class="panelbox st_planbox"><h4>The room as dressed</h4><div id="st_plan"></div></div>
+      </div>
+      <div class="panelbox" style="margin-top:12px">
+        <textarea id="st_scene" rows="7" placeholder="Paste the scene, or type beats: MARKS: A=(0.4,0.8) ... CAST: Maya=1.68 ... 1. Maya enters at A ..."></textarea>
+        <div class="st_row st_runrow">
+          <label class="dim">shoot date <input id="st_date" type="date"></label>
+          <label class="dim">first frame <input id="st_start" type="time" value="09:00"></label>
+          <label class="dim">minutes per setup <input id="st_setup" type="number" value="25" min="5" max="120" style="width:64px"></label>
+          <a id="st_example_typed" href="#">typed example</a><a id="st_example_prose" href="#">prose example</a>
+          <button id="st_run" class="primary">Rehearse the scene</button>
+        </div>
+        <div id="st_prev" class="hidden dim"></div>
+        <div id="st_log" class="st_log"></div>
+      </div>
+      <div id="st_out" class="hidden">
+        <div id="st_head" class="st_head2"></div>
+        <div id="st_frame"></div>
+        <div class="st_row"><button id="st_play" class="lensbtn">Play</button><input id="st_scrub" type="range" min="0" max="0" value="0" style="flex:1"></div>
+        <div id="st_strip" class="st_strip"></div>
+        <div class="st_grid2">
+          <div class="panelbox"><h4>Setups</h4><div id="st_shots"></div><div id="st_problems"></div></div>
+          <div class="panelbox"><div id="st_sched"></div><div id="st_notes"></div></div>
+          <div class="panelbox"><h4>Blocking</h4><div id="st_blocking"></div></div>
+        </div>
+        <div id="st_links" class="st_links"></div>
+      </div>
+    </section>
+
     <section id="coverage">
       <div class="sechead">
         <div class="sub"><h2>Describe the scene</h2>
@@ -2385,6 +2617,7 @@ function show(id, s) {
   initCoverage(id, s);
   initPackage(id);
   initLabels(id);
+  if (typeof initStage === 'function') initStage(id);
   $('send').onclick = ask;
   $('ask').onkeydown = e => { if (e.key === 'Enter') ask(); };
 }
@@ -3128,4 +3361,5 @@ function initGalBtn(id) {
   });
 })();
 </script>
+<script src="/stage.js"></script>
 """
