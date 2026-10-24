@@ -165,6 +165,9 @@ function loadRuns() {
     box.innerHTML = '<span class="dim">earlier:</span> ' + stRuns.filter(x => x.state === 'done').map(x =>
       '<a href="#" data-run="' + x.rehearsal_id + '">' + esc(x.title) + ' · ' + x.shots + ' setups · ' + Math.round(x.duration_s || 0) + ' s</a>').join(' ');
     box.querySelectorAll('[data-run]').forEach(a => a.onclick = e => { e.preventDefault(); openRun(a.dataset.run); });
+    // Coming back to a room shows its last rehearsal without a click.
+    const done = stRuns.filter(x => x.state === 'done');
+    if (!stCurrent && done.length) openRun(done[done.length - 1].rehearsal_id);
   }).catch(() => {});
 }
 
@@ -228,7 +231,7 @@ function renderRun() {
     const st = s.setup || {};
     const probs = (s.problems || []).length ? '<div class="relax">' + s.problems.map(esc).join('; ') + '</div>' : '';
     const sizes = (s.sizes || []).map(z => esc(z.name || z.size) + ' ' + Number(z.from).toFixed(1) + '–' + Number(z.to).toFixed(1) + ' s').join(', ');
-    return '<div class="st_shot"><b>Shot ' + s.number + '</b> · ' + Math.round(st.focal_mm || 0) + ' mm at ' + Number(st.height_m || 0).toFixed(2) + ' m on ' + esc(st.subject || '') + (st.dolly_to ? ' · dolly' : '')
+    return '<div class="st_shot"><b>Shot ' + s.number + '</b> · ' + Math.round(st.focal_mm || 0) + ' mm at ' + Number(st.cam_z || 0).toFixed(2) + ' m on ' + esc(st.subject || '') + (st.dolly_to ? ' · dolly' : '')
       + ' · ' + Number(s.t_start).toFixed(1) + '–' + Number(s.t_end).toFixed(1) + ' s<div class="dim">' + sizes + '</div>' + probs + '</div>';
   }).join('') || '<div class="dim">no camera in this scene: add [cam …] to a beat, or let the breakdown choose</div>';
   // placements that failed

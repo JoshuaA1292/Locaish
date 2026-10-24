@@ -34,6 +34,55 @@ catalogue dimension. The twin grades its own accuracy and the package says,
 in plain words, how far to trust the metres. Nothing is estimated by a
 language model; the model plans and reviews, the geometry answers.
 
+## The Rehearsal (Meta Global AI Developer Hackathon, Oct 26 to Nov 4 2026)
+
+**Shoot the scene before you book the room.** The twin stops being a thing
+you look at and becomes a thing you run. On the studio page, under *Rehearse
+the scene in this room*:
+
+- **Cast it.** An actor is a name and a real height; a headshot optionally
+  becomes a body mesh (SAM 3D Body on Modal) scaled to that height. The sweep,
+  the eyeline and the frame use the real stature, not a 1.75 m stand-in.
+- **The room becomes a set.** A labelled sofa, table or fridge lifts into a
+  movable solid made of the scan's own returns (walls, floor, ceiling and door
+  reveals excluded). Nudge it and the standable floor, the occupancy grid and
+  the shot table are re-swept: *a 50 mm close-up that had no clear setup now
+  has 14*. SAM 3D Objects can replace the points with a textured splat fitted
+  to the measured footprint. Does it come through the door: checked.
+- **Rehearse it.** Paste the scene. Muse Spark breaks it into beats on the
+  sweep's own marks and shot requests by kind; every shot is placed from a
+  scored row of the shot table; a push-in becomes a dolly the engine checks
+  beat by beat. Actors walk A* routes on the measured floor at walking pace,
+  lines take the time they take, the camera holds or rides, and the sun is
+  tagged from the ephemeris at the shoot hour. Out come an animatic rendered
+  from the twin's gaussian field with the cast drawn in, a blocking diagram,
+  a typed call sheet, and the shoot day laid out so every window-dependent
+  shot sits inside its window's direct sun. A typed scene needs no model.
+- **Finish the frame.** Muse Image turns any animatic frame photoreal from
+  the cast's headshots, and stamps it *render, not a measurement*.
+- **Scan through a crowd.** SAM 3.1 masks people, pets and vehicles out of
+  the camera solve, and the people it saw become a fourth scale anchor under
+  an adult stature prior, fused the same inverse-variance way as the other
+  three so disagreement can only widen the bar.
+
+Meta's models do every job that reads, names, judges or plans: Muse Spark
+(`locaish/meta/vision.py`, the breakdown, the DP review), Muse Wonder (the
+scout and planner agents through `locaish/meta/adk.py`), Muse Image
+(`locaish/meta/finish.py`), SAM 3.1 (`locaish/meta/masks.py`) and the
+open-weight SAM 3D models on Modal (`locaish/meta/sam3d.py`,
+`docs/SAM3D_MODAL.md`). The reconstruction stays geometry; nothing a model
+says becomes a measurement except the stature anchor, through the fusion.
+Gemini remains available behind `LOCAISH_AGENT_PROVIDER` and
+`LOCAISH_VISION_PROVIDER`. The engine is `locaish/film/rehearsal.py`; the
+agent is `locaish/agent/rehearsal.py`; the studio's stage is
+`locaish/product/stage.py`. Plan and status: [docs/META_HACKATHON.md](docs/META_HACKATHON.md).
+
+```bash
+export META_API_KEY=...            # Muse Spark, Muse Wonder, Muse Image, SAM 3.1
+export LOCAISH_SAM3D_URL=... LOCAISH_SAM3D_TOKEN=...   # optional: modal deploy locaish/meta/modal_app.py
+locaish studio                     # the stage appears under every finished twin
+```
+
 ## The problem
 
 A location scout's day rate exists because someone has to physically stand in

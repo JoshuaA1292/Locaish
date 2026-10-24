@@ -2126,6 +2126,14 @@ PAGE = """<!doctype html>
            border-radius: 10px; padding: 12px 14px; font: 14px/1.6 ui-sans-serif, system-ui, sans-serif;
            outline: none; resize: vertical; min-height: 124px; }
   #brief:focus { border-color: var(--accent); }
+  #st_scene { width: 100%; background: var(--bg); color: var(--ink); border: 1px solid var(--line);
+              border-radius: 10px; padding: 12px 14px; font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+              outline: none; resize: vertical; min-height: 150px; box-sizing: border-box; }
+  #st_scene:focus { border-color: var(--accent); }
+  #st_run { background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 10px; padding: 10px 22px;
+            font: inherit; font-weight: 600; cursor: pointer; }
+  #st_run:hover { filter: brightness(1.08); }
+  #st_run:disabled { opacity: .5; cursor: default; }
   #planrow { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
   #modenote { color: var(--mute); font-size: 12.5px; flex: 1; min-width: 200px; }
   #example { color: var(--dim); font-size: 12.5px; text-decoration: none; border-bottom: 1px dotted var(--line2); }

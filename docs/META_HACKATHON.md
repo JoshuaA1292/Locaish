@@ -91,6 +91,32 @@ GPU time.
 Close on the sentence: *every number on screen traces to a measurement, a solar
 ephemeris, or a catalogue; the models planned and judged, the geometry answered.*
 
+## Status, 24 October (before the window opens)
+
+Built on branch `meta-hackathon`, 458 tests green, nothing run against a live
+Meta key or a deployed Modal endpoint yet:
+
+| Piece | Where | State |
+|---|---|---|
+| Meta Model API client, fake for tests | `locaish/meta/client.py` | done; wire format unverified live |
+| Muse Spark/Wonder as ADK models; provider switch | `locaish/meta/adk.py`, `locaish/agent/core.py`, `agent/coverage.py` | done; `tool_choice=auto` only |
+| Muse Spark vision: labels, cross-check, DP review | `locaish/meta/vision.py`, `product/labels.py`, `scan/semantic.py` | done |
+| SAM 3.1 mover masks into COLMAP; frame drops; cache keys | `locaish/meta/masks.py`, `video/colmap.py`, `video/reconstruct.py` | done; mask wire shape unverified |
+| Stature scale anchor from the people seen | `locaish/meta/stature.py`, `video/metric.py`, `video/reconstruct.py` | done, fused with sanity window against consensus |
+| Cast with real heights, capsule or SAM 3D Body figure | `locaish/product/cast.py` | done |
+| Set pieces lifted from the scan, moved, re-swept, door fit | `locaish/product/setpieces.py` | done; 1 to 7 % of truth on fixtures, 1.81 x 0.89 x 0.76 m sofa on a real scan |
+| SAM 3D Objects and Body on Modal; fit to footprint; body npz | `locaish/meta/sam3d.py`, `meta/modal_app.py`, `docs/SAM3D_MODAL.md` | written, not deployed (needs Modal account, HF gate approval) |
+| Rehearsal engine: blocking, timing, camera, dolly check, sun, schedule, animatic, blocking SVG, call sheet | `locaish/film/rehearsal.py` | done, deterministic |
+| Muse Spark breakdown, placement from the shot table, notes | `locaish/agent/rehearsal.py` | done against a scripted model |
+| Muse Image frame finishing, stamped | `locaish/meta/finish.py` | done; endpoint path unverified |
+| Studio stage: routes, page, animatic scrubber, finish button | `locaish/product/stage.py`, `locaish/viewer/stage.js`, `serve.py` | done, screenshot-verified on a real room |
+
+**Next, in order:** get a META_API_KEY and run the vision, breakdown and
+finish paths live (fix wire shapes); deploy the Modal app and lift one sofa
+and one body; film the crowd clip; record the demo; the ClickHouse path for
+the dressed room's sweep (today the dressed sweep is in memory); drag set
+pieces in the 3D viewer rather than nudge buttons.
+
 ## Build plan (ten days, one person plus Claude)
 
 | Day | Deliverable | Notes |

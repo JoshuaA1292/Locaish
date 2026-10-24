@@ -524,7 +524,7 @@ def write_notes(rehearsal: reh.Rehearsal, sched: reh.Schedule | None, placements
     facts = [f"running time {rehearsal.duration_s:.0f} s over {len(rehearsal.scene.beats)} beats, {len(rehearsal.shots)} setups"]
     for s in rehearsal.shots:
         st = s.setup
-        facts.append(f"shot {s.number}: {st.get('size') or ''} {st.get('focal_mm', 0):.0f} mm at {st.get('height_m', 0):.2f} m"
+        facts.append(f"shot {s.number}: {st.get('shot_size') or ''} {st.get('focal_mm', 0):.0f} mm at {st.get('cam_z', 0):.2f} m on {st.get('subject', '')}"
                      + (f"; problems: {'; '.join(s.problems)}" if s.problems else ""))
     for p in placements:
         if not p.get("placed"):
