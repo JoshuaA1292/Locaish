@@ -21,10 +21,11 @@ residual derived from its own subject reads zero and cannot fail.
 The check is advisory. It can warn, it cannot fail a twin: a model reading six
 frames is evidence, not a measurement, and the report says which is which.
 
-Compliance note: this pipeline is bound (Agentic Cinema rules) to Google Cloud
-AI tools only. The one model called here is Gemini via `google-genai`; if that
-SDK or a `GEMINI_API_KEY`/`GOOGLE_API_KEY` is absent the module declines
-quietly and the pipeline runs exactly as before.
+Provider note: the model behind the check is whatever `meta.vision.provider()`
+names -- Muse Spark through the Meta Model API by default, Gemini via
+`google-genai` as the alternative. The prompt is the same for both. When
+neither has a key the module declines quietly and the pipeline runs exactly
+as before; the observation's `model` field says which one answered.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from ..meta import vision as _vision
 from ..types import Twin
 
 #: Frames sent per cross-check. Six evenly spaced frames cover a sweep's arc
@@ -69,14 +71,9 @@ when you genuinely cannot tell. Do not include any text outside the JSON.
 
 
 def available() -> bool:
-    """Whether a cross-check could run at all: key present, SDK importable."""
-    if not (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")):
-        return False
-    try:
-        from google import genai  # noqa: F401
-    except Exception:
-        return False
-    return True
+    """Whether a cross-check could run at all: the chosen provider has a key
+    (and, for Gemini, an importable SDK)."""
+    return _vision.available()
 
 
 def _pick_frames(frames_dir: Path, count: int = MAX_FRAMES) -> list[Path]:
@@ -93,10 +90,18 @@ def _pick_frames(frames_dir: Path, count: int = MAX_FRAMES) -> list[Path]:
     return [frames[i] for i in dict.fromkeys(idx)]
 
 
-def crosscheck(frames_dir: str | Path, *, model: str | None = None) -> dict[str, Any] | None:
-    """Ask Gemini to read the room off the frames. Returns the observation
-    dict, or None when there was nothing to ask about.
+def crosscheck(
+    frames_dir: str | Path,
+    *,
+    model: str | None = None,
+    client: Any = None,
+    provider: str | None = None,
+) -> dict[str, Any] | None:
+    """Ask the vision provider to read the room off the frames. Returns the
+    observation dict, or None when there was nothing to ask about.
 
+    `provider` defaults to `meta.vision.provider()`; `client` is a
+    `MetaClient` or `genai.Client` to reuse (the tests hand in a fake).
     Raises on API failure; the caller treats the whole check as best-effort.
     """
     frames_dir = Path(frames_dir)
@@ -106,10 +111,16 @@ def crosscheck(frames_dir: str | Path, *, model: str | None = None) -> dict[str,
     if len(frames) < 2:
         return None
 
+    prov = provider or _vision.provider()
+    if prov == "meta":
+        return _vision.crosscheck_frames([p.read_bytes() for p in frames], client=client, model=model)
+    if prov != "gemini":
+        raise ValueError("no vision model is configured (set META_API_KEY, or GOOGLE_API_KEY for Gemini)")
+
     from google import genai
     from google.genai import types as gtypes
 
-    client = genai.Client()
+    client = client or genai.Client()
     parts: list[Any] = [
         gtypes.Part.from_bytes(
             data=p.read_bytes(),
@@ -118,8 +129,9 @@ def crosscheck(frames_dir: str | Path, *, model: str | None = None) -> dict[str,
         for p in frames
     ]
     parts.append(_PROMPT)
+    model_id = model or os.environ.get("LOCAISH_GEMINI_MODEL", DEFAULT_MODEL)
     response = client.models.generate_content(
-        model=model or os.environ.get("LOCAISH_GEMINI_MODEL", DEFAULT_MODEL),
+        model=model_id,
         contents=parts,
         config=gtypes.GenerateContentConfig(
             response_mime_type="application/json",
@@ -130,10 +142,18 @@ def crosscheck(frames_dir: str | Path, *, model: str | None = None) -> dict[str,
     data = json.loads(raw)
     if not isinstance(data, dict):
         raise ValueError(f"Gemini returned {type(data).__name__}, not an object")
+    return observation(data, model=f"gemini:{model_id}", frames_used=len(frames))
 
+
+def observation(data: dict[str, Any], *, model: str, frames_used: int) -> dict[str, Any]:
+    """The model's raw JSON as the observation the QA report records.
+
+    Shared by both providers so the comparison in `apply` never learns which
+    one answered; `model` is "provider:id" and is the only place that says.
+    """
     return {
-        "model": model or os.environ.get("LOCAISH_GEMINI_MODEL", DEFAULT_MODEL),
-        "frames_used": len(frames),
+        "model": model,
+        "frames_used": int(frames_used),
         "room_type": str(data.get("room_type") or "other"),
         "window_count": _int_or_none(data.get("window_count")),
         "door_count": _int_or_none(data.get("door_count")),
@@ -157,8 +177,16 @@ def _float_or_none(v: Any) -> float | None:
         return None
 
 
+def who(observation: dict[str, Any]) -> str:
+    """The name the QA report quotes: "Muse Spark", "Gemini", or a neutral
+    phrase for an observation recorded before the field carried a provider."""
+    model = str(observation.get("model") or "")
+    prov = model.split(":", 1)[0] if ":" in model else ("gemini" if model.startswith("gemini") else "")
+    return _vision.DISPLAY_NAMES.get(prov, "the vision model") if prov else "the vision model"
+
+
 def apply(twin: Twin, observation: dict[str, Any]) -> None:
-    """Compare Gemini's reading with the geometry and record the verdicts.
+    """Compare the vision model's reading with the geometry and record the verdicts.
 
     Adds `semantic_*` checks to the twin's QA report -- info when the two
     agree, warn when they plainly do not -- and re-finalises the report.
@@ -167,6 +195,7 @@ def apply(twin: Twin, observation: dict[str, Any]) -> None:
     """
     struct = twin.structure
     checks: list[tuple[str, str, str]] = []
+    name = who(observation)
 
     geo_windows = sum(1 for o in struct.openings if o.kind == "window")
     geo_doors = sum(1 for o in struct.openings if o.kind == "door")
@@ -179,7 +208,7 @@ def apply(twin: Twin, observation: dict[str, Any]) -> None:
                 (
                     "semantic_openings",
                     "warn",
-                    f"The geometry reports {geo_windows} window(s) but Gemini "
+                    f"The geometry reports {geo_windows} window(s) but {name} "
                     f"sees {seen_windows} in the frames; a window the pictures "
                     "do not show is usually a gap in the returns wearing a "
                     "window's shape.",
@@ -190,7 +219,7 @@ def apply(twin: Twin, observation: dict[str, Any]) -> None:
                 (
                     "semantic_openings",
                     "info",
-                    f"Gemini sees {seen_windows} window(s) where the geometry "
+                    f"{name} sees {seen_windows} window(s) where the geometry "
                     f"found {geo_windows}; glass returns poorly, so a missed "
                     "window is expected rather than alarming.",
                 )
@@ -219,7 +248,7 @@ def apply(twin: Twin, observation: dict[str, Any]) -> None:
             (
                 "semantic_ceiling",
                 status,
-                f"The measured ceiling is {height:.2f} m; Gemini's eyeball "
+                f"The measured ceiling is {height:.2f} m; {name}'s eyeball "
                 f"estimate from the frames is {est:.1f} m"
                 + (
                     ", which is close enough to corroborate the scale."
@@ -236,7 +265,7 @@ def apply(twin: Twin, observation: dict[str, Any]) -> None:
             (
                 "semantic_capture",
                 "info",
-                "Gemini flags the footage itself: " + "; ".join(issues) + ".",
+                f"{name} flags the footage itself: " + "; ".join(issues) + ".",
             )
         )
 
@@ -246,4 +275,4 @@ def apply(twin: Twin, observation: dict[str, Any]) -> None:
         twin.qa.finalize()
 
 
-__all__ = ["available", "crosscheck", "apply", "MAX_FRAMES", "DEFAULT_MODEL"]
+__all__ = ["available", "crosscheck", "observation", "who", "apply", "MAX_FRAMES", "DEFAULT_MODEL"]

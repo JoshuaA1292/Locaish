@@ -75,6 +75,19 @@ DOOR_MIN_ASPECT = 1.5
 DOOR_MAX_ASPECT = 3.5
 DOOR_MIN_CONFIDENCE = 0.3
 
+# Adult stature, both sexes, as a population assumption rather than a
+# measurement: a mean of about 1.70 m with a one-sigma spread of roughly
+# +/-9 cm (women about 1.62 m, men about 1.76 m, each scattering 6-7 cm; the
+# mixture is wider than either). It is an anchor only because it shares no
+# evidence with the others -- the phone's height, a door leaf and a depth
+# network know nothing about who walked through the scan. The window below is
+# the range outside which a detection is not a standing adult at all: a child,
+# a seated person, a mannequin's torso or a mask that bled into the ceiling.
+STATURE_MEAN_M = 1.70
+STATURE_LOG_SIGMA = 0.055
+STATURE_MIN_M = 0.9
+STATURE_MAX_M = 2.3
+
 # Sanity envelope on the camera-height estimator. Outside this the recovered
 # height is not a person holding a phone -- it is a bad floor estimate, or a
 # capture where the floor was never seen.
@@ -245,6 +258,80 @@ def scale_from_doors(openings, current_factor: float) -> ScaleEstimate | None:
         per_frame=[float(h) for h in heights],
         frames_used=len(heights),
         warnings=[],
+    )
+
+
+def scale_from_stature(
+    heights_units: list[float],
+    *,
+    per_reading_log_sigma: float = 0.08,
+    current_factor: float | None = None,
+) -> ScaleEstimate | None:
+    """Find the factor from the height of the people who walked through the scan.
+
+    The fourth anchor. Each reading is the apparent height of a standing
+    person in *reconstruction units* (see `locaish.meta.stature.height_readings`,
+    which produces them), so metres per unit is simply the population's mean
+    stature over that height. Readings are pooled in log space by their median,
+    and the error bar has three parts added in quadrature: the population
+    prior (`STATURE_LOG_SIGMA`, carried as `prior_bias` like the other anchors'
+    priors), the per-reading measurement noise shrunk by the square root of the
+    count, and the robust spread actually observed between the readings. A
+    crowd that disagrees with itself widens its own bar; it never narrows the
+    prior.
+
+    Fewer than two readings returns None: one person seen once is a sighting,
+    not a distribution. When `current_factor` -- the best metres-per-unit so
+    far -- is given, readings that would make a person shorter than
+    `STATURE_MIN_M` or taller than `STATURE_MAX_M` are dropped and counted in
+    `frames_rejected`, since those are children, seated people or bad masks,
+    not adults standing up.
+    """
+    readings = [float(h) for h in heights_units if h is not None and math.isfinite(float(h)) and float(h) > 0]
+    rejected = 0
+    if current_factor is not None and current_factor > 0:
+        kept = []
+        for h in readings:
+            if STATURE_MIN_M <= h * current_factor <= STATURE_MAX_M:
+                kept.append(h)
+            else:
+                rejected += 1
+        readings = kept
+    if len(readings) < 2:
+        return None
+
+    heights = np.array(readings, dtype=np.float64)
+    logs = np.log(STATURE_MEAN_M / heights)
+    med = float(np.median(logs))
+    mad = float(np.median(np.abs(logs - med)) * 1.4826)
+    measured = float(math.hypot(per_reading_log_sigma / math.sqrt(len(heights)), mad))
+    total = float(math.hypot(measured, STATURE_LOG_SIGMA))
+
+    warnings: list[str] = []
+    if rejected:
+        warnings.append(
+            f"{rejected} of {rejected + len(heights)} stature readings implied a "
+            f"person outside {STATURE_MIN_M}-{STATURE_MAX_M} m under the current "
+            "scale and were dropped as not a standing adult"
+        )
+    if mad > 0.15:
+        warnings.append(
+            f"the {len(heights)} stature readings scatter by +/-{np.expm1(mad):.0%} "
+            "among themselves; the people seen were not all standing, not all "
+            "fully in frame, or not all the same height, and the anchor is "
+            "weighted accordingly"
+        )
+
+    return ScaleEstimate(
+        factor=float(math.exp(med)),
+        confidence=_confidence(total),
+        log_spread=measured,
+        source="stature",
+        prior_bias=STATURE_LOG_SIGMA,
+        per_frame=[float(STATURE_MEAN_M / h) for h in heights],
+        frames_used=len(heights),
+        frames_rejected=rejected,
+        warnings=warnings,
     )
 
 

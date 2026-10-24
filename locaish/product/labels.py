@@ -36,6 +36,7 @@ from typing import Any
 
 import numpy as np
 
+from ..meta import vision as _vision
 from ..types import Twin
 
 #: How a labelled thing is classed, for the floor plan and the package.
@@ -407,20 +408,44 @@ def confirm_label(workdir: Path, label_id: str, *, label: str | None = None, kin
 # ---------------------------------------------------------------------------
 
 
-def gemini_available() -> bool:
-    if not (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-            or os.environ.get("GOOGLE_GENAI_USE_VERTEXAI")):
-        return False
-    try:
-        from google import genai  # noqa: F401
-    except Exception:  # noqa: BLE001
-        return False
-    return True
+#: Sources a model writes. Anything else on a label is a person's word.
+MODEL_SOURCES = _vision.MODEL_PROVIDERS
 
 
-def detect_in_frame(path: Path, *, model: str | None = None, client=None) -> list[dict]:
+def vision_available() -> bool:
+    """Whether the chosen vision provider (`meta.vision.provider()`) can run."""
+    return _vision.available()
+
+
+#: The name this check had when Gemini was the only provider; kept so older
+#: callers keep working. It answers for whichever provider is chosen now.
+gemini_available = vision_available
+
+
+def _model_name(provider: str, model: str | None) -> str:
+    if provider == "meta":
+        from ..meta import model_for
+
+        return model or model_for("vision")
+    return model or DEFAULT_MODEL
+
+
+def detect_in_frame(path: Path, *, model: str | None = None, client=None,
+                    provider: str | None = None) -> list[dict]:
     """Ask the vision model what is in one frame. Boxes are 0-1000 normalised
-    [ymin, xmin, ymax, xmax] in the frame as stored on disk."""
+    [ymin, xmin, ymax, xmax] in the frame as stored on disk.
+
+    `provider` is "meta" or "gemini" (default: whatever `meta.vision` chose);
+    `client` is that provider's client to reuse across frames."""
+    provider = provider or _vision.provider()
+    if provider == "meta":
+        return _vision.detect_objects(Path(path).read_bytes(), client=client, model=model)
+    if provider != "gemini":
+        raise ValueError("no vision model is configured (set META_API_KEY, or GOOGLE_API_KEY for Gemini)")
+    return _detect_in_frame_gemini(Path(path), model=model, client=client)
+
+
+def _detect_in_frame_gemini(path: Path, *, model: str | None = None, client=None) -> list[dict]:
     from google import genai
     from google.genai import types as gtypes
 
@@ -479,26 +504,39 @@ def merge(detections: list[dict]) -> list[dict]:
 
 
 def detect(workdir: Path, twin: Twin, *, frames: PosedFrames | None = None, tree=None,
-           max_frames: int = DETECT_FRAMES, model: str | None = None, progress=None) -> dict:
+           max_frames: int = DETECT_FRAMES, model: str | None = None, progress=None,
+           client=None, provider: str | None = None) -> dict:
     """The semantic pass: name what the frames show, place it in the room,
-    and record it as provisional. Replaces earlier model labels, keeps
-    every label a person gave."""
+    and record it as provisional. Replaces earlier model labels -- from any
+    provider -- and keeps every label a person gave.
+
+    `provider` and `client` default to the configured vision provider and a
+    fresh client for it; the tests pass "meta" and a `FakeMetaClient`."""
     frames = frames or load_frames(workdir, twin)
     if frames is None:
         raise ValueError("this twin has no posed frames to look at (scan-file twins carry no pictures)")
-    if not gemini_available():
-        raise ValueError("no vision model is configured (set GOOGLE_API_KEY or Vertex credentials)")
-    from google import genai
+    provider = provider or _vision.provider()
+    if provider not in MODEL_SOURCES or (client is None and not _vision.configured_for(provider)):
+        raise ValueError("no vision model is configured (set META_API_KEY, or GOOGLE_API_KEY for Gemini)")
+    if client is None:
+        if provider == "meta":
+            from ..meta import MetaClient
+
+            client = MetaClient()
+        else:
+            from google import genai
+
+            client = genai.Client()
+    model_name = _model_name(provider, model)
 
     tree = tree if tree is not None else surface_tree(twin)
-    client = genai.Client()
     picks = frames.spread(max_frames)
     detections, raw = [], 0
     for n, i in enumerate(picks, 1):
         if progress:
             progress(f"looking at frame {n} of {len(picks)}")
         try:
-            found = detect_in_frame(frames.paths[i], model=model, client=client)
+            found = detect_in_frame(frames.paths[i], model=model, client=client, provider=provider)
         except Exception as exc:  # noqa: BLE001 - one bad frame is not a failed pass
             if progress:
                 progress(f"frame {frames.names[i]}: {type(exc).__name__}: {exc}")
@@ -513,7 +551,7 @@ def detect(workdir: Path, twin: Twin, *, frames: PosedFrames | None = None, tree
                                       (f["box"][0] + f["box"][2]) / 2000.0 * frames.size[1]]})
     merged = merge(detections)
     with _LOCK:
-        kept = [l for l in load_labels(workdir) if l.get("source") != "gemini"]
+        kept = [l for l in load_labels(workdir) if l.get("source") not in MODEL_SOURCES]
         for g in merged:
             # A thing a person already named within reach is not re-added.
             if any(np.linalg.norm(np.asarray(k["xyz"]) - np.asarray(g["xyz"])) < MERGE_M for k in kept):
@@ -521,13 +559,13 @@ def detect(workdir: Path, twin: Twin, *, frames: PosedFrames | None = None, tree
             kept.append({
                 "id": uuid.uuid4().hex[:8], "label": g["label"],
                 "kind": g["kind"] if g["kind"] in KINDS else "other",
-                "xyz": [round(float(v), 3) for v in g["xyz"]], "source": "gemini",
+                "xyz": [round(float(v), 3) for v in g["xyz"]], "source": provider,
                 "frame": g["frames"][0], "uv": [round(float(v), 1) for v in g["uv"]],
                 "note": "", "confidence": g["n"], "created_at": _now(),
             })
         save_labels(workdir, kept)
     return {"frames_looked_at": len(picks), "detections": raw, "placed": len(detections),
-            "objects": len(merged), "labels": kept, "model": model or DEFAULT_MODEL}
+            "objects": len(merged), "labels": kept, "model": model_name, "provider": provider}
 
 
 # ---------------------------------------------------------------------------

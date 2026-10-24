@@ -349,6 +349,35 @@ def matching_type(config: dict) -> str:
     return f"{base}_LIGHTGLUE" if config["matcher"] == "lightglue" else f"{base}_BRUTEFORCE"
 
 
+def feature_extractor_command(
+    exe: str,
+    database: str | Path,
+    image_dir: str | Path,
+    config: dict,
+    *,
+    mask_dir: str | Path | None = None,
+) -> list[str]:
+    """The whole `feature_extractor` invocation, as a list a test can read.
+
+    `mask_dir` holds one `<image name>.png` per frame in COLMAP's convention
+    (zero = ignore); with it, keypoints are never detected on the people and
+    vehicles that moved through the sweep (see `locaish.meta.masks`).
+    """
+    cmd = [
+        exe, "feature_extractor",
+        "--database_path", str(database),
+        "--image_path", str(image_dir),
+        # One physical camera shot the whole clip, so its intrinsics are one
+        # unknown solved from every frame at once rather than N unknowns
+        # solved from one frame each.
+        "--ImageReader.single_camera", "1",
+        "--ImageReader.camera_model", "SIMPLE_RADIAL",
+    ]
+    if mask_dir is not None:
+        cmd += ["--ImageReader.mask_path", str(mask_dir)]
+    return cmd + extraction_args(config)
+
+
 def build_vocab_tree(exe: str, database: Path, out: Path, progress=None) -> Path | None:
     """A loop-closure vocabulary from this sweep's own descriptors.
 
@@ -429,9 +458,16 @@ def run_sfm(
     overlap: int | None = None,
     reuse: bool = True,
     config: dict | None = None,
+    mask_dir: str | Path | None = None,
     progress=None,
 ) -> Path:
     """Feature-extract, match and map. Returns the sparse model directory.
+
+    `mask_dir`, when given, is passed to the feature extractor as
+    `--ImageReader.mask_path`: a `<frame>.png` per frame, black where the
+    detector must not look (movers, see `locaish.meta.masks`). The set of
+    masks rides in the reuse stamp beside the frames, so a workspace solved
+    without masks is not handed back to a run that has them.
 
     Sequential matching, not exhaustive: a video's correspondences are between
     frames near each other in time, and matching all pairs of 250 frames costs
@@ -470,6 +506,7 @@ def run_sfm(
             and stamped.get("solve_version") == SOLVE_VERSION
             and stamped.get("features", "sift") == cfg["features"]
             and stamped.get("matcher", "bruteforce") == cfg["matcher"]
+            and stamped.get("masks") == _masks_fingerprint(mask_dir)
         )
         if frames_match and models and any(_count_registered(m) > 0 for m in models):
             if progress:
@@ -485,17 +522,7 @@ def run_sfm(
     if progress:
         progress(f"colmap features ({cfg['features']})")
     _run(
-        [
-            exe, "feature_extractor",
-            "--database_path", str(database),
-            "--image_path", str(image_dir),
-            # One physical camera shot the whole clip, so its intrinsics are one
-            # unknown solved from every frame at once rather than N unknowns
-            # solved from one frame each.
-            "--ImageReader.single_camera", "1",
-            "--ImageReader.camera_model", "SIMPLE_RADIAL",
-            *extraction_args(cfg),
-        ],
+        feature_extractor_command(exe, database, image_dir, cfg, mask_dir=mask_dir),
         work_dir / "features.log",
         "feature_extractor",
     )
@@ -629,9 +656,20 @@ def run_sfm(
             "solve_version": SOLVE_VERSION,
             "features": cfg["features"],
             "matcher": cfg["matcher"],
+            "masks": _masks_fingerprint(mask_dir),
         })
     )
     return _largest_model(models)
+
+
+def _masks_fingerprint(mask_dir: str | Path | None) -> list[list] | None:
+    """Name and size of every mask PNG, or None for an unmasked solve."""
+    if mask_dir is None:
+        return None
+    d = Path(mask_dir)
+    if not d.is_dir():
+        return None
+    return sorted([f.name, f.stat().st_size] for f in d.iterdir() if f.suffix.lower() == ".png")
 
 
 def _model_dirs(sparse: Path) -> list[Path]:

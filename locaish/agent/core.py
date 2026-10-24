@@ -20,6 +20,13 @@ by `locaish.warehouse` over clickhouse-connect; the agent's own access is the
 official `mcp-clickhouse` server, read-only as it ships. The agent could not
 corrupt the table if it tried, and the judges can see the partner service on
 the wire rather than in a README.
+
+**The model is a deployment choice, not a code path.** The agents are written
+against ADK, which takes a model id or a model object, so the same scout runs
+on Gemini or on Meta's Muse models. `provider()` picks from
+`LOCAISH_AGENT_PROVIDER` (`auto`, `meta`, `gemini`; auto prefers Meta when a
+`META_API_KEY` is present), and `agent_model(job)` hands back whichever the
+deployment asked for. Every plan and review records which one answered.
 """
 
 from __future__ import annotations
@@ -42,9 +49,105 @@ from ..types import Twin
 APP_NAME = "locaish"
 DEFAULT_MODEL = os.environ.get("LOCAISH_GEMINI_MODEL", "gemini-3.6-flash")
 
+# The Gemini id per job. Each job gets its own model so a run is spread
+# across separate rate-limit buckets (the AI Studio free tier is five
+# requests a minute *per model*); on Vertex or a paid key the spread costs
+# nothing. All overridable per deployment.
+GEMINI_MODELS: dict[str, str] = {
+    "agent": DEFAULT_MODEL,                                                  # the scout
+    "planner": os.environ.get("LOCAISH_PLANNER_MODEL", DEFAULT_MODEL),       # places one shot
+    "breakdown": os.environ.get("LOCAISH_BREAKDOWN_MODEL", "gemini-3.5-flash"),
+    "vision": os.environ.get("LOCAISH_REVIEW_MODEL", "gemini-3.7-flash"),    # looks at a frame
+    "notes": os.environ.get("LOCAISH_NOTES_MODEL", "gemini-3.5-flash"),
+}
+
+# The same jobs on Meta's side, in the vocabulary of `locaish.meta.model_for`.
+# Muse Wonder is the agent; Muse Spark reads, writes and looks.
+META_JOBS: dict[str, str] = {
+    "agent": "agent",
+    "planner": "agent",
+    "breakdown": "breakdown",
+    "vision": "vision",
+    "reviewer": "vision",
+    "notes": "breakdown",
+}
+
+PROVIDERS = ("auto", "meta", "gemini")
+
 
 class AgentUnavailable(RuntimeError):
     """The agent cannot run: missing credentials, missing config, or a dead loop."""
+
+
+# ---------------------------------------------------------------------------
+# which model answers
+# ---------------------------------------------------------------------------
+
+
+def gemini_configured() -> bool:
+    """Whether Gemini can be reached at all, by either credential route."""
+    return bool(
+        os.environ.get("GOOGLE_API_KEY")
+        or os.environ.get("GOOGLE_GENAI_USE_VERTEXAI")
+        or os.environ.get("GOOGLE_GENAI_USE_ENTERPRISE")
+        or os.environ.get("GOOGLE_CLOUD_PROJECT")
+    )
+
+
+def provider() -> str:
+    """The model provider for this deployment: "meta" or "gemini".
+
+    `LOCAISH_AGENT_PROVIDER` names it outright; `auto` (the default) takes
+    Meta when a `META_API_KEY` is present and Gemini otherwise, so a box with
+    only Google credentials keeps working and one with a Meta key moves over
+    without a config change.
+    """
+    from .. import meta
+
+    choice = (os.environ.get("LOCAISH_AGENT_PROVIDER") or "auto").strip().lower()
+    if choice not in PROVIDERS:
+        raise AgentUnavailable(
+            f"LOCAISH_AGENT_PROVIDER={choice!r} is not one of {', '.join(PROVIDERS)}"
+        )
+    if choice == "auto":
+        return "meta" if meta.configured() else "gemini"
+    return choice
+
+
+def provider_configured() -> bool:
+    """Whether the selected provider has what it needs to be called."""
+    from .. import meta
+
+    return meta.configured() if provider() == "meta" else gemini_configured()
+
+
+def provider_label() -> str:
+    """The provider's name as the UI and the plan print it."""
+    return "Meta Muse" if provider() == "meta" else "Gemini"
+
+
+NOT_CONFIGURED = (
+    "No model provider is configured. Either set META_API_KEY for the Meta "
+    "Model API (Muse Spark and Muse Wonder), or configure Gemini: "
+    "GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_LOCATION and GOOGLE_GENAI_USE_VERTEXAI=TRUE "
+    "with gcloud application-default credentials, or GOOGLE_API_KEY for AI Studio. "
+    "LOCAISH_AGENT_PROVIDER (auto, meta, gemini) picks between them."
+)
+
+
+def agent_model(job: str):
+    """The model for a job: a Gemini id string, or a `MetaLlm` on Meta.
+
+    ADK's `LlmAgent` takes either. Jobs are the keys of `GEMINI_MODELS`
+    (agent, planner, breakdown, vision, notes); on Meta they map through
+    `META_JOBS` to the client's own job names and their env overrides.
+    """
+    if provider() == "meta":
+        from .. import meta
+        from ..meta.adk import MetaLlm
+
+        return MetaLlm(meta.model_for(META_JOBS.get(job, job)))
+    return GEMINI_MODELS.get(job, DEFAULT_MODEL)
 
 
 # ---------------------------------------------------------------------------
@@ -386,7 +489,7 @@ def _build_agent():
         )
 
     return LlmAgent(
-        model=DEFAULT_MODEL,
+        model=agent_model("agent"),
         name="locaish_scout",
         description="Virtual location scout over a measured digital twin.",
         instruction=instruction,
@@ -428,18 +531,8 @@ class AgentService:
 
     def _ensure_runner(self):
         if self._runner is None:
-            if not (
-                os.environ.get("GOOGLE_API_KEY")
-                or os.environ.get("GOOGLE_GENAI_USE_VERTEXAI")
-                or os.environ.get("GOOGLE_GENAI_USE_ENTERPRISE")
-                or os.environ.get("GOOGLE_CLOUD_PROJECT")
-            ):
-                raise AgentUnavailable(
-                    "Gemini is not configured. Either set GOOGLE_CLOUD_PROJECT, "
-                    "GOOGLE_CLOUD_LOCATION and GOOGLE_GENAI_USE_VERTEXAI=TRUE "
-                    "with gcloud application-default credentials (the hackathon "
-                    "configuration), or set GOOGLE_API_KEY for AI Studio."
-                )
+            if not provider_configured():
+                raise AgentUnavailable(NOT_CONFIGURED)
             from google.adk.runners import InMemoryRunner
 
             self._runner = InMemoryRunner(agent=_build_agent(), app_name=APP_NAME)

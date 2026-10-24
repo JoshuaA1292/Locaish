@@ -4,7 +4,7 @@ A scout who plans coverage does three different kinds of thinking, and the
 workflow here is built from three different kinds of agent because of it.
 
 **Breakdown** is reading: a page of scene turns into a list of shots and a
-cast list with each character on a mark. That is a single Gemini call with
+cast list with each character on a mark. That is a single model call with
 a schema on its output, because the value is the judgement (what does this
 scene need covered) and the geometry has not entered yet.
 
@@ -13,7 +13,7 @@ script. For each shot the planner asks the shot table for candidates -- the
 compiled filter from `film.coverage`, or its own SQL through the ClickHouse
 MCP server when it wants something the compiler does not offer -- places the
 best one, and then *looks at the frame*: the setup is rendered from the
-twin's gaussian field and shown to Gemini, which scores it as a DP would
+twin's gaussian field and shown to the vision model, which scores it as a DP would
 (headroom, background, whether the second actor is really in the frame) and
 may send the planner back to the table with a different height or lens.
 Two attempts per shot, then the better one stands. The placement agent is
@@ -28,7 +28,12 @@ and what it costs, from the placed shots and the reviews.
 Every number in the result comes from a row or a render; the models decide
 what to ask for and whether what came back is good. The same engine
 (`film.coverage.plan`) answers a shot list with no model at all, which is
-what the studio does when Gemini is not configured, and what the tests do.
+what the studio does when no model is configured, and what the tests do.
+
+Which model does the deciding is the deployment's choice (`core.provider`):
+Gemini, or Meta's Muse Spark and Muse Wonder through `meta.adk.MetaLlm`. The
+agents are the same either way; only the model object handed to ADK and the
+frame reviewer differ, and the plan records which provider answered.
 """
 
 from __future__ import annotations
@@ -48,14 +53,22 @@ from google.adk.tools import ToolContext
 from .. import warehouse
 from ..film import coverage as cov
 from ..types import Twin
-from .core import DEFAULT_MODEL, AgentUnavailable
+from .core import (
+    GEMINI_MODELS,
+    NOT_CONFIGURED,
+    AgentUnavailable,
+    agent_model,
+    provider,
+    provider_configured,
+    provider_label,
+)
 
 APP_NAME = "locaish-coverage"
 
 MAX_ATTEMPTS_PER_SHOT = 2
 
 # Spend guard: the most model calls one plan may make, across all its
-# agents, before the rest is placed without Gemini. A normal scout is
+# agents, before the rest is placed without the model. A normal scout is
 # twenty to forty; this is the ceiling, not the expectation.
 MAX_MODEL_CALLS = int(os.environ.get("LOCAISH_MAX_MODEL_CALLS", "80"))
 
@@ -63,15 +76,15 @@ MAX_MODEL_CALLS = int(os.environ.get("LOCAISH_MAX_MODEL_CALLS", "80"))
 # model as a 960 px one and costs fewer image tokens.
 REVIEW_IMAGE_WIDTH = 720
 
-# Each agent gets its own model so the run is spread across separate rate
-# limit buckets -- the AI Studio free tier is five requests a minute *per
-# model*, and a plan is a couple of dozen calls. All overridable; on Vertex
-# or a paid key the same names work and the spread costs nothing.
+# The Gemini id per agent (see core.GEMINI_MODELS for why they differ). On
+# Meta the same agents resolve through core.agent_model: the breakdown and
+# the notes are Muse Spark, the placer is Muse Wonder, the reviewer is Muse
+# Spark looking at the frame.
 AGENT_MODELS = {
-    "breakdown": os.environ.get("LOCAISH_BREAKDOWN_MODEL", "gemini-3.5-flash"),
-    "planner": os.environ.get("LOCAISH_PLANNER_MODEL", DEFAULT_MODEL),
-    "reviewer": os.environ.get("LOCAISH_REVIEW_MODEL", "gemini-3.7-flash"),
-    "notes": os.environ.get("LOCAISH_NOTES_MODEL", "gemini-3.5-flash"),
+    "breakdown": GEMINI_MODELS["breakdown"],
+    "planner": GEMINI_MODELS["planner"],
+    "reviewer": GEMINI_MODELS["vision"],
+    "notes": GEMINI_MODELS["notes"],
 }
 
 
@@ -86,8 +99,9 @@ def _retry_options():
     )
 
 
-def _model(name: str):
-    """An ADK Gemini model with retries, or a BaseLlm double passed straight through."""
+def _model(name):
+    """An ADK model: a Gemini id string becomes a Gemini with retries; a
+    BaseLlm (a `MetaLlm`, or a scripted double in the tests) passes through."""
     if not isinstance(name, str):
         return name
     from google.adk.models.google_llm import Gemini
@@ -95,13 +109,14 @@ def _model(name: str):
     return Gemini(model=name, retry_options=_retry_options())
 
 
+def _default_model(agent: str):
+    """The deployment's model for one of the agents (breakdown, planner, notes)."""
+    return _model(agent_model(agent))
+
+
 def agent_configured() -> bool:
-    """Whether Gemini can be reached at all, by either credential route."""
-    return bool(
-        os.environ.get("GOOGLE_API_KEY")
-        or os.environ.get("GOOGLE_GENAI_USE_VERTEXAI")
-        or os.environ.get("GOOGLE_CLOUD_PROJECT")
-    )
+    """Whether the selected provider (Meta or Gemini) can be called at all."""
+    return provider_configured()
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +125,7 @@ def agent_configured() -> bool:
 
 
 class BudgetExhausted(RuntimeError):
-    """The plan hit its spend guard; the rest is placed without Gemini."""
+    """The plan hit its spend guard; the rest is placed without the model."""
 
 
 @dataclass
@@ -351,7 +366,7 @@ def place_shot(shot_number: int, setup_id: int, reasoning: str = "", tool_contex
         run.warnings.append(f"shot {shot.number}: the frame could not be rendered: {exc}")
     review = None
     if run.reviewer is not None and ps.frame:
-        run.emit("stage", text=f"Gemini is looking at shot {shot.number}")
+        run.emit("stage", text=f"{provider_label()} is looking at shot {shot.number}")
         try:
             run.spend()
             _LAST_REVIEW_USAGE[0] = (0, 0)
@@ -458,7 +473,7 @@ def _frame_url(run: _Run, frame: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Gemini looks at the frame
+# the model looks at the frame
 # ---------------------------------------------------------------------------
 
 REVIEW_PROMPT = """You are a director of photography on a tech scout, looking at a
@@ -498,6 +513,56 @@ def _review_bytes(image_path: Path) -> bytes:
     return buf.getvalue()
 
 
+# The review's shape, in the genai vocabulary (upper-case types). The Meta
+# path lowers it to JSON schema; both providers answer the same object.
+REVIEW_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "score": {"type": "NUMBER"},
+        "verdict": {"type": "STRING", "enum": ["keep", "adjust", "reject"]},
+        "notes": {"type": "STRING"},
+        "suggestion": {
+            "type": "OBJECT",
+            "properties": {
+                "height": {"type": "STRING", "enum": ["low", "mid", "eye", "high", "none"]},
+                "lens_mm": {"type": "NUMBER"},
+                "size": {"type": "STRING"},
+                "no_window_behind": {"type": "BOOLEAN"},
+            },
+        },
+    },
+    "required": ["score", "verdict", "notes"],
+}
+
+
+def _review_prompt(shot: cov.Shot, row: dict) -> str:
+    return REVIEW_PROMPT.format(
+        brief=shot.description + (f" [{shot.notes}]" if shot.notes else ""),
+        focal=int(row["focal_mm"]), distance=f"{float(row['distance_m']):.2f}",
+        height=f"{float(row['cam_z']):.2f}", size=row["shot_size"],
+        size_name=cov.optics.SHOT_BY_KEY[str(row["shot_size"])].name,
+        backlight="window behind the subject" if int(row["window_behind_subject"]) else "none flagged",
+        lenses=", ".join(f"{int(f)} mm" for f in cov.sweepmod.SWEEP_PRIMES_MM),
+        heights=", ".join(f"{h:.2f} m" for h in cov.sweepmod.CAMERA_HEIGHTS_M),
+    )
+
+
+def _review_from(data: dict, *, model: str) -> cov.Review:
+    """The model's JSON as a Review, labelled with the model that gave it."""
+    if not isinstance(data, dict):
+        data = {}
+    sug = {k: v for k, v in (data.get("suggestion") or {}).items() if v not in ("", "none", None, 0, False)}
+    verdict = str(data.get("verdict", "keep")).strip().lower()
+    if verdict not in ("keep", "adjust", "reject"):
+        verdict = "keep"
+    try:
+        score = float(data.get("score", 0.0))
+    except (TypeError, ValueError):
+        score = 0.0
+    return cov.Review(score=score, verdict=verdict, notes=str(data.get("notes", "")).strip(),
+                      suggestion=sug, model=model)
+
+
 def gemini_reviewer(model: str | None = None):
     """A reviewer that shows the rendered frame to Gemini and parses its verdict."""
     from google import genai
@@ -506,54 +571,53 @@ def gemini_reviewer(model: str | None = None):
     model = model or AGENT_MODELS["reviewer"]
     client = genai.Client(http_options=types.HttpOptions(retry_options=_retry_options()))
 
-    schema = {
-        "type": "OBJECT",
-        "properties": {
-            "score": {"type": "NUMBER"},
-            "verdict": {"type": "STRING", "enum": ["keep", "adjust", "reject"]},
-            "notes": {"type": "STRING"},
-            "suggestion": {
-                "type": "OBJECT",
-                "properties": {
-                    "height": {"type": "STRING", "enum": ["low", "mid", "eye", "high", "none"]},
-                    "lens_mm": {"type": "NUMBER"},
-                    "size": {"type": "STRING"},
-                    "no_window_behind": {"type": "BOOLEAN"},
-                },
-            },
-        },
-        "required": ["score", "verdict", "notes"],
-    }
-
     def review(image_path: Path, shot: cov.Shot, row: dict) -> cov.Review:
-        prompt = REVIEW_PROMPT.format(
-            brief=shot.description + (f" [{shot.notes}]" if shot.notes else ""),
-            focal=int(row["focal_mm"]), distance=f"{float(row['distance_m']):.2f}",
-            height=f"{float(row['cam_z']):.2f}", size=row["shot_size"],
-            size_name=cov.optics.SHOT_BY_KEY[str(row["shot_size"])].name,
-            backlight="window behind the subject" if int(row["window_behind_subject"]) else "none flagged",
-            lenses=", ".join(f"{int(f)} mm" for f in cov.sweepmod.SWEEP_PRIMES_MM),
-            heights=", ".join(f"{h:.2f} m" for h in cov.sweepmod.CAMERA_HEIGHTS_M),
-        )
         img = types.Part.from_bytes(data=_review_bytes(image_path), mime_type="image/png")
         resp = client.models.generate_content(
             model=model,
-            contents=[prompt, img],
+            contents=[_review_prompt(shot, row), img],
             config=types.GenerateContentConfig(
-                response_mime_type="application/json", response_schema=schema, temperature=0.2,
+                response_mime_type="application/json", response_schema=REVIEW_SCHEMA, temperature=0.2,
             ),
         )
         data = json.loads(resp.text or "{}")
         u = getattr(resp, "usage_metadata", None)
         if u is not None:
             _LAST_REVIEW_USAGE[0] = (int(u.prompt_token_count or 0), int(u.candidates_token_count or 0))
-        sug = {k: v for k, v in (data.get("suggestion") or {}).items() if v not in ("", "none", None, 0, False)}
-        return cov.Review(
-            score=float(data.get("score", 0.0)), verdict=str(data.get("verdict", "keep")),
-            notes=str(data.get("notes", "")).strip(), suggestion=sug, model=model,
-        )
+        return _review_from(data, model=model)
 
     return review
+
+
+def meta_reviewer(model: str | None = None, client=None):
+    """The same review from Muse Spark, through the Meta Model API.
+
+    `client` is a `MetaClient` (built from the environment when None) or the
+    test fake; the frame goes in as PNG bytes before the prompt and the
+    answer is demanded as JSON in the review's shape.
+    """
+    from .. import meta
+    from ..meta.adk import json_schema
+
+    model = model or meta.model_for("vision")
+    if client is None:
+        client = meta.MetaClient()
+    schema = json_schema(REVIEW_SCHEMA)
+
+    def review(image_path: Path, shot: cov.Shot, row: dict) -> cov.Review:
+        data = client.chat_json(_review_prompt(shot, row), images=[_review_bytes(image_path)],
+                                model=model, schema=schema)
+        return _review_from(data, model=f"meta/{model}")
+
+    return review
+
+
+def reviewer():
+    """The frame reviewer for this deployment's provider."""
+    return meta_reviewer() if provider() == "meta" else gemini_reviewer()
+
+
+_default_reviewer = reviewer
 
 
 # ---------------------------------------------------------------------------
@@ -742,7 +806,7 @@ def build_workflow(*, models: dict[str, Any] | None = None) -> dict[str, Any]:
     breakdown = LlmAgent(
         name="breakdown",
         before_model_callback=_spend_guard,
-        model=_model(models.get("breakdown", AGENT_MODELS["breakdown"])),
+        model=_model(models["breakdown"]) if "breakdown" in models else _default_model("breakdown"),
         description="Turns a scene or shot list into structured coverage with characters on marks.",
         instruction=_breakdown_instruction,
         output_schema=_breakdown_schema(),
@@ -774,7 +838,7 @@ def build_workflow(*, models: dict[str, Any] | None = None) -> dict[str, Any]:
         before_model_callback=_spend_guard,
         before_tool_callback=_tool_budget,
         after_tool_callback=_trim_tool_result,
-        model=_model(models.get("planner", AGENT_MODELS["planner"])),
+        model=_model(models["planner"]) if "planner" in models else _default_model("planner"),
         description="Places one shot: searches the shot table, renders, reads the review.",
         instruction=_planner_instruction,
         tools=tools,
@@ -783,7 +847,7 @@ def build_workflow(*, models: dict[str, Any] | None = None) -> dict[str, Any]:
     notes = LlmAgent(
         name="dp_notes",
         before_model_callback=_spend_guard,
-        model=_model(models.get("notes", AGENT_MODELS["notes"])),
+        model=_model(models["notes"]) if "notes" in models else _default_model("notes"),
         description="Writes the DP's note for the shot list.",
         instruction=_notes_instruction,
         output_key="dp_notes",
@@ -888,21 +952,18 @@ def plan_coverage(
 ) -> cov.CoveragePlan:
     """Plan a scene's coverage with the agent workflow. Returns the saved plan.
 
-    Raises AgentUnavailable when Gemini is not configured. `models` and
-    `reviewer` exist so the workflow can be driven by a scripted model in
-    tests; in the studio both default to Gemini.
+    Raises AgentUnavailable when no model provider is configured. `models`
+    and `reviewer` exist so the workflow can be driven by a scripted model in
+    tests; in the studio both default to the deployment's provider (Meta's
+    Muse models, or Gemini).
     """
     if models is None and not agent_configured():
-        raise AgentUnavailable(
-            "Gemini is not configured. Set GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_LOCATION and "
-            "GOOGLE_GENAI_USE_VERTEXAI=TRUE with application-default credentials, or "
-            "GOOGLE_API_KEY for AI Studio."
-        )
+        raise AgentUnavailable(NOT_CONFIGURED)
     workdir = Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
     plan_id = workdir.name
     if reviewer is None and models is None:
-        reviewer = gemini_reviewer()
+        reviewer = _default_reviewer()
     run = _Run(
         plan_id=plan_id, twin=twin, workdir=workdir, source=source, brief=brief,
         title=title, reviewer=reviewer, on_event=on_event,
@@ -960,8 +1021,9 @@ async def _plan(run: _Run, models: dict[str, Any] | None) -> cov.CoveragePlan:
 
     degraded: str | None = None
     breakdown_seen = False
+    label = provider_label()
     try:
-        run.emit("stage", text="Gemini is breaking down the scene")
+        run.emit("stage", text=f"{label} is breaking down the scene")
         text = await invoke(agents["breakdown"], f"{run.plan_id}-breakdown",
                             f"Plan coverage for this scene:\n{run.brief}", dict(base_state))
         try:
@@ -1006,13 +1068,13 @@ async def _plan(run: _Run, models: dict[str, Any] | None) -> cov.CoveragePlan:
         raise
     except Exception as exc:  # noqa: BLE001 - quota, network, a model outage
         if not breakdown_seen or not run.shots:
-            raise AgentUnavailable(f"Gemini could not break down the scene: {_short(exc)}") from exc
+            raise AgentUnavailable(f"{label} could not break down the scene: {_short(exc)}") from exc
         # The scene is broken down and some shots are placed; the rest are
         # placed by the planner without a reviewer, and the plan says so.
         # A demo that dies at shot four because of a rate limit is worse
         # than one that finishes and tells the truth about how.
         degraded = _short(exc)
-        run.emit("note", text=f"Gemini stopped answering ({degraded}); placing the remaining shots without review")
+        run.emit("note", text=f"{label} stopped answering ({degraded}); placing the remaining shots without review")
         for shot in run.pending():
             _place_without_model(run, shot)
 
@@ -1020,14 +1082,14 @@ async def _plan(run: _Run, models: dict[str, Any] | None) -> cov.CoveragePlan:
     shots = [run.planned.get(s.number, cov.PlannedShot(shot=s, setup=None)) for s in run.shots]
     plan = cov.CoveragePlan(
         plan_id=run.plan_id, location=run.location, title=run.title or (run.breakdown or {}).get("title") or "Untitled scene",
-        brief=run.brief, shots=shots, marks=dict(run.marks), planner="gemini",
+        brief=run.brief, shots=shots, marks=dict(run.marks), planner=provider(),
         warnings=list(run.warnings), trace=trace,
     )
-    plan.trace.append({"kind": "usage", "model_calls": run.model_calls,
+    plan.trace.append({"kind": "usage", "provider": provider(), "model_calls": run.model_calls,
                        "tokens_in": run.tokens_in, "tokens_out": run.tokens_out})
-    run.emit("note", text=f"Gemini usage: {run.model_calls} calls, {run.tokens_in:,} tokens in, {run.tokens_out:,} out")
+    run.emit("note", text=f"{label} usage: {run.model_calls} calls, {run.tokens_in:,} tokens in, {run.tokens_out:,} out")
     if degraded:
-        plan.warnings.insert(0, f"Gemini stopped answering part-way ({degraded}); the shots after that were "
+        plan.warnings.insert(0, f"{label} stopped answering part-way ({degraded}); the shots after that were "
                                 "placed by the planner from the table without a frame review")
     if run.dp_notes:
         plan.warnings.insert(0, "DP notes: " + run.dp_notes)

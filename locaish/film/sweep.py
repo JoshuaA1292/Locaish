@@ -134,9 +134,19 @@ def sweep(
     primes_mm: tuple[float, ...] = SWEEP_PRIMES_MM,
     heights_m: tuple[float, ...] = CAMERA_HEIGHTS_M,
     sensor_key: str = optics.DEFAULT_SENSOR,
+    subject_height_m: float = SUBJECT_HEIGHT_M,
     progress=None,
 ) -> ShotSweep:
-    """Sweep every camera setup the twin's geometry allows, and score it."""
+    """Sweep every camera setup the twin's geometry allows, and score it.
+
+    `subject_height_m` is the stature the eyeline and the framing are
+    measured against: the 1.75 m stand-in unless the cast is known, in which
+    case the real actor's height (`product.cast`) so that `subject_fill`,
+    `shot_size` and the sightline to the eyes are hers and not a default's.
+    """
+    if not (0.5 <= float(subject_height_m) <= 2.6):
+        raise ValueError(f"subject_height_m={subject_height_m} is not a human stature in metres")
+    subject_height_m = float(subject_height_m)
     warnings: list[str] = []
     sensor = optics.SENSORS[sensor_key]
     maps = spacemod.floor_maps(twin, cell=cell)
@@ -188,7 +198,7 @@ def sweep(
     if progress:
         progress("sweep sightlines")
     grid, gorigin, gcell = spacemod.occupancy(twin)
-    eye_z = floor_z + EYELINE_RATIO * SUBJECT_HEIGHT_M
+    eye_z = floor_z + EYELINE_RATIO * subject_height_m
 
     pairs = []
     for hz in heights_m:
@@ -249,7 +259,7 @@ def sweep(
     dist = tile(d_all)
 
     framed_h = sensor.height_mm * dist / focal
-    fill = SUBJECT_HEIGHT_M / framed_h
+    fill = subject_height_m / framed_h
     fov_h = 2.0 * np.degrees(np.arctan(sensor.width_mm / (2.0 * focal)))
 
     # Thin-lens depth of field at the working stop, vectorised.

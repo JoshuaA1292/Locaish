@@ -704,7 +704,7 @@ class Studio:
                 try:
                     from .product import labels as labelsmod
 
-                    if labelsmod.gemini_available() and self.frames_of(job) is not None:
+                    if labelsmod.vision_available() and self.frames_of(job) is not None:
                         job.emit("stage", "identifying what is in the room")
                         found = self.detect_labels(job, progress=lambda m: job.emit("stage", m))
                         job.emit("note", f"{found['objects']} objects named from {found['frames_looked_at']} frames "
@@ -1399,10 +1399,15 @@ class _Handler(BaseHTTPRequestHandler):
             job = studio.jobs.get(parts[1])
             if not job:
                 return self._json({"error": "unknown job"}, 404)
+            from .meta import vision as visionmod
             from .product import labels as labelsmod
 
+            # "gemini" is the historical key the page reads for "a vision
+            # model is available"; it now answers for whichever provider is chosen.
             return self._json({"labels": studio.labels_of(job), "frames": studio.frames_of(job) is not None,
-                               "gemini": labelsmod.gemini_available()})
+                               "gemini": labelsmod.vision_available(),
+                               "vision_provider": visionmod.provider(),
+                               "vision_name": visionmod.display_name()})
         if head == "label-views" and len(parts) == 2:
             return self._label_views(parts[1], params)
         if head == "label-crop" and len(parts) == 2:
@@ -2135,7 +2140,7 @@ PAGE = """<!doctype html>
       <div class="sechead">
         <div class="sub"><h2>What is in the room</h2>
           <p>Named from the capture's own frames by the vision model, then confirmed or corrected by you. Click <b>Label</b> in the twin, click the thing, pick the photograph, type what it is.</p></div>
-        <div style="display:flex;gap:8px;align-items:center"><button class="lensbtn" id="detectbtn">Name things with Gemini</button><button class="lensbtn" id="labelbtn">Label an object</button></div>
+        <div style="display:flex;gap:8px;align-items:center"><button class="lensbtn" id="detectbtn">Name things with the vision model</button><button class="lensbtn" id="labelbtn">Label an object</button></div>
       </div>
       <div class="panelbox">
         <div id="chips" class="labelchips"><span class="dim">nothing named yet</span></div>
@@ -2518,11 +2523,18 @@ function traceLine(text, cls, sql) {
 
 /* --- the caption over the twin: what the scout is doing right now --------- */
 
-function caption(head, text, gemini) {
+// Which model is reading the frames, as /labels reports it ('meta' or
+// 'gemini'); the badges print its name rather than a hard-coded one.
+let visionProvider = '';
+const PROVIDER_NAMES = {meta: 'Muse Spark', gemini: 'Gemini'};
+function providerName(p) { return PROVIDER_NAMES[p] || (p ? String(p) : 'the vision model'); }
+
+function caption(head, text, model) {
   const cap = $('scoutcap');
   if (head == null) { cap.classList.add('hidden'); return; }
   cap.classList.remove('hidden');
-  cap.innerHTML = '<b>' + esc(head) + '</b><span>' + (gemini ? '<span class="g">Gemini</span>' : '') + esc(text || '') + '</span>';
+  const badge = model ? '<span class="g">' + esc(providerName(model === true ? visionProvider : model)) + '</span>' : '';
+  cap.innerHTML = '<b>' + esc(head) + '</b><span>' + badge + esc(text || '') + '</span>';
 }
 
 /* --- the walk: the viewer flies through what the scout is looking at ------- */
@@ -2710,7 +2722,7 @@ function renderPlan(plan, fz) {
   $('planhead').innerHTML = '<b>' + esc(plan.title || 'Untitled scene') + '</b><span>'
     + plan.planned + ' of ' + plan.shots.length + ' shots'
     + (lastPlanSeconds != null ? ' · ' + lastPlanSeconds + ' s' : '')
-    + (plan.planner === 'gemini' ? ' · Gemini' : '') + '</span>';
+    + (plan.planner && plan.planner !== 'deterministic' ? ' · ' + esc(providerName(plan.planner)) : '') + '</span>';
   plan.shots.forEach(ps => shotCard(ps, plan));
   $('floorplan').innerHTML = plan.floor_plan_svg || '<div class="dim">no camera plan</div>';
   const base = '/plan/' + covJob + '/' + plan.plan_id;
@@ -2860,6 +2872,8 @@ function loadLabels() {
     lblList = r.labels || [];
     paintChips();
     postViewer({type: 'locaish:labels', labels: lblList});
+    if (r.vision_provider) visionProvider = r.vision_provider;
+    if (r.gemini) $('detectbtn').textContent = 'Name things with ' + providerName(visionProvider);
     if (r.frames === false) { $('detectbtn').disabled = true; $('detectbtn').title = 'this twin came from a scan file, not a video: no frames to look at'; $('labelbtn').disabled = true; }
     else if (!r.gemini) { $('detectbtn').disabled = true; $('detectbtn').title = 'no vision model configured'; }
   }).catch(() => {});
@@ -2883,7 +2897,7 @@ function paintChips() {
   box.querySelectorAll('[data-look]').forEach(b => b.onclick = () => { const l = lblList.find(x => x.id === b.dataset.look); if (l) showPick(l.xyz, l); });
 }
 function detectLabels() {
-  $('detectbtn').disabled = true; $('lstatus').textContent = 'Gemini is looking at eight frames of the capture…';
+  $('detectbtn').disabled = true; $('lstatus').textContent = providerName(visionProvider) + ' is looking at eight frames of the capture…';
   fetch('/labels/' + lblJob + '/detect', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'})
     .then(r => r.json()).then(r => {
       $('detectbtn').disabled = false;

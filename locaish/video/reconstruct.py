@@ -105,6 +105,8 @@ def reconstruct_video(
     keep_frames: bool = True,
     refresh: bool = False,
     extra_scales=None,
+    movers: str = "auto",
+    mover_client=None,
     progress=None,
 ) -> VideoReconstruction:
     """Reconstruct a hand-held video sweep into a metric `ScanImport`.
@@ -116,6 +118,12 @@ def reconstruct_video(
     so without a cache, adjusting a voxel size means re-matching a few hundred
     frames to get back a cloud that was never going to change. `refresh=True`
     forces the work to happen again.
+
+    `movers` decides whether the people, pets and vehicles that moved through
+    the sweep are masked out of feature extraction with SAM 3.1
+    (`locaish.meta.masks`): "auto" masks when the Meta Model API is configured
+    (`LOCAISH_MOVERS=on|off` pins it per deployment), "on" requires it, "off"
+    never calls it. `mover_client` injects the segmentation client (tests).
     """
     import time
 
@@ -140,7 +148,8 @@ def reconstruct_video(
     if cfg.get("note"):
         warnings.append(cfg["note"])
     fps = float(fps) if fps else float(cfg["fps"])
-    key = _cache_key(src, fps, max_points, scale_factor, start_s, end_s, cfg)
+    movers_mode, mover_client = _resolve_movers(movers, mover_client)
+    key = _cache_key(src, fps, max_points, scale_factor, start_s, end_s, cfg, movers=movers_mode)
     if not refresh:
         cached = _load_cache(workdir, key, src, progress=progress)
         if cached is not None:
@@ -195,6 +204,37 @@ def reconstruct_video(
         )
     image_dir = fs.paths[0].parent
 
+    # -- movers -----------------------------------------------------------
+    #
+    # Anyone who walked through the shot is a textured, sharp-edged thing
+    # that moved between frames: exactly what the detector loves and exactly
+    # what bundle adjustment must never see. SAM 3.1 masks them; a frame that
+    # is mostly mover is taken out of the set, because what is left of it
+    # cannot be matched. The masks are a prior on where not to look, and no
+    # point in the twin comes from them.
+    mask_dir: Path | None = None
+    mask_report = None
+    if movers_mode == "on":
+        from ..meta import masks as masksmod
+
+        with _step("masking movers"):
+            mask_dir = workdir / "masks"
+            mask_report = masksmod.mask_video_frames(
+                fs.paths, mask_dir, client=mover_client, progress=progress
+            )
+            masksmod.write_report(mask_report, mask_dir / "report.json")
+            fs = _drop_frames(fs, set(mask_report.dropped), workdir / "frames_dropped")
+        note = mask_report.note()
+        if note:
+            warnings.append(note)
+        if len(fs) < 2:
+            raise VideoError(
+                f"{src.name} is mostly people or vehicles: {len(mask_report.dropped)} "
+                "frames were dropped as movers and too few remain to reconstruct"
+            )
+        image_dir = fs.paths[0].parent
+        key["mask_fingerprint"] = mask_report.fingerprint()
+
     # -- is this sweep worth reconstructing? -------------------------------
     #
     # Placed here, before the solve, because that is the only place the answer
@@ -213,7 +253,8 @@ def reconstruct_video(
     with _step("reconstruct"):
         colmap_dir = workdir / "colmap"
         model_dir = colmapmod.run_sfm(
-            image_dir, colmap_dir, reuse=not refresh, config=cfg, progress=progress
+            image_dir, colmap_dir, reuse=not refresh, config=cfg,
+            mask_dir=mask_dir, progress=progress,
         )
         model = colmapmod.read_model(model_dir)
     warnings += model.warnings
@@ -375,6 +416,7 @@ def reconstruct_video(
         "learned_fill_points": 0 if learned is None else int(len(learned.dense)),
         "learned": None if learned is None else learned.summary,
         "up_coherence": round(float(up_coherence), 3),
+        "movers": None if mask_report is None else mask_report.summary(),
     }
 
     # -- scale ------------------------------------------------------------
@@ -403,6 +445,32 @@ def reconstruct_video(
                 estimates.append(learned.scale)
             for extra in extra_scales or []:
                 estimates.append(extra)
+            # The fourth anchor: the people who walked through the scan. The
+            # mask stage already found them; their apparent heights against
+            # the floor datum, under an adult stature prior, give a reading
+            # that shares no evidence with the other three. Its sanity window
+            # is judged against the others' consensus, so a wildly wrong
+            # consensus rejects the anchor (and says so) rather than being
+            # quietly ratified by it.
+            stature_readings: list[float] = []
+            if mask_report is not None and mask_report.people and up_hint is not None:
+                stature_readings = _stature_readings(model, image_dir, raw_xyz, up_hint, mask_report.people)
+            if estimates and stature_readings:
+                consensus = metricmod.combine_scales(estimates)
+                from_people = metricmod.scale_from_stature(
+                    stature_readings, current_factor=consensus.factor
+                )
+                if from_people is not None:
+                    estimates.append(from_people)
+                else:
+                    warnings.append(
+                        f"{len(stature_readings)} people were seen standing in the scan but "
+                        "none gave a usable stature reading under the other anchors' scale"
+                    )
+            elif stature_readings:
+                from_people = metricmod.scale_from_stature(stature_readings)
+                if from_people is not None:
+                    estimates.append(from_people)
             if estimates:
                 scale = metricmod.combine_scales(estimates)
             else:
@@ -567,6 +635,7 @@ def reconstruct_video(
             "features": cfg["features"],
             "learned_fill_points": 0 if learned is None else int(len(learned.dense)),
             "up_coherence": up_coherence,
+            "movers": None if mask_report is None else mask_report.summary(),
             # the trained per-scene splat, for viewers that can render the
             # gaussians themselves rather than a point sampling of them
             "splat_ply": getattr(
@@ -624,7 +693,44 @@ def _scale_components(scale) -> list[str]:
     return sources
 
 
-def _cache_key(src: Path, fps, max_points, scale_factor, start_s, end_s, cfg: dict | None = None) -> dict:
+def _stature_readings(model, image_dir: Path, raw_xyz: np.ndarray, up_hint, people: dict) -> list[float]:
+    """Apparent heights, in reconstruction units, of the people the mask stage saw.
+
+    The frames are posed in COLMAP's own frame (identity transform, factor 1),
+    the floor datum is the same low percentile along gravity the camera-height
+    anchor uses, and the geometry needs no intrinsics beyond the solved ones.
+    Any failure here costs an anchor, never the reconstruction.
+    """
+    try:
+        from ..meta import stature as staturemod
+        from ..product.labels import PosedFrames
+
+        up = np.asarray(up_hint, dtype=np.float64).reshape(3)
+        up = up / max(float(np.linalg.norm(up)), 1e-12)
+        names = list(model.names)
+        by_index = {}
+        for i, n in enumerate(names):
+            if n in people:
+                by_index[i] = people[n]
+        if not by_index:
+            return []
+        frames = PosedFrames(
+            names=names, paths=[Path(image_dir) / n for n in names],
+            extr=np.asarray(model.extrinsics, dtype=np.float64),
+            K=np.asarray(model.intrinsics, dtype=np.float64),
+            size=tuple(int(v) for v in model.image_size),
+            R=np.eye(3), t=np.zeros(3), factor=1.0,
+        )
+        floor_t = float(np.percentile(np.asarray(raw_xyz, dtype=np.float64) @ up, 1.0))
+        return list(staturemod.height_readings(frames, by_index, floor_t, floor_normal=up))
+    except Exception:  # noqa: BLE001 - the anchor is optional; the twin is not
+        return []
+
+
+def _cache_key(
+    src: Path, fps, max_points, scale_factor, start_s, end_s, cfg: dict | None = None,
+    *, movers: str = "off",
+) -> dict:
     """Everything that would change the reconstructed cloud, and nothing else.
 
     The video is identified by size and modification time rather than a hash of
@@ -632,11 +738,19 @@ def _cache_key(src: Path, fps, max_points, scale_factor, start_s, end_s, cfg: di
     than it saves, and the failure mode of the cheap test -- a file edited
     within the same second at exactly the same length -- does not happen to
     video files in practice.
+
+    With movers masked, the key also carries the mode and (once the masks
+    exist) the mask report's fingerprint, so a masked re-ingest is never
+    served the unmasked cache and the stored key says which masks it saw.
+    The fingerprint is filled in by the caller after masking; a lookup made
+    before the masks exist leaves it None and `_load_cache` does not compare
+    it (see `_keys_match`).
     """
     from . import colmap as colmapmod
     from . import learned as learnedmod
 
     st = src.stat()
+    movers_part = {} if movers == "off" else {"movers": movers, "mask_fingerprint": None}
     return {
         # Bumped whenever the reconstruction itself changes behaviour, so a
         # cache written by an older pipeline cannot masquerade as this one's
@@ -673,7 +787,87 @@ def _cache_key(src: Path, fps, max_points, scale_factor, start_s, end_s, cfg: di
         "scale_factor": scale_factor,
         "start_s": start_s,
         "end_s": end_s,
+        **movers_part,
     }
+
+
+def _keys_match(stored: dict, key: dict) -> bool:
+    """Equal keys, except that an unknown mask fingerprint matches any stored one.
+
+    The lookup happens before the frames are decoded, let alone masked, so
+    the fingerprint of *this* run's masks cannot be known yet. What the
+    comparison guarantees is the thing that matters: a key with movers on
+    never matches a cache written with movers off, and vice versa.
+    """
+    if key.get("mask_fingerprint") is None and "mask_fingerprint" in key:
+        stored = {k: v for k, v in stored.items() if k != "mask_fingerprint"}
+        key = {k: v for k, v in key.items() if k != "mask_fingerprint"}
+    return stored == key
+
+
+def _resolve_movers(movers: str, client):
+    """Turn the `movers` option into ("on"|"off", client).
+
+    "auto" reads `LOCAISH_MOVERS` and otherwise follows whether the Meta API
+    is configured; "on" insists and fails here, before any decoding, when it
+    is not, because a run that silently skipped the masks would be a
+    different reconstruction from the one asked for.
+    """
+    mode = (movers or "auto").strip().lower()
+    if mode not in ("auto", "on", "off"):
+        raise ValueError(f"movers must be 'auto', 'on' or 'off', not {movers!r}")
+    if mode == "auto":
+        env = os.environ.get("LOCAISH_MOVERS", "").strip().lower()
+        if env in ("on", "off"):
+            mode = env
+    if mode == "off":
+        return "off", None
+    if client is not None:
+        return "on", client
+    from ..meta import client as metaclient
+
+    if mode == "auto" and not metaclient.configured():
+        return "off", None
+    if not metaclient.configured():
+        raise VideoError(
+            "movers='on' needs the Meta Model API (set META_API_KEY) to mask "
+            "the people and vehicles out of the sweep; pass movers='off' to "
+            "reconstruct without masks"
+        )
+    return "on", metaclient.MetaClient()
+
+
+def _drop_frames(fs: FrameSet, names: set[str], aside: Path) -> FrameSet:
+    """The frame set without `names`; the dropped files are moved to `aside`.
+
+    Moved rather than deleted, because the first question about a bad twin is
+    what the frames looked like, and the frames the mask stage threw out are
+    the ones most worth looking at.
+    """
+    if not names:
+        return fs
+    import shutil
+
+    aside.mkdir(parents=True, exist_ok=True)
+    keep_p, keep_t, keep_s = [], [], []
+    for p, t, s in zip(fs.paths, fs.timestamps, fs.sharpness):
+        if p.name in names:
+            try:
+                shutil.move(str(p), str(aside / p.name))
+            except OSError:
+                p.unlink(missing_ok=True)
+            continue
+        keep_p.append(p)
+        keep_t.append(t)
+        keep_s.append(s)
+    return FrameSet(
+        paths=keep_p,
+        timestamps=keep_t,
+        sharpness=keep_s,
+        info=fs.info,
+        candidates_considered=fs.candidates_considered,
+        warnings=list(fs.warnings),
+    )
 
 
 def _save_cache(workdir: Path, key: dict, result: "VideoReconstruction") -> None:
@@ -714,7 +908,7 @@ def _load_cache(workdir: Path, key: dict, src: Path, progress=None) -> "VideoRec
         return None
     try:
         data = np.load(path, allow_pickle=False)
-        if json.loads(str(data["key"])) != key:
+        if not _keys_match(json.loads(str(data["key"])), key):
             return None
         rgb = data["rgb"]
         cams = data["cams"]
