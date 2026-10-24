@@ -1,9 +1,10 @@
 # Locaish studio, deployable to Cloud Run.
 #
-# The reconstruction is classical (COLMAP + OpenCV), so the image needs the
-# colmap and ffmpeg binaries and nothing else unusual -- no CUDA, no model
-# weights. On CPU-only hosts the dense stage automatically uses semi-global
-# block matching instead of PatchMatch.
+# The image carries the colmap and ffmpeg binaries, a CPU build of OpenMVS,
+# and a CPU build of PyTorch for the metric geometry model (MoGe-2, whose
+# weights are fetched on first use and cached under ~/.cache). No CUDA: on a
+# CPU-only host the dense stage runs OpenMVS and the model runs on the CPU
+# over a smaller spread of frames -- see docs/RECONSTRUCTION.md.
 #
 #   docker build -t locaish .
 #   docker run -p 8080:8080 \
@@ -47,7 +48,7 @@ FROM python:3.12-slim-bookworm
 # base image with COLMAP >= 4 upgrades the solve automatically, nothing to
 # configure.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        colmap ffmpeg \
+        colmap ffmpeg git \
         libboost-iostreams1.74.0 libboost-program-options1.74.0 \
         libboost-system1.74.0 libboost-serialization1.74.0 \
         libopencv-core406 libopencv-imgproc406 libopencv-imgcodecs406 \
@@ -60,7 +61,10 @@ COPY --from=openmvs /opt/openmvs/out/bin/InterfaceCOLMAP /usr/local/bin/
 WORKDIR /app
 COPY pyproject.toml README.md LICENSE ./
 COPY locaish ./locaish
-RUN pip install --no-cache-dir ".[video]"
+# CPU wheels for torch first, so the `learned` extra does not pull the
+# multi-gigabyte CUDA build into a host that has no GPU to give it.
+RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu \
+    && pip install --no-cache-dir ".[video,learned]"
 
 # Cloud Run injects PORT; LOCAISH_HOST=0.0.0.0 is the deliberate opt-in that
 # lifts the loopback-only default (see locaish/serve.py).

@@ -108,10 +108,17 @@ def scout_report(tool_context: ToolContext = None) -> dict:
     questions about the location.
     """
     from ..film import report as reportmod
+    from ..product import labels as labelsmod
 
     _, loc = _location(tool_context)
     built = reportmod.build(loc.twin)
-    return {"status": "success", "report": built.to_dict()}
+    out = {"status": "success", "report": built.to_dict()}
+    # What is in the room, by name: the vision model's provisional labels
+    # and the ones a person confirmed, each with its position in metres.
+    contents = labelsmod.describe(labelsmod.load_labels(loc.workdir))
+    if contents:
+        out["contents"] = contents
+    return out
 
 
 def measure(

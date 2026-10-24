@@ -1,36 +1,45 @@
-"""Reconstruction without a neural network: classical structure from motion.
+"""Structure from motion: frames in, camera poses and a sparse cloud out.
 
-Frames in, a sparse model and camera poses out -- produced by matching
-hand-designed features between images and bundle-adjusting the result. SIFT is from 1999 and bundle adjustment is older
-than that. There is no model file, nothing was trained, and every number it
-produces traces to a corner detected in an image and a least-squares solve over
-reprojection error.
+Features are detected in every frame, matched between frames near each other
+in time, verified geometrically, and the whole set is bundle-adjusted into one
+model. Every pose that comes out traces to pixel correspondences and a
+least-squares solve over reprojection error, which is why the twin can audit
+itself downstream: the geometry is the evidence, not a prior.
 
-That property is the reason this module exists. The Agentic Cinema rules permit
-only Google Cloud AI tools and prohibit "other AI models, agent frameworks, or
-AI APIs ... regardless of vendor", while explicitly allowing open-source non-AI
-software. A pretrained depth network is an AI model whoever wrote it; SIFT is
-not. This path is compliant by construction rather than by argument.
+**Which features.** Two detectors are wired in and the build decides. ALIKED
+(a small learned keypoint network, BSD licence, shipped inside COLMAP as an
+ONNX model) is the default wherever the installed COLMAP offers it: on the
+painted walls rooms are mostly made of it returns four to five times as many
+geometrically verified matches per pair as SIFT, from a third as many
+keypoints, and it holds a chain across a wider baseline -- which means fewer
+frames to match and a solve that breaks less. SIFT remains as the fallback
+(`LOCAISH_FEATURES=sift`), and because it is the detector that chains worst
+across blank plaster, its frame budget is denser in time and larger in pixels.
+Matching is COLMAP's own brute-force descriptor matcher for either detector;
+LightGlue (`LOCAISH_MATCHER=lightglue`) is available for ALIKED and is more
+selective still, but on a CPU it costs a second a pair, so it is opt-in and
+meant for a GPU host.
 
-**Classical SfM needs frames that chain.** That is the one thing it will not
-forgive, and it is where a neural reconstruction is simply better. Matching two
-views of a blank painted wall taken a second apart finds nothing, so a sweep
-sampled sparsely in time fragments into disconnected pieces: measured on a real
-capture, 72 frames produced four fragments whose largest held 28 of them, while
-251 frames of the same clip registered 240 into a single model with a mean
-reprojection error under a pixel. The frames must be dense enough in time to
-carry correspondences from one to the next, which for a 60 fps phone clip is not
-a hardship -- it is a decode setting.
+**Loop closure.** A walk that circles the room must be told, at the matching
+stage, that its last frames see what its first frames saw, or the solve
+accumulates drift all the way round and the walls bow. COLMAP finds those
+pairs with a vocabulary tree over the descriptors. The tree it distributes is
+built on SIFT and is useless for ALIKED, so for ALIKED a small tree is built
+from the sweep's own descriptors first -- a minute of work that buys a closed
+loop.
 
-**The dense stage wants a GPU.** COLMAP's PatchMatch stereo is CUDA-only, which
-is the right answer on the hosted deployment and unavailable on a Mac, so there
-is a second path here using OpenCV's semi-global block matching on the CPU.
-Both are classical; they differ in quality and speed, not in what they are.
+**Which mapper.** The global mapper (GLOMAP, inside COLMAP 4.x) solves every
+rotation jointly and is preferred; the incremental mapper is the fallback when
+the global solve registers too little of the sweep.
+
+The dense stage lives in `dense.py` and `learned.py`; this module ends at the
+sparse model.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -38,9 +47,10 @@ from pathlib import Path
 
 import numpy as np
 
-# Frames per second pulled from the clip for the classical path. Far denser than
-# the neural path needs, because correspondence is the binding constraint: see
-# the module docstring for what happens when this is too low.
+# -- the SIFT budget ----------------------------------------------------------
+#
+# Frames per second pulled from the clip. SIFT chains correspondences frame to
+# frame and loses the chain on a blank wall, so it wants frames dense in time.
 CLASSICAL_FPS = 8.0
 
 # Long side, in pixels, that frames are decoded to for matching. SIFT wants
@@ -60,6 +70,31 @@ SIFT_MAX_FEATURES = 16384
 # than exhaustive because a walk revisits its neighbours in time, and quadratic
 # overlap adds the powers-of-two jumps that catch a loop closing.
 SEQUENTIAL_OVERLAP = 30
+
+# -- the ALIKED budget --------------------------------------------------------
+#
+# Measured on a real kitchen sweep (six 2400 px frames, five pairs each):
+# SIFT 2682 keypoints and 117 verified matches per pair; ALIKED 908 keypoints
+# and 302 verified matches; ALIKED at 2048 keypoints and 1600 px, 524 matches
+# per pair with the brute-force matcher at 0.03 s a pair. Fewer frames are
+# needed because the chain survives a wider baseline. The frames are still
+# decoded at full matching resolution, because they are also the stereo
+# stage's input: a first cut at 1600 px and 5 fps halved OpenMVS's working
+# resolution and cut its views by a third, and the floor it returned covered
+# 15% of the room against 24% from the SIFT budget. ALIKED costs about a
+# second a frame at 2400 px on a laptop CPU, which is cheaper than the
+# stereo it would otherwise starve.
+ALIKED_FPS = 6.0
+ALIKED_LONG_SIDE = 2400
+ALIKED_MAX_FEATURES = 2048
+ALIKED_MIN_SCORE = 0.15
+ALIKED_OVERLAP = 20
+# Loop-closure tree built from the sweep's own descriptors: visual words and
+# the descriptor sample the k-means runs on. Small on purpose -- it only has to
+# tell the frames of one room apart, not index the internet.
+ALIKED_VOCAB_WORDS = 4096
+ALIKED_VOCAB_MAX_DESCRIPTORS = 120_000
+LOOP_DETECTION_NUM_IMAGES = 10
 
 # A frame needs this many inliers to join the model. COLMAP's default of 30 is
 # right for photo collections; on a sweep, a frame that fails here breaks the
@@ -86,8 +121,8 @@ GLOBAL_MAPPER_MIN_REGISTERED = 0.5
 # reuse solved poses: the poses of the same frames under a better solver are
 # different poses, and a workspace stamped by the old solver must not be
 # mistaken for this one's output. 2: view-graph focal calibration before the
-# global mapper.
-SOLVE_VERSION = 2
+# global mapper. 3: a full bundle adjustment after the global solve.
+SOLVE_VERSION = 3
 
 # Vocabulary tree for loop detection: when the walk comes back to where it
 # started, this is what tells the matcher to close the loop instead of letting
@@ -223,6 +258,126 @@ def supports_global_mapper(exe: str | None = None) -> bool:
     return "global_mapper" in (out.stdout + out.stderr)
 
 
+_ALIKED_SUPPORT: dict[str, bool] = {}
+
+
+def supports_aliked(exe: str | None = None) -> bool:
+    """Whether this COLMAP build carries the ALIKED detector (ONNX runtime).
+
+    Read off the extractor's own help text, which lists the `AlikedExtraction`
+    option group only when the build can honour it. Cached per binary: the
+    answer is asked for on every solve and never changes.
+    """
+    try:
+        exe = exe or executable()
+    except ColmapError:
+        return False
+    if exe in _ALIKED_SUPPORT:
+        return _ALIKED_SUPPORT[exe]
+    try:
+        out = subprocess.run(
+            [exe, "feature_extractor", "--help"],
+            capture_output=True, text=True, timeout=30,
+        )
+        ok = "AlikedExtraction" in (out.stdout + out.stderr)
+    except (OSError, subprocess.SubprocessError):
+        ok = False
+    _ALIKED_SUPPORT[exe] = ok
+    return ok
+
+
+def feature_config(features: str | None = None, matcher: str | None = None) -> dict:
+    """Resolve the detector and matcher to use, and the frame budget they want.
+
+    `features` is `auto` (ALIKED when the build has it, else SIFT), `aliked`
+    or `sift`; `matcher` is `auto` (brute force), `bruteforce` or `lightglue`.
+    Both default from the environment so a deployment can pin them without a
+    code change. Asking for ALIKED on a build without it falls back to SIFT
+    and says so in the config rather than failing the solve.
+    """
+    want = (features or os.environ.get("LOCAISH_FEATURES", "auto")).strip().lower()
+    want_m = (matcher or os.environ.get("LOCAISH_MATCHER", "auto")).strip().lower()
+    note = None
+    if want not in ("auto", "aliked", "sift"):
+        note = f"unknown LOCAISH_FEATURES={want!r}; using auto"
+        want = "auto"
+    if want == "auto":
+        use = "aliked" if supports_aliked() else "sift"
+    elif want == "aliked" and not supports_aliked():
+        note = "ALIKED was requested but this COLMAP build has no ONNX support; using SIFT"
+        use = "sift"
+    else:
+        use = want
+    if use == "aliked":
+        m = "lightglue" if want_m == "lightglue" else "bruteforce"
+        return {
+            "features": "aliked",
+            "matcher": m,
+            "fps": ALIKED_FPS,
+            "long_side": ALIKED_LONG_SIDE,
+            "overlap": ALIKED_OVERLAP,
+            "note": note,
+        }
+    m = "lightglue" if want_m == "lightglue" else "bruteforce"
+    return {
+        "features": "sift",
+        "matcher": m,
+        "fps": CLASSICAL_FPS,
+        "long_side": CLASSICAL_LONG_SIDE,
+        "overlap": SEQUENTIAL_OVERLAP,
+        "note": note,
+    }
+
+
+def extraction_args(config: dict) -> list[str]:
+    """The feature_extractor options for a config -- one place, so a test can
+    pin them and the solve cannot drift from what the docs claim."""
+    if config["features"] == "aliked":
+        return [
+            "--FeatureExtraction.type", "ALIKED_N16ROT",
+            "--AlikedExtraction.max_num_features", str(ALIKED_MAX_FEATURES),
+            "--AlikedExtraction.min_score", str(ALIKED_MIN_SCORE),
+        ]
+    return [
+        "--FeatureExtraction.type", "SIFT",
+        "--SiftExtraction.max_num_features", str(SIFT_MAX_FEATURES),
+    ]
+
+
+def matching_type(config: dict) -> str:
+    base = "ALIKED" if config["features"] == "aliked" else "SIFT"
+    return f"{base}_LIGHTGLUE" if config["matcher"] == "lightglue" else f"{base}_BRUTEFORCE"
+
+
+def build_vocab_tree(exe: str, database: Path, out: Path, progress=None) -> Path | None:
+    """A loop-closure vocabulary from this sweep's own descriptors.
+
+    COLMAP's distributed trees are built on SIFT descriptors and retrieve
+    nothing useful for ALIKED's (measured: zero pairs). Clustering the sweep's
+    own descriptors into a few thousand words is cheap and is exactly the
+    index loop detection needs: it only has to recognise which earlier frame
+    of *this* room a later frame is looking at. Best-effort -- None means
+    "match without loop detection", never a failed solve.
+    """
+    try:
+        if progress:
+            progress("building loop-closure vocabulary from this sweep")
+        _run(
+            [
+                exe, "vocab_tree_builder",
+                "--database_path", str(database),
+                "--vocab_tree_path", str(out),
+                "--num_visual_words", str(ALIKED_VOCAB_WORDS),
+                "--max_num_descriptors", str(ALIKED_VOCAB_MAX_DESCRIPTORS),
+            ],
+            out.parent / "vocab_tree.log",
+            "vocab_tree_builder",
+        )
+    except ColmapError:
+        return None
+    return out if out.exists() and out.stat().st_size > 1000 else None
+
+
 def mapper_used(work_dir: str | Path) -> str | None:
     """Which mapper solved the poses in this workspace, if it recorded one."""
     stamp = Path(work_dir) / "frames_used.json"
@@ -271,8 +426,9 @@ def run_sfm(
     image_dir: str | Path,
     work_dir: str | Path,
     *,
-    overlap: int = SEQUENTIAL_OVERLAP,
+    overlap: int | None = None,
     reuse: bool = True,
+    config: dict | None = None,
     progress=None,
 ) -> Path:
     """Feature-extract, match and map. Returns the sparse model directory.
@@ -283,31 +439,37 @@ def run_sfm(
 
     With `reuse` (the default), a workspace that already holds a solved model
     is returned as-is: the solve is minutes, it is deterministic for the same
-    frames, and a failure in the *dense* stage should not cost re-solving the
-    cameras on retry. Callers who changed the frames pass `reuse=False`.
+    frames and the same detector, and a failure in the *dense* stage should
+    not cost re-solving the cameras on retry. Callers who changed the frames
+    pass `reuse=False`; a change of detector or matcher is caught by the stamp.
     """
     exe = executable()
+    cfg = config or feature_config()
+    overlap = int(overlap or cfg["overlap"])
     image_dir, work_dir = Path(image_dir), Path(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
     database = work_dir / "database.db"
     sparse = work_dir / "sparse"
 
     if reuse and database.exists() and sparse.exists():
-        # Only a solve of *these exact frames*. Decoding is deterministic for
-        # the same video and options, so name+size identity is the right test;
-        # modification times are useless here because retries re-extract the
-        # frames and stamp them with fresh times.
+        # Only a solve of *these exact frames* with *this detector*. Decoding
+        # is deterministic for the same video and options, so name+size
+        # identity is the right test; modification times are useless here
+        # because retries re-extract the frames and stamp them with fresh
+        # times.
         stamp = work_dir / "frames_used.json"
         models = sorted(p for p in sparse.iterdir()
                         if p.is_dir() and not p.name.endswith("_txt"))
         stamped = json.loads(stamp.read_text()) if stamp.exists() else None
-        # The stamp grew a "mapper" key when the global mapper landed; a bare
-        # fingerprint list is a solve from before that, and re-solving it is
-        # the point of the upgrade rather than a cache accident.
+        # The stamp grew a "mapper" key when the global mapper landed and a
+        # "features" key when ALIKED did; a stamp without the latter is a SIFT
+        # solve, which is still the right poses for a SIFT config.
         frames_match = (
             isinstance(stamped, dict)
             and stamped.get("frames") == _frames_fingerprint(image_dir)
             and stamped.get("solve_version") == SOLVE_VERSION
+            and stamped.get("features", "sift") == cfg["features"]
+            and stamped.get("matcher", "bruteforce") == cfg["matcher"]
         )
         if frames_match and models and any(_count_registered(m) > 0 for m in models):
             if progress:
@@ -321,7 +483,7 @@ def run_sfm(
     sparse.mkdir(parents=True)
 
     if progress:
-        progress("colmap features")
+        progress(f"colmap features ({cfg['features']})")
     _run(
         [
             exe, "feature_extractor",
@@ -332,24 +494,31 @@ def run_sfm(
             # solved from one frame each.
             "--ImageReader.single_camera", "1",
             "--ImageReader.camera_model", "SIMPLE_RADIAL",
-            "--SiftExtraction.max_num_features", str(SIFT_MAX_FEATURES),
+            *extraction_args(cfg),
         ],
         work_dir / "features.log",
         "feature_extractor",
     )
 
     if progress:
-        progress("colmap matching")
+        progress(f"colmap matching ({cfg['matcher']})")
     matching = [
         exe, "sequential_matcher",
         "--database_path", str(database),
         "--SequentialMatching.overlap", str(overlap),
         "--SequentialMatching.quadratic_overlap", "1",
+        "--FeatureMatching.type", matching_type(cfg),
     ]
-    vocab = vocab_tree(progress=progress)
+    if cfg["features"] == "aliked":
+        vocab = build_vocab_tree(
+            exe, database, work_dir / "vocab_tree_aliked.bin", progress=progress
+        )
+    else:
+        vocab = vocab_tree(progress=progress)
     if vocab is not None:
         matching += [
             "--SequentialMatching.loop_detection", "1",
+            "--SequentialMatching.loop_detection_num_images", str(LOOP_DETECTION_NUM_IMAGES),
             "--SequentialMatching.vocab_tree_path", str(vocab),
         ]
     _run(matching, work_dir / "matching.log", "sequential_matcher")
@@ -398,6 +567,30 @@ def run_sfm(
             registered = max((_count_registered(m) for m in models), default=0)
             if registered >= GLOBAL_MAPPER_MIN_REGISTERED * max(n_frames, 1):
                 mapper = "global"
+                # The global mapper's own refinement is lighter than COLMAP's
+                # full bundle adjuster, and a room walk's residual drift lives
+                # in exactly the long-range consistency a final joint solve
+                # of every pose, point and the shared intrinsics recovers.
+                # Best-effort: a build or a model that refuses it keeps the
+                # global solve as it was.
+                best = _largest_model(models)
+                try:
+                    if progress:
+                        progress("colmap bundle adjustment")
+                    _run(
+                        [
+                            exe, "bundle_adjuster",
+                            "--input_path", str(best),
+                            "--output_path", str(best),
+                            "--BundleAdjustment.refine_focal_length", "1",
+                            "--BundleAdjustment.refine_extra_params", "1",
+                            "--BundleAdjustment.refine_principal_point", "0",
+                        ],
+                        work_dir / "bundle.log",
+                        "bundle_adjuster",
+                    )
+                except ColmapError:
+                    pass
             else:
                 # A global solve that lost half the sweep is not a model to
                 # keep -- rotation averaging degrades all at once where the
@@ -434,6 +627,8 @@ def run_sfm(
             "frames": _frames_fingerprint(image_dir),
             "mapper": mapper,
             "solve_version": SOLVE_VERSION,
+            "features": cfg["features"],
+            "matcher": cfg["matcher"],
         })
     )
     return _largest_model(models)

@@ -1,24 +1,19 @@
-"""Gaussian-splat densification: per-scene optimisation as a stereo backend.
+"""Gaussian-splat view layer: a per-scene photoreal model of the capture.
 
-Classical patch-match stereo cannot return surface from a blank wall -- there
-is nothing for pixels to match -- and every pretrained depth model is banned
-by the hackathon's rules. Between those two sits a technology that is
-neither: 3D Gaussian Splatting, which fits a set of oriented Gaussian discs
-to THIS scene's own frames by gradient descent. No pretrained weights, no
-external data, no API -- the same mathematical family as the bundle
-adjustment that solved the cameras, distributed as ordinary open-source
-software (Brush, a Rust/Metal trainer). Where stereo sees nothing, the
-optimiser must still explain every wall pixel of every frame, so it puts
-view-consistent surface there. That is the exact gap in the classical
-pipeline, filled per-scene.
+3D Gaussian Splatting fits a set of oriented Gaussian discs to THIS scene's
+own frames by gradient descent -- the same mathematical family as the bundle
+adjustment that solved the cameras -- using Brush, an Apache-licensed
+Rust/Metal trainer, so it runs on a laptop GPU. The optimiser has to explain
+every pixel of every frame, which makes the trained field the best picture
+of the room the pipeline has: the viewer renders it directly, and the
+coverage planner renders its candidate frames from it.
 
-The output is a cloud, on purpose. The splats are sampled back into a dense,
-uniform, coloured point cloud (one point per ~8 mm of real surface, opacity-
-gated, floaters dropped), and from there the twin pipeline neither knows nor
-cares that the points came from an optimiser: the sparse-box clip, the
-ray-contradiction fog filter, the kNN trim, the MLS surface refinement and
-the room solve all run unchanged. A splat cloud is held to the same audit as
-a stereo cloud, which is the project's whole bargain.
+Its geometry is softer than measured geometry, so it is kept out of every
+fit. The splats are sampled back into a dense, uniform, coloured point cloud
+(one point per ~4 mm of real surface, opacity-gated, floaters dropped) and
+appended to the twin after the room is solved, flagged as a view layer and
+excluded from measurement -- see `reconstruct.py`. Measured surface on blank
+walls comes from the verified learned fill in `learned.py`, not from here.
 """
 
 from __future__ import annotations

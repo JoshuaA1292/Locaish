@@ -253,6 +253,11 @@ class Canonicalization:
     # be. It stops here unless something reads it.
     gravity_axis_margin: float = 1.0
     gravity_sign_margin: float = 1.0
+    # The device hint's agreement with the chosen axis and its coherence, so
+    # QA can tell a close vote that an independent measurement corroborated
+    # from a close vote nothing corroborated. None when there was no hint.
+    gravity_hint_agreement: float | None = None
+    gravity_hint_coherence: float | None = None
 
     def __post_init__(self) -> None:
         self.transform = np.asarray(self.transform, dtype=np.float64).reshape(4, 4)
@@ -400,6 +405,13 @@ class GravitySolution:
     pole: np.ndarray | None = None
     method: dict[str, str] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
+    # How well the device's own up hint agreed with the axis the geometry
+    # chose (|cos|, None without a hint) and how coherent that hint was. The
+    # two arguments share no evidence -- one is the room's shape, the other is
+    # how the phone was held -- so their agreement is information QA may use
+    # when the geometric vote alone was close.
+    hint_agreement: float | None = None
+    hint_coherence: float | None = None
 
     def __post_init__(self) -> None:
         self.up = np.asarray(self.up, dtype=np.float64).reshape(3)
@@ -883,6 +895,10 @@ def find_up(
         pole=poles[best] if converged[best] else None,
         method=method,
         warnings=warnings,
+        hint_agreement=(
+            None if up_hint is None else abs(float(np.dot(poles[best], up_hint)))
+        ),
+        hint_coherence=None if up_hint is None else up_hint_coherence,
     )
 
 
@@ -1423,6 +1439,8 @@ def canonicalize(
         warnings=warnings,
         gravity_axis_margin=float(gravity.axis_margin),
         gravity_sign_margin=float(gravity.sign_margin),
+        gravity_hint_agreement=gravity.hint_agreement,
+        gravity_hint_coherence=gravity.hint_coherence,
     )
 
 

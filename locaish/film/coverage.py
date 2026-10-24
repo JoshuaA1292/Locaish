@@ -1086,12 +1086,23 @@ _SVG_W = 720
 _PAD_M = 0.6
 
 
-def floor_plan_svg(twin: Twin, plan: CoveragePlan) -> str:
+def floor_plan_svg(
+    twin: Twin,
+    plan: CoveragePlan | None = None,
+    *,
+    overlay: Callable[[Callable[[float], float], Callable[[float], float]], list[str]] | None = None,
+    caption: str = "",
+) -> str:
     """The overhead camera diagram a 1st AD tapes to the wall.
 
     Footprint, openings, the ground the capture actually surveyed, then every
     planned camera as a numbered mark with its field-of-view wedge and a
     line to the subject it frames. Metres throughout; a scale bar says so.
+
+    With no plan it is the bare floor plan of the room, which the location
+    package uses; `overlay(X, Y)` returns SVG fragments drawn on the floor
+    (clipped to the footprint) before anything that stands on it, and is how
+    the package paints the sun's patch for an hour of the shoot date.
     """
     s = twin.structure
     xyz = np.asarray(twin.points.xyz)
@@ -1135,7 +1146,15 @@ def floor_plan_svg(twin: Twin, plan: CoveragePlan) -> str:
     # footprint
     if fp is not None:
         pts = " ".join(f"{X(p[0]):.1f},{Y(p[1]):.1f}" for p in fp)
+        parts.append(f'<clipPath id="room"><polygon points="{pts}"/></clipPath>')
         parts.append(f'<polygon points="{pts}" fill="#15181d" fill-opacity="0.6" stroke="#e8eaed" stroke-width="2.5"/>')
+    # whatever lies on the floor: sun patches, dolly runs
+    if overlay is not None:
+        extra = overlay(X, Y)
+        if extra:
+            parts.append('<g clip-path="url(#room)">' if fp is not None else "<g>")
+            parts.extend(extra)
+            parts.append("</g>")
     # openings as ticks along their wall
     for j, op in enumerate(s.openings):
         c = np.asarray(op.center, dtype=np.float64)
@@ -1158,7 +1177,8 @@ def floor_plan_svg(twin: Twin, plan: CoveragePlan) -> str:
             parts.append(f'<polygon points="{pts}" fill="#8b95a1" fill-opacity="0.25" stroke="#8b95a1" stroke-width="1"/>')
 
     # cameras: wedge, sightline, numbered mark
-    for ps in plan.shots:
+    shots = plan.shots if plan is not None else []
+    for ps in shots:
         st = ps.setup
         if not st:
             continue
@@ -1176,7 +1196,7 @@ def floor_plan_svg(twin: Twin, plan: CoveragePlan) -> str:
     # their numbers: two setups on the same spot are the norm (the master and
     # the two-shot from the corner), and stacked circles hide each other.
     groups: dict[tuple[int, int], list] = {}
-    for ps in plan.shots:
+    for ps in shots:
         st = ps.setup
         if not st:
             continue
@@ -1196,7 +1216,7 @@ def floor_plan_svg(twin: Twin, plan: CoveragePlan) -> str:
         parts.append(f'<text x="{X(cx) + r + 3:.1f}" y="{Y(cy) - r + 4:.1f}" fill="#8b95a1" font-size="10">{label}</text>')
 
     # subject marks, on top: an actor's mark must never hide under a camera
-    for name, (mx, my) in plan.marks.items():
+    for name, (mx, my) in (plan.marks.items() if plan is not None else []):
         parts.append(f'<circle cx="{X(mx):.1f}" cy="{Y(my):.1f}" r="9" fill="#e5c07b" fill-opacity="0.95"/>')
         parts.append(f'<text x="{X(mx):.1f}" y="{Y(my) + 4:.1f}" fill="#0e1013" font-size="10" font-weight="700" '
                      f'text-anchor="middle">{_esc(name[:3])}</text>')
@@ -1206,11 +1226,23 @@ def floor_plan_svg(twin: Twin, plan: CoveragePlan) -> str:
     # scale bar and legend
     parts.append(f'<line x1="16" y1="{H - 18}" x2="{16 + scale:.1f}" y2="{H - 18}" stroke="#e8eaed" stroke-width="2"/>')
     parts.append(f'<text x="{20 + scale:.1f}" y="{H - 14}" fill="#8b95a1" font-size="11">1 m</text>')
-    if twin.georeference is not None:
-        parts.append(f'<text x="{_SVG_W - 16}" y="20" fill="#8b95a1" font-size="11" text-anchor="end">N ↑ '
-                     f'({twin.georeference.heading_source} heading)</text>')
+    geo = twin.georeference
+    if geo is not None:
+        # A real north arrow: heading is the bearing of +X, so north in twin
+        # XY is (cos h, sin h); the page's Y axis points down.
+        h = math.radians(geo.heading_deg)
+        nx, ny = math.cos(h), -math.sin(h)
+        cx, cy = _SVG_W - 28, 30
+        parts.append(f'<circle cx="{cx}" cy="{cy}" r="16" fill="#0e1013" stroke="#2c323b" stroke-width="1"/>')
+        parts.append(f'<line x1="{cx - 12 * nx:.1f}" y1="{cy - 12 * ny:.1f}" x2="{cx + 12 * nx:.1f}" y2="{cy + 12 * ny:.1f}" '
+                     f'stroke="#e8eaed" stroke-width="2"/>')
+        parts.append(f'<circle cx="{cx + 12 * nx:.1f}" cy="{cy + 12 * ny:.1f}" r="3" fill="#e0707a"/>')
+        parts.append(f'<text x="{cx - 22}" y="{cy + 4}" fill="#8b95a1" font-size="11" text-anchor="end">N '
+                     f'({geo.heading_source})</text>')
     else:
         parts.append(f'<text x="{_SVG_W - 16}" y="20" fill="#8b95a1" font-size="11" text-anchor="end">+y ↑ · heading unknown</text>')
+    if caption:
+        parts.append(f'<text x="16" y="20" fill="#e8eaed" font-size="12" font-weight="600">{_esc(caption)}</text>')
     parts.append("</svg>")
     return "\n".join(parts)
 

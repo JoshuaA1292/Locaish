@@ -21,6 +21,7 @@ last because it is the only step allowed to look at everything at once.
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -705,6 +706,11 @@ class IngestError(RuntimeError):
 #: other check cleanly.
 GRAVITY_AXIS_MARGIN_FAIL = 0.10
 GRAVITY_AXIS_MARGIN_WARN = 0.25
+# A device up hint corroborates a close axis vote when it lies within ~5 deg
+# of the chosen axis (|cos| >= 0.996) and the phone was held consistently
+# enough across the sweep for that hint to mean something.
+GRAVITY_HINT_MIN_AGREEMENT = 0.996
+GRAVITY_HINT_MIN_COHERENCE = 0.90
 GRAVITY_SIGN_MARGIN_WARN = 0.10
 
 
@@ -775,11 +781,22 @@ def _hint_evidence(scan) -> list[str] | None:
     factor = header.get("scale_factor_m_per_unit")
     if source == "supplied":
         return [f"scale supplied by the operator as {factor:.6g} m per source unit"]
-    return [
-        f"scale solved as {factor:.6g} m per source unit from the camera path's "
-        "height above the floor (and any doorway found in the room); the room's "
-        "shape is measured but its size is inferred"
-    ]
+    names = {
+        "camera-height": "the camera path's height above the floor",
+        "metric-depth-model": "a metric depth model's metres tied to the sparse points",
+        "door-height": "the height of a doorway found in the room",
+    }
+    comps = [c for c in (header.get("scale_components") or []) if c in names]
+    if not comps:
+        comps = ["camera-height"]
+    evidence = " and ".join(names[c] for c in comps)
+    tail = (
+        "; the room's shape is measured and its size is cross-checked between "
+        "independent estimators"
+        if len(comps) > 1
+        else "; the room's shape is measured but its size rests on one estimator"
+    )
+    return [f"scale solved as {factor:.6g} m per source unit from {evidence}{tail}"]
 
 
 def _check_gravity_decision(report: QAReport, canon) -> None:
@@ -798,7 +815,39 @@ def _check_gravity_decision(report: QAReport, canon) -> None:
     report.metrics["gravity_axis_margin"] = axis
     report.metrics["gravity_sign_margin"] = sign
 
-    if axis < GRAVITY_AXIS_MARGIN_FAIL:
+    # The device's own orientation is a second, independent witness to the
+    # axis: the geometric vote reads the room's shape, the hint reads how the
+    # phone was held, and they share no arithmetic. When the vote was close
+    # but a coherently held phone picked the same axis, the decision was not
+    # a coin toss -- it was a near-tie broken by a measurement -- and the
+    # report says exactly that instead of failing the twin.
+    agreement = getattr(canon, "gravity_hint_agreement", None)
+    coherence = getattr(canon, "gravity_hint_coherence", None)
+    corroborated = (
+        isinstance(agreement, (int, float))
+        and isinstance(coherence, (int, float))
+        and float(agreement) >= GRAVITY_HINT_MIN_AGREEMENT
+        and float(coherence) >= GRAVITY_HINT_MIN_COHERENCE
+    )
+    if agreement is not None:
+        report.metrics["gravity_hint_agreement"] = float(agreement)
+    if coherence is not None:
+        report.metrics["gravity_hint_coherence"] = float(coherence)
+
+    if axis < GRAVITY_AXIS_MARGIN_FAIL and corroborated:
+        report.add(
+            "gravity_axis",
+            "warn",
+            f"The room's geometry alone chose the vertical axis by only {axis:.0%} "
+            f"over the runner-up, under the {GRAVITY_AXIS_MARGIN_FAIL:.0%} floor, "
+            f"but the capture device's own orientation -- held consistently across "
+            f"the sweep ({float(coherence):.0%} coherence) -- independently picks the "
+            f"same axis to within "
+            f"{math.degrees(math.acos(min(1.0, float(agreement)))):.1f} deg. "
+            "A near-tie broken by a measurement, not a coin toss; still worth "
+            "confirming the ceiling height against the real room.",
+        )
+    elif axis < GRAVITY_AXIS_MARGIN_FAIL:
         report.add(
             "gravity_axis",
             "fail",

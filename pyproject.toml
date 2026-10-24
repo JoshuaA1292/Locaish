@@ -26,13 +26,25 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
-# The video front-end reconstructs classically -- COLMAP structure-from-motion
-# plus stereo matching, no neural networks anywhere (see locaish/video/colmap.py
-# for why that is load-bearing). OpenCV supplies the CPU stereo fallback; the
-# `colmap` and `ffmpeg` binaries must be on PATH, which pip cannot supply
-# (`brew install colmap ffmpeg` / `apt install colmap ffmpeg`).
+# The video front-end: COLMAP structure-from-motion (ALIKED features and
+# GLOMAP where the build has them) plus multi-view stereo. OpenCV supplies
+# the CPU stereo fallback; the `colmap` and `ffmpeg` binaries must be on PATH,
+# which pip cannot supply (`brew install colmap ffmpeg` / `apt install colmap
+# ffmpeg`). COLMAP 4.x with ONNX support is what unlocks ALIKED.
 video = [
     "opencv-python-headless>=4.9",
+]
+# The learned geometry stage (locaish/video/learned.py): MoGe-2, a metric
+# monocular geometry model (MIT licence, weights fetched from Hugging Face on
+# first use), which anchors the twin's scale and fills the walls stereo
+# cannot match. Pinned to the last MoGe-2 commit: the repository's main
+# branch is MoGe-3, which needs Triton and has no macOS build.
+learned = [
+    "torch>=2.2",
+    "torchvision",
+    "huggingface_hub",
+    "utils3d @ git+https://github.com/EasternJournalist/utils3d.git@3fab839f0be9931dac7c8488eb0e1600c236e183",
+    "moge @ git+https://github.com/microsoft/MoGe.git@0744441",
 ]
 
 [project.scripts]

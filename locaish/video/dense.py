@@ -1,10 +1,13 @@
-"""Turning solved camera poses into a dense cloud, without a neural network.
+"""Turning solved camera poses into a dense cloud by multi-view stereo.
 
 Structure from motion gives back a few tens of thousands of points -- the
 corners it could match -- and a room twin needs a few million. Filling in
-between them is the dense stage, and it is pure photometric geometry: for every
-pixel of one view, search along the corresponding line in another view for the
-patch that looks the same, and the disparity where it matches gives the depth.
+between them is the dense stage, and this module's half of it is photometric
+geometry: for every pixel of one view, search along the corresponding line in
+another view for the patch that looks the same, and the disparity where it
+matches gives the depth. Where that works it is the most accurate surface the
+pipeline has, which is why it keeps authority over the learned fill in
+`learned.py`: the model only answers where stereo had nothing to match.
 
 Several implementations, because the good one needs hardware that a laptop
 does not have.
@@ -26,8 +29,9 @@ a 2005 algorithm, it runs anywhere, and it is markedly weaker on the textureless
 walls that rooms are mostly made of -- there is nothing to match, and honest
 block matching returns nothing rather than inventing a surface.
 
-Neither is an AI model. Both are search and optimisation over pixel
-similarities, with no trained parameters anywhere.
+OpenMVS is AGPL-3.0 and runs here as a separate executable; the CUDA
+PatchMatch path is COLMAP's own (BSD) and is the right stereo for a hosted
+GPU build.
 """
 
 from __future__ import annotations
@@ -248,6 +252,10 @@ def densify_openmvs(
         "number_views": number_views,
         "number_views_fuse": number_views_fuse,
         "geometric_iters": geometric_iters,
+        # The poses the depth maps were computed under. A re-solve with a
+        # different detector moves every camera, and a dense cloud cached
+        # under the old poses would be reused in the wrong frame without this.
+        "model": _model_fingerprint(model_dir),
     }
     if stamp_path.exists():
         for cand in ("scene_dense_filtered.ply", "scene_dense.ply"):
@@ -336,6 +344,17 @@ def densify_openmvs(
 
     stamp_path.write_text(json.dumps(stamp))
     return _read_fused(fused)
+
+
+def _model_fingerprint(model_dir: Path) -> list:
+    """Identity of a sparse model: the sizes of its binary files. Cheap, and a
+    different solve of the same frames essentially never lands on the same
+    byte counts for both images and points."""
+    out = []
+    for name in ("cameras.bin", "images.bin", "points3D.bin"):
+        p = Path(model_dir) / name
+        out.append([name, p.stat().st_size if p.exists() else -1])
+    return out
 
 
 def _read_fused(fused: Path) -> np.ndarray:

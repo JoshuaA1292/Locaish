@@ -126,6 +126,12 @@ class Studio:
         self._lock = threading.Lock()
         self._agent = None
         self._agent_lock = threading.Lock()
+        # The product layer: projects, location details, share links, leads.
+        from .product.store import Gate, Store
+
+        self.store = Store(root)
+        self.gate = Gate(os.environ.get("LOCAISH_PASSCODE"))
+        self._reports: dict[str, object] = {}
         self.restored = self._restore()
 
     def _restore(self) -> int:
@@ -250,7 +256,163 @@ class Studio:
             from .types import Twin
 
             job.twin_obj = Twin.load(job.twin_path)
+            self.apply_details(job)
         return job.twin_obj
+
+    def apply_details(self, job: Job) -> None:
+        """The scout's compass heading and address override the capture's.
+
+        A twin georeferenced from the browser knows where it is but not
+        which way it faces; the heading the scout types in (checked against
+        a compass on the window) is what makes the sun schedule a
+        measurement. Applied to the loaded twin only -- the .twin file on
+        disk stays the record of what the capture itself established.
+        """
+        if job.twin_obj is None:
+            return
+        from .types import Georeference
+
+        d = self.store.details(job.workdir)
+        twin = job.twin_obj
+        geo = twin.georeference
+        lat = d.get("latitude", geo.latitude if geo else None)
+        lon = d.get("longitude", geo.longitude if geo else None)
+        if lat is None or lon is None:
+            return
+        heading = d.get("heading_deg")
+        if heading is None and geo is not None:
+            heading, source = geo.heading_deg, geo.heading_source
+        elif heading is None:
+            heading, source = 0.0, "assumed"
+        else:
+            source = "user"
+        twin.georeference = Georeference(latitude=float(lat), longitude=float(lon),
+                                         heading_deg=float(heading), heading_source=source,
+                                         elevation_m=geo.elevation_m if geo else 0.0)
+        self._reports.pop(job.id, None)
+
+    def report_of(self, job: Job):
+        """The scout report, surveyed once per loaded twin."""
+        if job.id not in self._reports:
+            from .film import report as reportmod
+
+            self._reports[job.id] = reportmod.build(self.twin_of(job))
+        return self._reports[job.id]
+
+    def plans_of(self, job: Job) -> list[dict]:
+        return [r.plan_dict for r in job.plans.values() if r.state == "done" and r.plan_dict]
+
+    def display_name(self, job: Job) -> str:
+        d = self.store.details(job.workdir)
+        if d.get("display_name"):
+            return str(d["display_name"])
+        return Path(job.name).stem.replace("_", " ")
+
+    def room_listing(self) -> list[dict]:
+        """Every finished room, as the project page and the compare need it."""
+        out = []
+        for j in self.jobs.values():
+            if j.state != "done":
+                continue
+            s = j.summary or {}
+            meta = []
+            if s.get("floor_area_m2") is not None:
+                meta.append(f"{s['floor_area_m2']} m²")
+            if s.get("openings"):
+                meta.append(f"{s['openings']} window{'s' if s['openings'] != 1 else ''}")
+            out.append({"id": j.id, "name": self.display_name(j), "meta": " · ".join(meta)})
+        return out
+
+    # -- what is in the room ---------------------------------------------
+    def frames_of(self, job: Job):
+        """The job's posed frames, loaded once; None for scan-file twins."""
+        if not hasattr(job, "_frames"):
+            from .product import labels as labelsmod
+
+            try:
+                job._frames = labelsmod.load_frames(job.workdir, self.twin_of(job))
+            except Exception:  # noqa: BLE001
+                job._frames = None
+        return job._frames
+
+    def tree_of(self, job: Job):
+        if not hasattr(job, "_tree"):
+            from .product import labels as labelsmod
+
+            job._tree = labelsmod.surface_tree(self.twin_of(job))
+        return job._tree
+
+    def labels_of(self, job: Job) -> list[dict]:
+        from .product import labels as labelsmod
+
+        return labelsmod.load_labels(job.workdir)
+
+    def detect_labels(self, job: Job, *, max_frames: int | None = None, progress=None) -> dict:
+        from .product import labels as labelsmod
+
+        twin = self.twin_of(job)
+        frames = self.frames_of(job)
+        if frames is None:
+            raise ValueError("this twin has no posed frames to look at (scan-file twins carry no pictures)")
+        return labelsmod.detect(job.workdir, twin, frames=frames, tree=self.tree_of(job),
+                                max_frames=max_frames or labelsmod.DETECT_FRAMES, progress=progress)
+
+    def build_package(self, job: Job, *, shoot_date: str | None, hours=None, image_base: str = "",
+                      viewer_url: str = "", package_url: str = "") -> dict:
+        from .product import package as pkgmod
+        from .product import sunlight
+
+        twin = self.twin_of(job)
+        pkg = pkgmod.build(
+            twin, job_id=job.id, name=self.display_name(job),
+            details=self.store.details(job.workdir), shoot_date=shoot_date,
+            hours=tuple(hours) if hours else sunlight.DEFAULT_HOURS,
+            plans=self.plans_of(job), report=self.report_of(job),
+            viewer_url=viewer_url, package_url=package_url,
+            labels=self.labels_of(job),
+        )
+        # A caveat the sound section already states does not need saying twice.
+        seen = set()
+        pkg["caveats"] = [c for c in pkg["caveats"] if not (c in seen or seen.add(c))]
+        return pkg
+
+    def compare(self, project: dict) -> dict:
+        """Rank the project's rooms against its brief. Synchronous: a room
+        costs a second or two once its sweep is cached."""
+        import time as _time
+
+        from .product import fit as fitmod
+
+        t0 = _time.time()
+        shots = fitmod.shots_from_brief(project.get("brief") or "")
+        date = project.get("shoot_date") or None
+        rows = []
+        for jid in project.get("locations") or []:
+            job = self.jobs.get(jid)
+            if not job or job.state != "done":
+                continue
+            try:
+                twin = self.twin_of(job)
+                row = fitmod.fit_location(twin, self.setups_for(job), shots, shoot_date=date,
+                                          report=self.report_of(job))
+            except Exception as exc:  # noqa: BLE001 - one bad room must not sink the table
+                row = {"location": jid, "shots": [], "held": 0, "relaxed": 0, "missed": len(shots),
+                       "score": 0.0, "total": len(shots), "warnings": [f"{type(exc).__name__}: {exc}"]}
+            row["job_id"] = jid
+            row["display_name"] = self.display_name(job)
+            row["summary"] = fitmod.summary_line(row)
+            rows.append(row)
+        rows = fitmod.rank(rows)
+        return {
+            "shots": [{"number": s.number, "size": s.size, "subject": s.subject,
+                       "description": s.description} for s in shots],
+            "rows": rows,
+            "shoot_date": date,
+            "brief": project.get("brief") or "",
+            "locations": list(project.get("locations") or []),
+            "seconds": round(_time.time() - t0, 1),
+            "ran_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(timespec="seconds"),
+        }
 
     def sweep_of(self, job: Job):
         if job.sweep is None:
@@ -536,6 +698,20 @@ class Studio:
                 job.summary["scout"] = job.scout_path is not None
                 job.location = twin.name
 
+                # The semantic pass: what is in the room, by name, placed
+                # from the capture's own frames. Advisory and provisional;
+                # a person confirms or corrects it in the studio.
+                try:
+                    from .product import labels as labelsmod
+
+                    if labelsmod.gemini_available() and self.frames_of(job) is not None:
+                        job.emit("stage", "identifying what is in the room")
+                        found = self.detect_labels(job, progress=lambda m: job.emit("stage", m))
+                        job.emit("note", f"{found['objects']} objects named from {found['frames_looked_at']} frames "
+                                         "(provisional until someone confirms them)")
+                except Exception as exc:  # noqa: BLE001 - names are a bonus, never a blocker
+                    job.emit("note", f"could not name the room's contents: {exc}")
+
                 # The sweep: every physically-possible setup, scored, and --
                 # when ClickHouse is configured -- loaded where the agent can
                 # search it.
@@ -602,6 +778,25 @@ class Studio:
             job.emit("note", f"ClickHouse load failed: {exc}")
 
 
+def _notify_lead(rec: dict) -> None:
+    """Forward a pilot request to a webhook (Slack, Zapier, anything that
+    takes JSON) when LOCAISH_LEAD_WEBHOOK is set. Best effort: the lead is
+    already on disk."""
+    url = os.environ.get("LOCAISH_LEAD_WEBHOOK")
+    if not url:
+        return
+    try:
+        import urllib.request
+
+        text = (f"New Locaish lead: {rec.get('name')} <{rec.get('email')}> at {rec.get('company')} "
+                f"({rec.get('role')}), plan {rec.get('plan')}: {rec.get('message')}")
+        data = json.dumps({"text": text, "lead": rec}).encode()
+        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=5).read()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _coverage_agent_configured() -> bool:
     try:
         from .agent.coverage import agent_configured
@@ -658,15 +853,44 @@ class _Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):  # quieter than the default access log
         pass
 
+    # -- the gate ----------------------------------------------------------
+    # Paths anyone may open: share links, the public pages, the assets.
+    _PUBLIC = ("s", "login", "logo.svg", "favicon.svg", "pricing", "capture", "lead", "health")
+
+    def _allowed(self, parts: list[str]) -> bool:
+        gate = self.studio.gate
+        if not gate.enabled:
+            return True
+        if parts and parts[0] in self._PUBLIC:
+            return True
+        return gate.valid(gate.from_cookie_header(self.headers.get("Cookie")))
+
+    def _deny(self) -> None:
+        wants_html = "text/html" in (self.headers.get("Accept") or "")
+        if wants_html:
+            self.send_response(302)
+            self.send_header("Location", "/login?next=" + self.path)
+            self.end_headers()
+            return
+        self._json({"error": "this studio needs its passcode"}, 401)
+
     # -- GET ---------------------------------------------------------------
     def do_GET(self) -> None:
         url = urlparse(self.path)
         parts = [p for p in url.path.split("/") if p]
+        if not self._allowed(parts):
+            return self._deny()
 
         if not parts:
             return self._html(PAGE.replace("__SHOWCASE__", "1" if self.studio.showcase else "0"))
         if parts[0] in ("logo.svg", "favicon.svg"):
             return self._svg(LOGO_SVG)
+        if parts[0] == "health":
+            return self._json({"ok": True, "jobs": len(self.studio.jobs)})
+        if parts[0] in ("projects", "projects.json", "project", "package", "floorplan", "sun",
+                        "details", "s", "pricing", "capture", "login", "share", "leads",
+                        "labels", "label-views", "label-crop"):
+            return self._product_get(parts, parse_qs(url.query))
         if parts[0] == "thumb" and len(parts) == 2:
             return self._thumb(parts[1])
         if parts[0] == "events" and len(parts) == 2:
@@ -675,7 +899,12 @@ class _Handler(BaseHTTPRequestHandler):
             job = self.studio.jobs.get(parts[1])
             if not job or not job.viewer_path or not job.viewer_path.exists():
                 return self._json({"error": "no viewer for that job"}, 404)
-            self.studio.refresh_viewer(job)
+            return self._serve_viewer(job)
+        self._route_rest(parts, url)
+
+    def _serve_viewer(self, job: Job) -> None:
+        self.studio.refresh_viewer(job)
+        if job.viewer_path is not None:
             # A deployed gallery bakes a pre-gzipped viewer beside the page:
             # hosts like Cloud Run cap responses (32 MiB) and the twin inlined
             # as HTML is bigger than that raw. Serve the sibling only while it
@@ -696,6 +925,8 @@ class _Handler(BaseHTTPRequestHandler):
             except OSError:
                 pass
             return self._file(job.viewer_path, "text/html; charset=utf-8")
+
+    def _route_rest(self, parts: list[str], url) -> None:
         if parts[0] == "scout" and len(parts) == 2:
             job = self.studio.jobs.get(parts[1])
             if not job or not job.scout_path or not job.scout_path.exists():
@@ -884,6 +1115,10 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         url = urlparse(self.path)
         parts = [p for p in url.path.split("/") if p]
+        if not self._allowed(parts):
+            return self._deny()
+        if parts and parts[0] in ("projects", "project", "details", "share", "lead", "login", "labels"):
+            return self._product_post(parts, parse_qs(url.query))
         if parts and parts[0] == "chat" and len(parts) == 2:
             return self._chat(parts[1])
         if parts and parts[0] == "plan" and len(parts) == 2:
@@ -1058,9 +1293,371 @@ class _Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
-    def _html(self, body: str) -> None:
-        payload = body.encode()
+    def do_DELETE(self) -> None:
+        url = urlparse(self.path)
+        parts = [p for p in url.path.split("/") if p]
+        if not self._allowed(parts):
+            return self._deny()
+        store = self.studio.store
+        if len(parts) == 2 and parts[0] == "share":
+            return self._json({"revoked": store.revoke_share(parts[1])})
+        if len(parts) == 2 and parts[0] == "project":
+            return self._json({"deleted": store.delete_project(parts[1])})
+        if len(parts) == 3 and parts[0] == "labels":
+            from .product import labels as labelsmod
+
+            job = self.studio.jobs.get(parts[1])
+            if not job:
+                return self._json({"error": "unknown job"}, 404)
+            return self._json({"removed": labelsmod.remove_label(job.workdir, parts[2])})
+        self._json({"error": "not found"}, 404)
+
+    def _body(self) -> dict:
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b""
+        except ValueError:
+            return {}
+        ctype = self.headers.get("Content-Type") or ""
+        if "json" in ctype or raw[:1] in (b"{", b"["):
+            try:
+                out = json.loads(raw or b"{}")
+                return out if isinstance(out, dict) else {}
+            except ValueError:
+                return {}
+        return {k: v[0] for k, v in parse_qs(raw.decode("utf-8", "replace")).items()}
+
+    def _base_url(self) -> str:
+        host = self.headers.get("X-Forwarded-Host") or self.headers.get("Host") or ""
+        proto = self.headers.get("X-Forwarded-Proto") or ("https" if host and not host.startswith(("127.", "localhost")) else "http")
+        return f"{proto}://{host}" if host else ""
+
+    def _product_get(self, parts: list[str], params: dict) -> None:
+        from .product import pages
+
+        studio, store = self.studio, self.studio.store
+        head = parts[0]
+        if head == "pricing":
+            return self._html(pages.pricing_page(
+                stripe_scout=os.environ.get("LOCAISH_STRIPE_SCOUT_URL", ""),
+                stripe_production=os.environ.get("LOCAISH_STRIPE_PRODUCTION_URL", ""),
+                contact_email=os.environ.get("LOCAISH_CONTACT_EMAIL", "")))
+        if head == "capture":
+            return self._html(pages.capture_page(showcase=studio.showcase))
+        if head == "login":
+            return self._html(pages.login_page(next_url=(params.get("next") or ["/"])[0]))
+        if head == "projects.json" or (head == "projects" and "json" in (self.headers.get("Accept") or "")):
+            return self._json({"projects": store.projects()})
+        if head == "projects":
+            return self._html(pages.projects_page(store.projects(), studio.room_listing()))
+        if head == "leads":
+            return self._json({"leads": store.leads()})
+        if head == "project" and len(parts) >= 2:
+            pid = parts[1]
+            as_json = pid.endswith(".json")
+            proj = store.project(pid[:-5] if as_json else pid)
+            if not proj:
+                return self._json({"error": "no such project"}, 404)
+            if as_json or len(parts) == 3 and parts[2] == "compare":
+                return self._json(proj if as_json else (proj.get("fit") or {"rows": []}))
+            return self._html(pages.project_page(proj, studio.room_listing(), share_base=self._base_url()))
+        if head == "details" and len(parts) == 2:
+            job = studio.jobs.get(parts[1])
+            if not job:
+                return self._json({"error": "unknown job"}, 404)
+            d = store.details(job.workdir)
+            geo = None
+            try:
+                g = studio.twin_of(job).georeference
+                if g is not None:
+                    geo = g.to_dict()
+            except Exception:  # noqa: BLE001
+                pass
+            return self._json({"details": d, "georeference": geo, "display_name": studio.display_name(job),
+                               "shares": store.shares_for(job.id)})
+        if head == "share" and len(parts) == 2:
+            return self._json({"shares": store.shares_for(parts[1])})
+        if head == "sun" and len(parts) == 2:
+            job = studio.jobs.get(parts[1])
+            if not job:
+                return self._json({"error": "unknown job"}, 404)
+            from .film import daylight
+
+            try:
+                return self._json(daylight.sun_schedule(studio.twin_of(job), (params.get("date") or [None])[0]))
+            except ValueError as exc:
+                return self._json({"error": str(exc)}, 400)
+        if head == "floorplan" and len(parts) == 2:
+            return self._floorplan(parts[1], params)
+        if head == "package" and len(parts) == 2:
+            jid = parts[1]
+            as_json = jid.endswith(".json")
+            return self._package(jid[:-5] if as_json else jid, params, as_json=as_json)
+        if head == "s" and len(parts) >= 2:
+            return self._shared(parts[1:], params)
+        if head == "labels" and len(parts) == 2:
+            job = studio.jobs.get(parts[1])
+            if not job:
+                return self._json({"error": "unknown job"}, 404)
+            from .product import labels as labelsmod
+
+            return self._json({"labels": studio.labels_of(job), "frames": studio.frames_of(job) is not None,
+                               "gemini": labelsmod.gemini_available()})
+        if head == "label-views" and len(parts) == 2:
+            return self._label_views(parts[1], params)
+        if head == "label-crop" and len(parts) == 2:
+            return self._label_crop(parts[1], params)
+        self._json({"error": "not found"}, 404)
+
+    def _label_views(self, job_id: str, params: dict) -> None:
+        """The frames that looked at a clicked point, with the point marked."""
+        job = self.studio.jobs.get(job_id)
+        if not job:
+            return self._json({"error": "unknown job"}, 404)
+        try:
+            p = [float(params[k][0]) for k in ("x", "y", "z")]
+        except (KeyError, ValueError, IndexError):
+            return self._json({"error": "need x, y, z in twin metres"}, 400)
+        frames = self.studio.frames_of(job)
+        if frames is None:
+            return self._json({"views": [], "reason": "this twin has no posed frames"})
+        try:
+            views = frames.best_views(p, self.studio.tree_of(job), k=4)
+        except Exception as exc:  # noqa: BLE001
+            return self._json({"error": f"{type(exc).__name__}: {exc}"}, 500)
+        for v in views:
+            v["url"] = f"/label-crop/{job.id}?i={v['index']}&u={v['u']:.1f}&v={v['v']:.1f}"
+        return self._json({"views": views, "point": p})
+
+    def _label_crop(self, job_id: str, params: dict) -> None:
+        job = self.studio.jobs.get(job_id)
+        frames = self.studio.frames_of(job) if job else None
+        if not job or frames is None:
+            return self._json({"error": "no frames"}, 404)
+        try:
+            i = int(params["i"][0]); u = float(params["u"][0]); v = float(params["v"][0])
+            if not 0 <= i < len(frames):
+                raise ValueError
+        except (KeyError, ValueError, IndexError):
+            return self._json({"error": "need i, u, v"}, 400)
+        data = frames.crop(i, u, v)
         self.send_response(200)
+        self.send_header("Content-Type", "image/jpeg")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "private, max-age=3600")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _floorplan(self, job_id: str, params: dict, *, token: str | None = None) -> None:
+        from .film import coverage as cov
+        from .product import sunlight
+
+        job = self.studio.jobs.get(job_id)
+        if not job:
+            return self._json({"error": "unknown job"}, 404)
+        try:
+            twin = self.studio.twin_of(job)
+            date = (params.get("date") or [None])[0]
+            hour = params.get("hour")
+            overlay = None
+            caption = ""
+            if hour and twin.georeference is not None:
+                h = float(hour[0])
+                from datetime import date as _date
+
+                patches = sunlight.sun_patches(twin, date or _date.today().isoformat(), h)
+                overlay = lambda X, Y, p=patches: sunlight.patches_svg(twin, p, X, Y)  # noqa: E731
+                caption = f"{int(h):02d}:{int(round((h % 1) * 60)):02d} solar · sun {patches['compass']} {patches['elevation_deg']:.0f}° up"
+            return self._svg(cov.floor_plan_svg(twin, None, overlay=overlay, caption=caption))
+        except Exception as exc:  # noqa: BLE001
+            return self._json({"error": f"{type(exc).__name__}: {exc}"}, 500)
+
+    def _package(self, job_id: str, params: dict, *, as_json: bool = False, token: str | None = None) -> None:
+        from .product import package as pkgmod
+
+        job = self.studio.jobs.get(job_id)
+        if not job or job.state != "done" or not job.twin_path:
+            return self._json({"error": "no finished twin on that job"}, 404)
+        date = (params.get("date") or [None])[0]
+        hours = None
+        if params.get("hours"):
+            try:
+                hours = [float(x) for x in params["hours"][0].split(",") if x.strip()]
+            except ValueError:
+                hours = None
+        base = f"/s/{token}" if token else ""
+        try:
+            pkg = self.studio.build_package(
+                job, shoot_date=date, hours=hours, image_base=base,
+                viewer_url=f"{base}/view/{job.id}", package_url=f"{base}/package/{job.id}")
+        except Exception as exc:  # noqa: BLE001
+            return self._json({"error": f"{type(exc).__name__}: {exc}"}, 500)
+        if as_json:
+            return self._json(pkg)
+        return self._html(pkgmod.render_html(pkg, image_base=base))
+
+    def _shared(self, parts: list[str], params: dict) -> None:
+        """Read-only access under a share token. The token decides which job
+        or project is visible; everything else is a 404, not a 403, so a
+        guessed URL learns nothing."""
+        from .product import pages
+
+        store = self.studio.store
+        token = parts[0]
+        rec = store.resolve_share(token, count=len(parts) == 1)
+        if not rec:
+            return self._html(pages.shell("Link not found", "<h1>This link is no longer available</h1><p class='lead'>Ask whoever sent it for a fresh one.</p>"), 404)
+        kind, target = rec["kind"], rec["target"]
+        allowed_jobs: set[str] = set()
+        if kind == "project":
+            proj = store.project(target)
+            if not proj:
+                return self._json({"error": "not found"}, 404)
+            allowed_jobs = set(proj.get("locations") or [])
+        else:
+            allowed_jobs = {target}
+        if len(parts) == 1:
+            if kind == "project":
+                rooms = {j: {"name": self.studio.display_name(self.studio.jobs[j])}
+                         for j in allowed_jobs if j in self.studio.jobs}
+                return self._html(pages.shared_project_page(proj, proj.get("fit"), rooms, token))
+            if kind == "package":
+                return self._package(target, params, token=token)
+            return self._shared_view(target)
+        sub = parts[1]
+        jid = parts[2] if len(parts) > 2 else None
+        if jid not in allowed_jobs:
+            return self._json({"error": "not found"}, 404)
+        if sub == "package":
+            return self._package(jid, params, token=token)
+        if sub == "view":
+            return self._shared_view(jid)
+        if sub == "thumb":
+            return self._thumb(jid)
+        if sub == "labels":
+            return self._json({"labels": self.studio.labels_of(self.studio.jobs[jid])})
+        if sub == "floorplan":
+            return self._floorplan(jid, params, token=token)
+        if sub == "plan-image" and len(parts) == 5:
+            job = self.studio.jobs.get(jid)
+            run = job.plans.get(parts[3]) if job else None
+            img = run.workdir / "frames" / Path(parts[4]).name if run else None
+            if not img or not img.exists():
+                return self._json({"error": "not found"}, 404)
+            return self._file(img, "image/png")
+        self._json({"error": "not found"}, 404)
+
+    def _shared_view(self, job_id: str) -> None:
+        job = self.studio.jobs.get(job_id)
+        if not job or not job.viewer_path or not job.viewer_path.exists():
+            return self._json({"error": "not found"}, 404)
+        # The ordinary viewer route; the gate was satisfied by the token.
+        return self._serve_viewer(job)
+
+    def _product_post(self, parts: list[str], params: dict) -> None:
+        studio, store = self.studio, self.studio.store
+        head = parts[0]
+        body = self._body()
+        if head == "login":
+            gate = studio.gate
+            nxt = str(body.get("next") or "/")
+            if not nxt.startswith("/") or nxt.startswith("//"):
+                nxt = "/"
+            if gate.check(str(body.get("passcode") or "")):
+                self.send_response(302)
+                self.send_header("Set-Cookie", f"{gate.COOKIE}={gate.token()}; Path=/; Max-Age={gate.TTL_S}; HttpOnly; SameSite=Lax")
+                self.send_header("Location", nxt)
+                self.end_headers()
+                return
+            from .product import pages
+
+            return self._html(pages.login_page(error="That passcode is not right.", next_url=nxt))
+        if head == "lead":
+            if not str(body.get("email") or "").strip():
+                return self._json({"error": "an email address is needed"}, 400)
+            rec = store.add_lead(body)
+            _notify_lead(rec)
+            return self._json({"ok": True, "id": rec["id"]})
+        if studio.showcase and head != "share":
+            return self._json({"error": "the gallery is read-only"}, 403)
+        if head == "projects":
+            proj = store.create_project(str(body.get("title") or ""), client=str(body.get("client") or ""),
+                                        brief=str(body.get("brief") or ""), shoot_date=str(body.get("shoot_date") or ""),
+                                        locations=[str(x) for x in (body.get("locations") or []) if str(x) in studio.jobs])
+            return self._json(proj)
+        if head == "project" and len(parts) == 2:
+            proj = store.update_project(parts[1], body)
+            if not proj:
+                return self._json({"error": "no such project"}, 404)
+            return self._json(proj)
+        if head == "project" and len(parts) == 3 and parts[2] == "compare":
+            proj = store.project(parts[1])
+            if not proj:
+                return self._json({"error": "no such project"}, 404)
+            if not proj.get("locations"):
+                return self._json({"error": "add at least one room to compare"}, 400)
+            try:
+                fit = studio.compare(proj)
+            except Exception as exc:  # noqa: BLE001
+                return self._json({"error": f"{type(exc).__name__}: {exc}"}, 500)
+            store.update_project(parts[1], {"fit": fit})
+            return self._json(fit)
+        if head == "details" and len(parts) == 2:
+            job = studio.jobs.get(parts[1])
+            if not job:
+                return self._json({"error": "unknown job"}, 404)
+            d = store.update_details(job.workdir, body)
+            studio.apply_details(job)
+            return self._json({"details": d, "display_name": studio.display_name(job)})
+        if head == "labels" and len(parts) >= 2:
+            from .product import labels as labelsmod
+
+            job = studio.jobs.get(parts[1])
+            if not job or job.state != "done":
+                return self._json({"error": "unknown or unfinished job"}, 404)
+            if len(parts) == 3 and parts[2] == "detect":
+                try:
+                    found = studio.detect_labels(job, max_frames=int(body.get("frames") or 0) or None)
+                except ValueError as exc:
+                    return self._json({"error": str(exc)}, 400)
+                except Exception as exc:  # noqa: BLE001
+                    return self._json({"error": f"{type(exc).__name__}: {exc}"}, 500)
+                return self._json(found)
+            if len(parts) == 4 and parts[3] == "confirm":
+                rec = labelsmod.confirm_label(job.workdir, parts[2], label=body.get("label"), kind=body.get("kind"))
+                if not rec:
+                    return self._json({"error": "no such label"}, 404)
+                return self._json({"label": rec, "labels": studio.labels_of(job)})
+            if len(parts) == 2:
+                try:
+                    xyz = [float(v) for v in body.get("xyz") or []]
+                    if len(xyz) != 3:
+                        raise ValueError
+                    rec = labelsmod.add_label(job.workdir, label=str(body.get("label") or ""), xyz=xyz,
+                                              kind=str(body.get("kind") or "other"), frame=body.get("frame"),
+                                              uv=body.get("uv"), note=str(body.get("note") or ""))
+                except ValueError as exc:
+                    return self._json({"error": str(exc) or "need label and xyz"}, 400)
+                return self._json({"label": rec, "labels": studio.labels_of(job)})
+            return self._json({"error": "not found"}, 404)
+        if head == "share":
+            kind = str(body.get("kind") or "package")
+            target = str(body.get("target") or "")
+            if kind == "project" and not store.project(target):
+                return self._json({"error": "no such project"}, 404)
+            if kind in ("package", "view") and target not in studio.jobs:
+                return self._json({"error": "unknown job"}, 404)
+            try:
+                rec = store.create_share(kind, target, label=str(body.get("label") or ""))
+            except ValueError as exc:
+                return self._json({"error": str(exc)}, 400)
+            rec["url"] = f"{self._base_url()}/s/{rec['token']}"
+            return self._json(rec)
+        self._json({"error": "not found"}, 404)
+
+    def _html(self, body: str, status: int = 200) -> None:
+        payload = body.encode()
+        self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
@@ -1177,6 +1774,62 @@ PAGE = """<!doctype html>
   #top .loc b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #top .loc span { color: var(--dim); font-size: 13px; white-space: nowrap; }
   #top .right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  #top .topnav { display: flex; gap: 16px; margin-left: 6px; }
+  #top .topnav a { color: var(--dim); text-decoration: none; font-size: 13.5px; }
+  #top .topnav a:hover { color: var(--ink); }
+  @media (max-width: 720px) { #top .topnav { display: none; } }
+
+  /* -- what is in the room -- */
+  .lensbtn { background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 10px;
+             padding: 7px 12px; font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap; }
+  .lensbtn:hover { border-color: var(--line2); } .lensbtn:disabled { opacity: .5; cursor: default; }
+  .lensbtn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+  .labelchips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--line); border-radius: 999px;
+          padding: 4px 6px 4px 11px; font-size: 13px; background: var(--surface2); cursor: default; }
+  .chip.model { border-style: dashed; color: #c9b8ff; }
+  .chip .k { color: var(--mute); font-size: 11px; }
+  .chip button { background: transparent; border: 0; color: var(--dim); cursor: pointer; font: inherit; font-size: 12px; padding: 1px 5px; border-radius: 6px; }
+  .chip button:hover { color: var(--ink); background: var(--line); }
+  .chip button.ok { color: var(--ok); }
+  #labelpick { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
+  .crops { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 8px 0 10px; }
+  @media (max-width: 900px) { .crops { grid-template-columns: 1fr 1fr; } }
+  .crops img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 10px; border: 2px solid transparent; cursor: pointer; background: #0a0c0f; }
+  .crops img.on { border-color: var(--accent); }
+  .crops .cap { color: var(--mute); font-size: 11.5px; margin-top: 3px; }
+  .lprow { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .lprow input { flex: 1; min-width: 220px; background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 9px; padding: 8px 11px; font: inherit; outline: none; }
+  .lprow input:focus { border-color: var(--accent); }
+  .lprow select { background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; font: inherit; }
+  .lprow button { background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 9px; padding: 8px 13px; font: inherit; cursor: pointer; }
+  .lprow button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  .dim { color: var(--mute); font-size: 12.5px; }
+
+  /* -- the location package panel -- */
+  #pkg .pkgrow { display: grid; grid-template-columns: 1.1fr 1fr; gap: 14px; }
+  @media (max-width: 900px) { #pkg .pkgrow { grid-template-columns: 1fr; } }
+  #pkg .field { margin-bottom: 10px; }
+  #pkg label { display: block; color: var(--dim); font-size: 12px; margin-bottom: 3px; }
+  #pkg input, #pkg textarea { width: 100%; background: var(--bg); color: var(--ink); border: 1px solid var(--line);
+       border-radius: 9px; padding: 8px 11px; font: inherit; font-size: 13.5px; outline: none; }
+  #pkg input:focus, #pkg textarea:focus { border-color: var(--accent); }
+  #pkg .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  #pkg .three { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+  #pkg .acts { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
+  #pkg .acts a, #pkg .acts button { text-decoration: none; padding: 8px 13px; border-radius: 10px; border: 1px solid var(--line);
+       color: var(--ink); background: var(--surface); font: inherit; font-size: 13px; cursor: pointer; }
+  #pkg .acts .primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  #pkg .acts .st { color: var(--mute); font-size: 12.5px; }
+  #pkg .sunprev { background: #0e1013; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  #pkg .sunprev img { width: 100%; display: block; }
+  #pkg .hours { display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--line); align-items: center; }
+  #pkg .hours button { background: transparent; color: var(--dim); border: 1px solid var(--line); border-radius: 999px;
+       padding: 3px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+  #pkg .hours button[aria-pressed="true"] { color: #0b1220; background: #ffcf5a; border-color: #ffcf5a; }
+  #pkg .hours .sunline { margin-left: auto; color: var(--dim); font-size: 12px; }
+  #pkg .sharebox { margin-top: 10px; color: var(--dim); font-size: 12.5px; word-break: break-all; }
+  #pkg .sharebox a { color: var(--accent); }
   .pill { font-size: 11.5px; color: var(--mute); border: 1px solid var(--line); border-radius: 999px;
           padding: 3px 10px; white-space: nowrap; }
   .pill.on { color: var(--ok); border-color: rgba(79,207,135,.35); }
@@ -1390,6 +2043,7 @@ PAGE = """<!doctype html>
   <div id="top">
     <a class="brand" href="/"><svg class="mark" viewBox="0 0 32 32" width="18" height="18" aria-hidden="true"><defs><linearGradient id="lga" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#6ea8fe"/><stop offset="1" stop-color="#a78bfa"/></linearGradient></defs><path d="M11 4H8a4 4 0 0 0-4 4v3M21 4h3a4 4 0 0 1 4 4v3M28 21v3a4 4 0 0 1-4 4h-3M11 28H8a4 4 0 0 1-4-4v-3" fill="none" stroke="url(#lga)" stroke-width="2.6" stroke-linecap="round"/><rect x="11" y="11" width="10" height="10" rx="2.6" transform="rotate(45 16 16)" fill="url(#lga)"/></svg>Locaish</a>
     <div class="loc hidden" id="toploc"><b id="locname"></b><span id="locmeta"></span></div>
+    <nav class="topnav"><a href="/projects">Projects</a><a href="/capture">Capture</a><a href="/pricing">Pricing</a></nav>
     <div class="right">
       <button class="hidden" id="galbtn"></button>
       <span class="pill hidden" id="covpill">local sweep</span>
@@ -1431,6 +2085,74 @@ PAGE = """<!doctype html>
       <div id="vfbar" class="hidden"></div>
     </div>
     <div id="heroactions"></div>
+
+    <section id="pkg">
+      <div class="sechead">
+        <div class="sub"><h2>Location package</h2>
+          <p>The page a scout hands in: dimensions, what fits, and the sun through every window on the shoot date. Fill in what the scan cannot know, then send one link.</p></div>
+      </div>
+      <div class="pkgrow">
+        <div class="panelbox">
+          <div class="two">
+            <div class="field"><label>Location name</label><input id="d_display_name" placeholder="The Fairfax kitchen"></div>
+            <div class="field"><label>Shoot date</label><input id="d_shoot_date" type="date"></div>
+          </div>
+          <div class="field"><label>Address</label><input id="d_address" placeholder="street, city"></div>
+          <div class="three">
+            <div class="field"><label>Compass heading of +X (°)</label><input id="d_heading_deg" type="number" min="0" max="359" step="1" placeholder="e.g. 212"></div>
+            <div class="field"><label>Latitude</label><input id="d_latitude" type="number" step="0.000001"></div>
+            <div class="field"><label>Longitude</label><input id="d_longitude" type="number" step="0.000001"></div>
+          </div>
+          <div class="two">
+            <div class="field"><label>Contact</label><input id="d_contact" placeholder="owner / manager, phone"></div>
+            <div class="field"><label>Fee</label><input id="d_fee" placeholder="$ / day"></div>
+          </div>
+          <div class="two">
+            <div class="field"><label>Power</label><input id="d_power" placeholder="2 × 20 A, tie-in possible"></div>
+            <div class="field"><label>Parking &amp; load-in</label><input id="d_parking" placeholder="driveway for 2 trucks, 30 m push"></div>
+          </div>
+          <div class="two">
+            <div class="field"><label>Access</label><input id="d_access" placeholder="ground floor, double doors"></div>
+            <div class="field"><label>Restrictions</label><input id="d_restrictions" placeholder="no shoots after 22:00"></div>
+          </div>
+          <div class="field"><label>Notes</label><textarea id="d_notes" rows="2"></textarea></div>
+          <div class="acts">
+            <button id="d_save">Save details</button>
+            <a id="pkgopen" class="primary" href="#" target="_blank">Open the package</a>
+            <button id="pkgshare">Share link</button>
+            <span class="st" id="d_status"></span>
+          </div>
+          <div class="sharebox hidden" id="sharebox"></div>
+        </div>
+        <div class="sunprev">
+          <img id="sunimg" alt="floor plan with the sun's patch">
+          <div class="hours" id="hours"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="contents">
+      <div class="sechead">
+        <div class="sub"><h2>What is in the room</h2>
+          <p>Named from the capture's own frames by the vision model, then confirmed or corrected by you. Click <b>Label</b> in the twin, click the thing, pick the photograph, type what it is.</p></div>
+        <div style="display:flex;gap:8px;align-items:center"><button class="lensbtn" id="detectbtn">Name things with Gemini</button><button class="lensbtn" id="labelbtn">Label an object</button></div>
+      </div>
+      <div class="panelbox">
+        <div id="chips" class="labelchips"><span class="dim">nothing named yet</span></div>
+        <div id="labelpick" class="hidden">
+          <div class="dim" id="lpmeta"></div>
+          <div class="crops" id="crops"></div>
+          <div class="lprow">
+            <input id="lpname" list="lpnames" placeholder="what is it? e.g. fridge, radiator, piano" autocomplete="off">
+            <datalist id="lpnames"><option value="sofa"><option value="armchair"><option value="dining table"><option value="coffee table"><option value="bed"><option value="desk"><option value="bookshelf"><option value="cabinet"><option value="kitchen island"><option value="counter"><option value="sink"><option value="fridge"><option value="oven"><option value="radiator"><option value="fireplace"><option value="column"><option value="beam"><option value="window"><option value="door"><option value="curtain"><option value="pendant lamp"><option value="floor lamp"><option value="ceiling fan"><option value="plant"><option value="mirror"><option value="artwork"><option value="television"><option value="piano"><option value="electrical panel"><option value="socket"></datalist>
+            <select id="lpkind"><option value="furniture">furniture</option><option value="appliance">appliance</option><option value="fixture">fixture</option><option value="window">window</option><option value="door">door</option><option value="lighting">lighting</option><option value="plant">plant</option><option value="artwork">artwork</option><option value="equipment">equipment</option><option value="structure">structure</option><option value="other" selected>other</option></select>
+            <button id="lpsave" class="primary">Save label</button>
+            <button id="lpcancel">Cancel</button>
+          </div>
+        </div>
+        <div class="dim" id="lstatus"></div>
+      </div>
+    </section>
 
     <section id="coverage">
       <div class="sechead">
@@ -1656,6 +2378,8 @@ function show(id, s) {
       + 'checks — but not sweep-search for setups.', [], true);
   }
   initCoverage(id, s);
+  initPackage(id);
+  initLabels(id);
   $('send').onclick = ask;
   $('ask').onkeydown = e => { if (e.key === 'Enter') ask(); };
 }
@@ -2109,6 +2833,168 @@ function nearestSetup() {
     }
     const el = document.querySelector('#vfbar .near');
     if (el) el.textContent = vfNear;
+  }).catch(() => {});
+}
+
+/* --- what is in the room: model labels, click-to-name ---------------------- */
+
+let lblJob = null, lblList = [], lblPick = null, lblView = null, lblMode = false;
+function initLabels(id) {
+  lblJob = id;
+  loadLabels();
+  $('detectbtn').onclick = detectLabels;
+  $('labelbtn').onclick = () => setLabelMode(!lblMode);
+  $('lpsave').onclick = saveLabel;
+  $('lpcancel').onclick = () => { lblPick = null; $('labelpick').classList.add('hidden'); setLabelMode(false); };
+  $('lpname').onkeydown = e => { if (e.key === 'Enter') saveLabel(); };
+}
+function setLabelMode(on) {
+  lblMode = on;
+  $('labelbtn').setAttribute('aria-pressed', String(on));
+  $('labelbtn').textContent = on ? 'Click the thing in the twin…' : 'Label an object';
+  postViewer({type: 'locaish:labelmode', on});
+  if (on) $('viewerwrap').scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+function loadLabels() {
+  fetch('/labels/' + lblJob).then(r => r.json()).then(r => {
+    lblList = r.labels || [];
+    paintChips();
+    postViewer({type: 'locaish:labels', labels: lblList});
+    if (r.frames === false) { $('detectbtn').disabled = true; $('detectbtn').title = 'this twin came from a scan file, not a video: no frames to look at'; $('labelbtn').disabled = true; }
+    else if (!r.gemini) { $('detectbtn').disabled = true; $('detectbtn').title = 'no vision model configured'; }
+  }).catch(() => {});
+}
+function paintChips() {
+  const box = $('chips');
+  if (!lblList.length) { box.innerHTML = '<span class="dim">nothing named yet</span>'; return; }
+  box.innerHTML = '';
+  lblList.forEach(l => {
+    const c = document.createElement('span');
+    c.className = 'chip' + (l.source === 'user' ? '' : ' model');
+    c.title = (l.source === 'user' ? 'named by a person' : 'named by the model in ' + (l.confidence || 1) + ' frame(s)') + ' · ' + l.xyz.map(v => Number(v).toFixed(2)).join(', ') + ' m';
+    c.innerHTML = esc(l.label) + (l.source === 'user' ? '' : '<span class="k">?</span>')
+      + (l.source === 'user' ? '' : '<button class="ok" data-ok="' + l.id + '" title="confirm">✓</button>')
+      + '<button data-look="' + l.id + '" title="show the photograph">◉</button>'
+      + '<button data-rm="' + l.id + '" title="remove">×</button>';
+    box.appendChild(c);
+  });
+  box.querySelectorAll('[data-ok]').forEach(b => b.onclick = () => fetch('/labels/' + lblJob + '/' + b.dataset.ok + '/confirm', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'}).then(r => r.json()).then(r => { if (r.labels) { lblList = r.labels; paintChips(); postViewer({type: 'locaish:labels', labels: lblList}); } }));
+  box.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => fetch('/labels/' + lblJob + '/' + b.dataset.rm, {method: 'DELETE'}).then(() => loadLabels()));
+  box.querySelectorAll('[data-look]').forEach(b => b.onclick = () => { const l = lblList.find(x => x.id === b.dataset.look); if (l) showPick(l.xyz, l); });
+}
+function detectLabels() {
+  $('detectbtn').disabled = true; $('lstatus').textContent = 'Gemini is looking at eight frames of the capture…';
+  fetch('/labels/' + lblJob + '/detect', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'})
+    .then(r => r.json()).then(r => {
+      $('detectbtn').disabled = false;
+      if (r.error) { $('lstatus').textContent = r.error; return; }
+      $('lstatus').textContent = r.objects + ' objects named from ' + r.frames_looked_at + ' frames (' + r.detections + ' sightings). Confirm the right ones, remove the wrong ones.';
+      loadLabels();
+    }).catch(e => { $('detectbtn').disabled = false; $('lstatus').textContent = String(e); });
+}
+window.addEventListener('message', ev => {
+  const m = ev.data;
+  if (!m || typeof m !== 'object') return;
+  if (m.type === 'locaish:pick' && m.p) showPick(m.p, null);
+  else if (m.type === 'locaish:labelmode') { lblMode = !!m.on; $('labelbtn').setAttribute('aria-pressed', String(lblMode)); $('labelbtn').textContent = lblMode ? 'Click the thing in the twin…' : 'Label an object'; }
+});
+function showPick(p, existing) {
+  lblPick = p; lblView = null;
+  const box = $('labelpick');
+  box.classList.remove('hidden');
+  $('lpmeta').textContent = 'point ' + p.map(v => Number(v).toFixed(2)).join(', ') + ' m · finding the frames that looked here…';
+  $('crops').innerHTML = '';
+  $('lpname').value = existing ? existing.label : '';
+  if (existing && existing.kind) $('lpkind').value = existing.kind;
+  box.scrollIntoView({behavior: 'smooth', block: 'center'});
+  fetch('/label-views/' + lblJob + '?x=' + p[0] + '&y=' + p[1] + '&z=' + p[2]).then(r => r.json()).then(r => {
+    const views = r.views || [];
+    if (!views.length) { $('lpmeta').textContent = 'no frame of the capture had a clear view of that spot — name it anyway, or pick a point the camera saw'; return; }
+    $('lpmeta').textContent = 'the capture saw this spot from ' + views.length + ' angle' + (views.length === 1 ? '' : 's') + ' — pick the clearest photograph, then name it';
+    $('crops').innerHTML = views.map((v, i) => '<div><img src="' + v.url + '" data-i="' + i + '" class="' + (i === 0 ? 'on' : '') + '" alt=""><div class="cap">' + esc(v.frame) + ' · ' + v.depth_m + ' m away</div></div>').join('');
+    lblView = views[0];
+    $('crops').querySelectorAll('img').forEach(im => im.onclick = () => { $('crops').querySelectorAll('img').forEach(x => x.classList.remove('on')); im.classList.add('on'); lblView = views[Number(im.dataset.i)]; });
+    if (!existing) $('lpname').focus();
+  }).catch(() => { $('lpmeta').textContent = 'could not load the frames'; });
+}
+function saveLabel() {
+  const name = $('lpname').value.trim();
+  if (!name || !lblPick) return;
+  const body = {label: name, kind: $('lpkind').value, xyz: lblPick, frame: lblView ? lblView.frame : null, uv: lblView ? [lblView.u, lblView.v] : null};
+  fetch('/labels/' + lblJob, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)})
+    .then(r => r.json()).then(r => {
+      if (r.error) { $('lstatus').textContent = r.error; return; }
+      lblList = r.labels || lblList; paintChips(); postViewer({type: 'locaish:labels', labels: lblList});
+      $('lstatus').textContent = '"' + name + '" saved at ' + lblPick.map(v => Number(v).toFixed(2)).join(', ') + ' m';
+      lblPick = null; $('labelpick').classList.add('hidden'); setLabelMode(false);
+    }).catch(e => $('lstatus').textContent = String(e));
+}
+
+/* --- the location package: details, the sun preview, the share link -------- */
+
+const DETAIL_KEYS = ['display_name','address','contact','power','parking','access','restrictions','fee','notes','heading_deg','latitude','longitude'];
+let pkgJob = null, pkgHour = 12, pkgHasGeo = false;
+function pkgDate() { return $('d_shoot_date').value || new Date().toISOString().slice(0, 10); }
+function initPackage(id) {
+  pkgJob = id;
+  try { const d = localStorage.getItem('locaish:shoot_date:' + id); if (d) $('d_shoot_date').value = d; } catch (_) {}
+  fetch('/details/' + id).then(r => r.json()).then(r => {
+    const d = r.details || {};
+    DETAIL_KEYS.forEach(k => { const el = $('d_' + k); if (el && d[k] != null) el.value = d[k]; });
+    if (r.georeference) {
+      pkgHasGeo = true;
+      if (!$('d_latitude').value) $('d_latitude').value = Number(r.georeference.latitude).toFixed(6);
+      if (!$('d_longitude').value) $('d_longitude').value = Number(r.georeference.longitude).toFixed(6);
+      if (!$('d_heading_deg').value && r.georeference.heading_source === 'user') $('d_heading_deg').value = Math.round(r.georeference.heading_deg);
+    }
+    if ((r.shares || []).length) showShare(r.shares[0]);
+    paintSun();
+  }).catch(() => paintSun());
+  $('d_save').onclick = saveDetails;
+  $('d_shoot_date').onchange = () => { try { localStorage.setItem('locaish:shoot_date:' + id, $('d_shoot_date').value); } catch (_) {} paintSun(); };
+  $('pkgshare').onclick = () => fetch('/share', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({kind: 'package', target: id})}).then(r => r.json()).then(r => { if (!r.error) showShare(r); }).catch(() => {});
+  paintSun();
+}
+function showShare(rec) {
+  const url = location.origin + '/s/' + rec.token;
+  const box = $('sharebox');
+  box.classList.remove('hidden');
+  box.innerHTML = 'Share link (read-only, no account needed): <a href="' + url + '" target="_blank">' + url + '</a>'
+    + ' · opened ' + (rec.opens || 0) + ' time' + (rec.opens === 1 ? '' : 's') + ' · <a href="#" id="revoke">revoke</a>';
+  navigator.clipboard && navigator.clipboard.writeText(url).catch(() => {});
+  $('revoke').onclick = e => { e.preventDefault(); fetch('/share/' + rec.token, {method: 'DELETE'}).then(() => { box.textContent = 'Link revoked.'; }); };
+}
+function saveDetails() {
+  const body = {};
+  DETAIL_KEYS.forEach(k => { const el = $('d_' + k); if (el) body[k] = el.value; });
+  $('d_status').textContent = 'saving…';
+  fetch('/details/' + pkgJob, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)})
+    .then(r => r.json()).then(r => {
+      if (r.error) { $('d_status').textContent = r.error; return; }
+      $('d_status').textContent = 'saved';
+      if (r.display_name) $('locname').textContent = r.display_name;
+      setTimeout(() => $('d_status').textContent = '', 1500);
+      pkgHasGeo = !!(body.latitude && body.longitude) || pkgHasGeo;
+      paintSun();
+    }).catch(e => $('d_status').textContent = String(e));
+}
+function paintSun() {
+  if (!pkgJob) return;
+  const date = pkgDate();
+  $('pkgopen').href = '/package/' + pkgJob + '?date=' + date;
+  const hrs = $('hours');
+  hrs.innerHTML = [8, 10, 12, 14, 16, 18].map(h => '<button data-h="' + h + '" aria-pressed="' + (h === pkgHour) + '">' + h + ':00</button>').join('')
+    + '<span class="sunline" id="sunline"></span>';
+  hrs.querySelectorAll('button').forEach(b => b.onclick = () => { pkgHour = Number(b.dataset.h); paintSun(); });
+  $('sunimg').src = '/floorplan/' + pkgJob + '?date=' + date + '&hour=' + pkgHour + '&t=' + Date.now();
+  fetch('/sun/' + pkgJob + '?date=' + date).then(r => r.json()).then(sun => {
+    const el = $('sunline');
+    if (!el) return;
+    if (sun.error) { el.textContent = 'set latitude, longitude and heading for the sun'; return; }
+    const up = (sun.sun_up || []).map(g => g.from + '–' + g.to).join(', ') || 'never up';
+    const lit = (sun.windows || []).filter(w => w.direct_sun.length).length;
+    el.textContent = date + ': sun ' + up + ' solar · ' + lit + ' window' + (lit === 1 ? '' : 's') + ' get direct sun' + (sun.heading_caveat ? ' · heading assumed' : '');
   }).catch(() => {});
 }
 

@@ -3,38 +3,58 @@
   <img src="assets/logo.svg" alt="Locaish" width="240">
 </picture>
 
-**Live demo:** [locaish-564007129146.us-central1.run.app](https://locaish-564007129146.us-central1.run.app) — two scanned rooms, the Gemini scout, and the ClickHouse shot table, hosted on Cloud Run.
+**Scout six locations. Drive to two.**
 
-**Scan any room. Get a filming-ready digital twin and an instant tech scout
-report — camera angles, sun schedule, equipment fit, acoustics — before anyone
-drives out.**
+A location scout films a room with a phone. Locaish turns the walkthrough
+into a measured 3D twin and hands back the tech scout's answers before
+anyone books a van: the sun through every window on the shoot date, which
+dollies fit, the lens that holds each framing, the room's acoustics, and --
+for a scene -- which of your candidate rooms physically holds every shot.
 
-Built for [Agentic Cinema: The Blockbuster Hackathon](https://agentic-cinema.devpost.com/),
-ClickHouse track. Gemini (through the Agent Development Kit, served by
-Vertex AI on the hosted demo) drives
-an agent over a real measurement engine — every number in the output traces
-to a ray cast, an ephemeris lookup, or a ClickHouse query, never to the model.
+**Live demo:** [locaish-564007129146.us-central1.run.app](https://locaish-564007129146.us-central1.run.app)
+-- two scanned rooms, the scout agent, and the shot table, hosted on Cloud Run.
+**Pricing and pilots:** `/pricing` on any deployment. **What stands between this and revenue:** [docs/BOTTLENECK_RESEARCH.md](docs/BOTTLENECK_RESEARCH.md). Built in 17 days for
+[Agentic Cinema](https://agentic-cinema.devpost.com/), won its track, now a
+product.
+
+## What you get
+
+| | For whom | What it is |
+|---|---|---|
+| **Location package** | the scout, handing in | One page per room, printable, forwardable: dimensions with an honest error bar, where direct sun lands on the floor at 9, 12 and 15 on the shoot date, what gear fits, lens table, RT60, the practical fields (address, power, parking, access, contact) and a link into the 3D twin. `/package/<room>?date=YYYY-MM-DD` |
+| **Projects** | the head of production, bidding | One job, one shot list, one shoot date, every candidate room. Every shot is placed in every room by the measurement engine and the rooms are ranked: holds it, holds it with a compromise, cannot. `/projects` |
+| **Share links** | the director, in another city | A read-only URL that opens the package, the ranking and the 3D twin on a phone. No account. Revocable. `/s/<token>` |
+| **Capture page** | the scout, standing in the room | The five-step recipe and a camera button; the upload starts when filming stops. `/capture` |
+| **What is in the room** | the scout, the art department | After the twin is built a vision model names what the capture's frames show (sofa, radiator, fridge, ceiling fan) and each name is placed in the room by casting the frame's ray into the measured cloud. Anything it missed or got wrong: click the thing in the twin, pick the photograph that saw it, type the name. Confirmed and provisional names are kept apart everywhere they appear. |
+| **Coverage planner** | the DP | Paste the scene; the agent breaks it into shots, places each one, renders the frame, and draws the overhead camera plan. |
+| **Viewfinder** | everyone | Stand in any setup in the 3D twin, change lens, drag to re-aim. |
+
+Every figure traces to a measurement of the twin, a solar ephemeris, or a
+catalogue dimension. The twin grades its own accuracy and the package says,
+in plain words, how far to trust the metres. Nothing is estimated by a
+language model; the model plans and reviews, the geometry answers.
 
 ## The problem
 
 A location scout's day rate exists because someone has to physically stand in
 a room and answer: does the light do what the script needs, does the dolly
 track fit, will the room ring on the boom mic. That trip happens *after* a
-location is already a finalist — which means every finalist got picked on a
-photo and a guess.
+location is already a finalist -- which means every finalist got picked on a
+photo and a guess. In commercials the decision is made during the bid, before
+the job is awarded, by a director who is often in another city.
 
-## What it does
-1. **Scan** — any room, any scanner that exports a point cloud or gaussian
-   splat (Scaniverse, Polycam, Luma, or raw COLMAP output), *or* just a video
-   of someone walking around the space, from any phone with any camera.
-2. **Reconstruct** — the scan becomes a metric, gravity-aligned, georeferenced
-   digital twin. This has to work on *any* room handed to it, not just the
-   ones we built test fixtures for — see Phase 1.
-3. **Insight** — one command produces the report a location manager charges
-   for: photography windows, lighting schedule through actual apertures,
-   grip fit against real equipment dimensions, an acoustic estimate.
-4. **Search** — an agent sweeps thousands of camera setups against a shot
-   brief and returns a rendered frame with the physical reasoning behind it.
+## How it works
+1. **Capture** -- a phone video of the room, or a LiDAR export from Polycam,
+   Scaniverse or Luma (PLY, GLB, GLTF, OBJ) for a twin metric to centimetres.
+2. **Reconstruct** -- the capture becomes a metric, gravity-aligned,
+   georeferenced digital twin with a self-grading QA report. It has to work
+   on *any* room, not only the ones we built fixtures for -- see Phase 1.
+3. **Survey** -- the scout report by department: space, camera, grip, sound,
+   light. Lighting through the actual apertures from a solar ephemeris.
+4. **Sweep** -- every standable camera position at three heights on six
+   primes against every subject mark, scored, into ClickHouse (or kept
+   in memory): the index of what a camera can do in this room.
+5. **Deliver** -- the package, the project ranking, the share link.
 
 ## Coverage: the tedious day, done
 
@@ -77,26 +97,19 @@ deterministically (`locaish coverage room.twin --brief scene.txt`); without
 ClickHouse it plans against the in-memory sweep. Both backends answer the
 same predicates, so a plan is the same plan wherever it was computed.
 
-## Hackathon alignment
+## Built on
 
-- **Partner (ClickHouse):** the shot-search sweep is a genuine ClickHouse
-  workload — selective filters (shot size, lens, sightline, backlight) plus
-  top-N ranking across hundreds of thousands of scored candidates per room.
-  Schema, sort key and partitioning are chosen for that access pattern
-  (`locaish/warehouse.py`). The agent's *only* database access is the
-  official ClickHouse MCP server (`mcp-clickhouse`), spawned at runtime,
-  read-only as it ships; bulk loading goes around it over
-  `clickhouse-connect`, column-oriented.
-- **Google Cloud:** the agent is a `google-adk` `LlmAgent` running Gemini
-  through Vertex AI (`GOOGLE_GENAI_USE_VERTEXAI=TRUE` + application-default
-  credentials), not a bare AI Studio key — see `locaish/agent/core.py`.
-- **Agentic, not scripted:** the model is given a tool surface — SQL over the
-  shot table via MCP, the scout report, a tape measure, a dolly simulator, a
-  frame renderer — and decides what to call. It never touches geometry
-  directly; every claim it makes traces to a tool result.
-- **No other AI models, anywhere.** The reconstruction is classical
-  structure-from-motion (COLMAP) and photometric stereo. Gemini is the only
-  model in the system.
+- **ClickHouse** holds the shot index: selective filters (shot size, lens,
+  sightline, backlight) plus top-N ranking across hundreds of thousands of
+  scored candidates per room; schema and partitioning in `locaish/warehouse.py`.
+  Without it the same predicates run in numpy over the in-memory sweep, so a
+  laptop plans the same plan the warehouse would.
+- **Gemini through the Agent Development Kit** plans coverage and judges
+  rendered frames; its only database access is the official ClickHouse MCP
+  server. The product works without it (typed shot lists, deterministic
+  placement, every package and project feature).
+- **COLMAP, OpenMVS, MoGe-2, Brush** reconstruct; all open source and free
+  for commercial use -- see [docs/RECONSTRUCTION.md](docs/RECONSTRUCTION.md).
 
 ## Non-negotiable constraint
 
@@ -143,26 +156,26 @@ No LiDAR, no scanning app, no export step: film the room and hand over the file.
 locaish ingest sweep.mov --view
 ```
 
-The reconstruction is **classical, end to end** — no neural networks anywhere
-in the pipeline. Frames are pulled densely from the sweep, SIFT features are
-matched between neighbouring frames, bundle adjustment solves every camera pose
-and a sparse cloud (COLMAP), and photometric stereo densifies the result — GPU
-PatchMatch where CUDA exists, semi-global block matching on the CPU everywhere
-else. SIFT is from 1999 and bundle adjustment is older; there is no model file,
-nothing was trained, and every point traces to a corner detected in an image
-and a least-squares solve over reprojection error.
-
-That choice is load-bearing, not aesthetic: the Agentic Cinema rules permit
-only Google Cloud AI tools and prohibit any other AI model regardless of
-vendor, while explicitly allowing open-source non-AI software. A pretrained
-reconstruction network is an AI model whoever wrote it; SIFT is not. This path
-is compliant by construction rather than by argument.
+The reconstruction is **geometry first, models where geometry has nothing to
+say**. Frames are pulled from the sweep, ALIKED keypoints (a small learned
+detector shipped inside COLMAP) are matched between neighbouring frames,
+GLOMAP solves every camera pose jointly and a sparse cloud (COLMAP), and
+multi-view stereo densifies the result — GPU PatchMatch where CUDA exists,
+OpenMVS on the CPU elsewhere. Then a metric monocular geometry model
+(MoGe-2) runs over a spread of the registered frames and contributes two
+things, each verified against the geometry before it is believed: a third,
+independent reading of the room's scale, and surface for the painted walls
+stereo could not match, kept only where neighbouring frames predict the same
+depth and only where stereo left a gap. Every pose still traces to pixel
+correspondences and a least-squares solve; every learned point carries a
+label saying where it came from. The full stack, with every licence, is in
+[docs/RECONSTRUCTION.md](docs/RECONSTRUCTION.md).
 
 Two things are worth knowing before trusting the output.
 
 **Video has no scale.** A kitchen and a doll's-house kitchen produce identical
 footage; parallax recovers shape, never size. So the metres come from outside
-the geometry — from two physical anchors that share no evidence:
+the geometry — from three anchors that share no evidence:
 
 - **how high the phone was.** Gravity is known from the camera poses, so the
   drop from the camera path to the floor is a length whose value in metres we
@@ -173,7 +186,13 @@ the geometry — from two physical anchors that share no evidence:
   1.5 and 3.5 times as tall as it is wide — because a height threshold would
   assume the very answer being solved for. This one runs as a second pass, since
   apertures are found in the canonical frame and the canonical frame needs a
-  scale to exist.
+  scale to exist;
+- **what a metric depth model makes of each frame.** MoGe-2 has learned what
+  size things are from millions of rooms and answers in metres per frame;
+  tied to the sparse points COLMAP triangulated in that same frame, each
+  frame yields an independent reading of metres per reconstruction unit, and
+  tens of frames give a median and a spread. Anatomy, carpentry and
+  appearance: three priors with nothing in common.
 
 They are combined by inverse-variance weighting in log space, and — this is the
 part that matters — if they disagree by more than their own error bars allow,
@@ -209,16 +228,19 @@ every such vertex is labelled — `Mesh.filled`, muted colours, and a line in th
 QA report. It cannot seal a doorway you walked through; that is a test, not a
 hope. Without camera poses it declines entirely rather than guess.
 
-**Classical SfM needs frames that chain.** Matching two views of a blank
-painted wall taken a second apart finds nothing, so a sweep sampled sparsely in
-time fragments into disconnected pieces. Measured on a real capture, 72 frames
-produced four fragments whose largest held 28 of them, while 251 frames of the
-same clip registered 240 into a single model with a mean reprojection error
-under a pixel. So frames are pulled densely — `--fps`, default 8 — and the
-binding constraint is temporal density, not coverage. When the chain does
-break, the largest fragment is reconstructed and the QA report says how many
-frames were left out, rather than joining unrelated coordinate frames on a
-guess.
+**Structure from motion needs frames that chain.** Matching two views of a
+blank painted wall taken a second apart finds nothing, so a sweep sampled
+sparsely in time fragments into disconnected pieces. With SIFT, 72 frames of a
+real capture produced four fragments whose largest held 28 of them, while 251
+frames of the same clip registered 240 into one model. ALIKED holds the chain
+across a wider baseline — on the same kitchen frames it returns four to five
+times as many geometrically verified matches per pair as SIFT, from a third
+as many keypoints — so its frame budget is lighter (`--fps`, default 5 at
+1600 px, against SIFT's 8 at 2400 px). Loop closure for ALIKED uses a
+vocabulary tree built from the sweep's own descriptors, since the tree COLMAP
+distributes is built on SIFT. When the chain does break, the largest fragment
+is reconstructed and the QA report says how many frames were left out, rather
+than joining unrelated coordinate frames on a guess.
 
 The reconstruction is cached beside the twin, so re-ingesting with different
 options costs seconds rather than minutes. `--refresh` forces it to run again.
@@ -233,10 +255,14 @@ serves a loopback page you drag the video onto, streams the pipeline's own
 stage names back as it works, and hands you the twin and the viewer at the end.
 Same code path as `ingest`, same QA, no extra dependencies.
 
-Requires `ffmpeg` and `colmap` on PATH (`brew install colmap ffmpeg`) and the
-optional extra: `pip install -e ".[video]"` (OpenCV, for the CPU stereo
-fallback). No weights to download, no GPU required — CUDA merely upgrades the
-dense stage from block matching to PatchMatch.
+Requires `ffmpeg` and `colmap` on PATH (`brew install colmap ffmpeg`; COLMAP
+4.x with ONNX support unlocks ALIKED, older builds fall back to SIFT) and the
+optional extras: `pip install -e ".[video,learned]"` — OpenCV for the CPU
+stereo fallback, and PyTorch plus MoGe-2 for the learned stage, whose weights
+(about 1.3 GB) are fetched from Hugging Face on first use. No GPU required:
+the model runs on an Apple GPU or a CPU, and CUDA merely upgrades the dense
+stage to PatchMatch. Without the `learned` extra the pipeline runs as before
+and the twin says so.
 
 ## What a twin is
 
@@ -289,12 +315,15 @@ The ten refusals are honest ones: the ceiling-plausibility check firing on rooms
   is the size and shape of a small window, has nothing behind it exactly as a
   window does, and borrows the doorway's reveal as evidence. Neither depth nor
   shape separates them.
-- **A twin from video is metric to tens of percent, not ±10 mm.** The shape is
-  measured; the size is inferred, and how well the two independent estimators
-  agree is what sets the error bar — which on a real capture has been wide. The
-  QA report carries it as `scale_confidence`. Every accuracy number in the table
-  above is for scan-file input. Video needs `--scale-factor` from a tape measure
-  before any claim at centimetre precision.
+- **A twin from video is metric to a few percent, not ±10 mm.** The shape is
+  measured; the size is inferred, and how well the independent estimators
+  agree is what sets the error bar. On the two showcase rooms the metric
+  depth model and the camera-height prior landed 2.5 % and 7 % apart, which
+  puts the combined bar near ±8 % and the QA's `scale_confidence` at 0.72 to
+  0.81; before the model stage it was ±12 % resting on one prior. Every
+  accuracy number in the table above is for scan-file input. Video still
+  needs `--scale-factor` from a tape measure before any claim at centimetre
+  precision.
 - **A video sweep has to actually sweep.** Reconstruction only knows what the
   frames saw, and a pan from one spot gives feature matching no baseline to
   triangulate from — the twin fails the coverage check, correctly. See
@@ -447,7 +476,28 @@ locaish studio
 ```
 
 Drop a video. When the twin lands, the sweep is loaded automatically and the
-chat goes live. No room handy? Drop `examples/IMG_6086.twin` on the studio
+chat goes live.
+
+## Running it for a customer
+
+A design partner gets their own deployment and one passcode. Everything the
+product layer stores -- projects, location details, share links, pilot
+requests -- is JSON under `<root>/_product/` and `<job>/details.json`, so the
+studio root is the whole state: back it up, and the deployment is backed up.
+
+```bash
+export LOCAISH_PASSCODE='their-team-passcode'      # gates every page except share links, /pricing, /capture
+export LOCAISH_LEAD_WEBHOOK='https://hooks.slack.com/...'   # optional: pilot requests from /pricing
+export LOCAISH_STRIPE_SCOUT_URL='https://buy.stripe.com/...'       # optional: payment links on /pricing
+export LOCAISH_STRIPE_PRODUCTION_URL='https://buy.stripe.com/...'
+export LOCAISH_CONTACT_EMAIL='you@locaish.com'
+locaish studio --no-open --root /data/studio
+```
+
+Share links (`/s/<token>`) bypass the passcode by design: the producer sends
+one to the director, the director opens it on a phone, nobody signs in. Revoke
+from the room or project page. The hosted gallery (`--showcase`) keeps uploads
+and project edits off and share links on. No room handy? Drop `examples/IMG_6086.twin` on the studio
 instead: a finished scan of a real kitchen (29 m², 102,852 swept setups)
 that skips reconstruction and lights up the whole product in a couple of
 minutes. Without `CLICKHOUSE_HOST` the studio still works — the agent

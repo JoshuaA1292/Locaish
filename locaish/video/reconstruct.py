@@ -4,12 +4,13 @@ The sequence is fixed and each step depends on the one before it:
 
     frames -> structure from motion -> dense stereo -> scale -> clean -> ScanImport
 
-Reconstruction is classical: SIFT features matched between frames, bundle
-adjustment, and photometric stereo to densify -- see `colmap.py` for why that
-choice is load-bearing rather than aesthetic. Scale has to come after
-reconstruction because it is solved from the camera trajectory, and cleaning
-has to come after scale because every threshold in it is a distance in metres
--- "drop points more than 12 cm from any neighbour" is meaningless in the
+Poses come from feature matching and bundle adjustment (`colmap.py`), surface
+from multi-view stereo where there is texture to match (`dense.py`) and from a
+metric monocular model, verified across views, where there is not
+(`learned.py`). Scale has to come after reconstruction because it is solved
+from the camera trajectory and from the model's metres, and cleaning has to
+come after scale because every threshold in it is a distance in metres --
+"drop points more than 12 cm from any neighbour" is meaningless in the
 reconstruction's arbitrary unit.
 
 The result deliberately stops at a `ScanImport`, the same object the PLY and
@@ -120,6 +121,7 @@ def reconstruct_video(
 
     from . import colmap as colmapmod
     from . import dense as densemod
+    from . import learned as learnedmod
     from . import metric as metricmod
     from . import remote as remotemod
 
@@ -132,8 +134,13 @@ def reconstruct_video(
     def _step(name):
         return _Clock(timings, name, progress)
 
-    fps = float(fps) if fps else colmapmod.CLASSICAL_FPS
-    key = _cache_key(src, fps, max_points, scale_factor, start_s, end_s)
+    # The detector decides the frame budget: a detector that chains across a
+    # wider baseline needs fewer, smaller frames.
+    cfg = colmapmod.feature_config()
+    if cfg.get("note"):
+        warnings.append(cfg["note"])
+    fps = float(fps) if fps else float(cfg["fps"])
+    key = _cache_key(src, fps, max_points, scale_factor, start_s, end_s, cfg)
     if not refresh:
         cached = _load_cache(workdir, key, src, progress=progress)
         if cached is not None:
@@ -175,7 +182,7 @@ def reconstruct_video(
             workdir,
             count=count,
             candidate_fps=min(max(fps * 1.5, fps + 1.0), 30.0),
-            long_side=colmapmod.CLASSICAL_LONG_SIDE,
+            long_side=int(cfg["long_side"]),
             start_s=start_s,
             end_s=end_s,
             progress=progress,
@@ -206,7 +213,7 @@ def reconstruct_video(
     with _step("reconstruct"):
         colmap_dir = workdir / "colmap"
         model_dir = colmapmod.run_sfm(
-            image_dir, colmap_dir, reuse=not refresh, progress=progress
+            image_dir, colmap_dir, reuse=not refresh, config=cfg, progress=progress
         )
         model = colmapmod.read_model(model_dir)
     warnings += model.warnings
@@ -269,6 +276,45 @@ def reconstruct_video(
                 "substantially on machines without CUDA"
             )
 
+    # -- learned geometry --------------------------------------------------
+    #
+    # A metric monocular model run over a spread of the registered frames.
+    # It contributes two things, both verified against the geometry above
+    # before they are believed: a scale anchor (its metres, tied to the
+    # sparse points in each frame) and surface for the walls stereo could not
+    # match (its depth, kept only where neighbouring frames predict the same
+    # and only where stereo left a gap). Without the model stack installed
+    # the pipeline runs exactly as before and says what it is missing.
+    learned = None
+    if learnedmod.available():
+        with _step("learned geometry"):
+            try:
+                learned = learnedmod.learned_geometry(
+                    model,
+                    image_dir,
+                    workdir,
+                    stereo_xyz=dense_pts[:, :3] if len(dense_pts) else None,
+                    up_hint=up_hint,
+                    progress=progress,
+                )
+            except Exception as exc:  # noqa: BLE001 - a model failure degrades
+                warnings.append(f"the metric depth model stage was skipped: {exc}")
+                learned = None
+        if learned is not None:
+            warnings += learned.warnings
+            if len(learned.dense):
+                dense_pts = (
+                    np.concatenate([dense_pts, learned.dense])
+                    if len(dense_pts)
+                    else learned.dense
+                )
+    elif learnedmod.enabled():
+        warnings.append(
+            "no metric depth model is installed (pip install -e '.[learned]'), "
+            "so the twin's scale rests on physical priors alone and the walls "
+            "stereo could not match are left to the splat view layer"
+        )
+
     keep_sparse = (model.errors <= SPARSE_MAX_ERROR_PX) & (
         model.track_lengths >= SPARSE_MIN_TRACK
     )
@@ -320,10 +366,14 @@ def reconstruct_video(
 
     recon_summary = {
         "backend": "colmap",
+        "features": cfg["features"],
+        "matcher": cfg["matcher"],
         "mapper": colmapmod.mapper_used(colmap_dir) or "incremental",
         "stereo": stereo,
         **model.summary(),
         "dense_points": int(len(dense_pts)),
+        "learned_fill_points": 0 if learned is None else int(len(learned.dense)),
+        "learned": None if learned is None else learned.summary,
         "up_coherence": round(float(up_coherence), 3),
     }
 
@@ -339,14 +389,18 @@ def reconstruct_video(
         with _step("scale"):
             # Parallax recovers the room's shape, never its size, so the metres
             # come from evidence outside the geometry: how high the phone rode
-            # above the floor, and -- on a second pass -- the height of any
-            # doorway found in the room. Both are physical priors, not models.
+            # above the floor, what a metric depth model makes of each frame,
+            # and -- on a second pass -- the height of any doorway found in
+            # the room. Three estimators that share no evidence; the combiner
+            # widens the bar when they argue.
             estimates = []
             from_cameras = metricmod.scale_from_camera_height(
                 raw_xyz, centres, up_hint
             )
             if from_cameras is not None:
                 estimates.append(from_cameras)
+            if learned is not None and learned.scale is not None:
+                estimates.append(learned.scale)
             for extra in extra_scales or []:
                 estimates.append(extra)
             if estimates:
@@ -507,8 +561,11 @@ def reconstruct_video(
             "frames_registered": len(model),
             "noise_hint_m": noise_hint,
             "scale_factor_m_per_unit": factor,
-            "scale_source": "supplied" if scale_factor is not None else "camera-path",
+            "scale_source": "supplied" if scale_factor is not None else "solved",
+            "scale_components": _scale_components(scale),
             "scale_confidence": None if scale is None else scale.confidence,
+            "features": cfg["features"],
+            "learned_fill_points": 0 if learned is None else int(len(learned.dense)),
             "up_coherence": up_coherence,
             # the trained per-scene splat, for viewers that can render the
             # gaussians themselves rather than a point sampling of them
@@ -555,7 +612,19 @@ def reconstruct_video(
 CACHE_NAME = "reconstruction.npz"
 
 
-def _cache_key(src: Path, fps, max_points, scale_factor, start_s, end_s) -> dict:
+def _scale_components(scale) -> list[str]:
+    """The sources that went into a solved scale, for the header and the QA."""
+    if scale is None:
+        return []
+    d = scale.to_dict() if hasattr(scale, "to_dict") else {}
+    comps = d.get("components") or []
+    sources = [str(c.get("source")) for c in comps if isinstance(c, dict) and c.get("source")]
+    if not sources and d.get("source"):
+        sources = [str(d["source"])]
+    return sources
+
+
+def _cache_key(src: Path, fps, max_points, scale_factor, start_s, end_s, cfg: dict | None = None) -> dict:
     """Everything that would change the reconstructed cloud, and nothing else.
 
     The video is identified by size and modification time rather than a hash of
@@ -565,13 +634,21 @@ def _cache_key(src: Path, fps, max_points, scale_factor, start_s, end_s) -> dict
     video files in practice.
     """
     from . import colmap as colmapmod
+    from . import learned as learnedmod
 
     st = src.stat()
     return {
         # Bumped whenever the reconstruction itself changes behaviour, so a
         # cache written by an older pipeline cannot masquerade as this one's
         # output. 7: view-graph focal calibration before the global solve.
-        "version": 7,
+        # 8: the learned-geometry stage (metric anchor + verified depth fill)
+        # and the detector/matcher choice, which also ride in the key.
+        "version": 8,
+        "features": None if cfg is None else cfg.get("features"),
+        "matcher": None if cfg is None else cfg.get("matcher"),
+        "learned": bool(learnedmod.available()),
+        "learned_fill": bool(learnedmod.available() and learnedmod.fill_enabled()),
+        "learned_fusion": learnedmod.FUSION_VERSION,
         # Bumped for post-stereo changes only (mining, cleaning, budgets).
         # Separate from `version` because the dense workspace carries its own
         # stamp now: bumping this re-runs mining and cleaning while the solved
@@ -786,6 +863,7 @@ def _refine_mls(
     rgb: np.ndarray,
     planar_m: float = MLS_PLANAR_M,
     reject_m: float = MLS_REJECT_M,
+    k: int = MLS_K,
 ) -> tuple[np.ndarray, np.ndarray, int]:
     """Sharpen the cloud onto its own local surfaces.
 
@@ -801,7 +879,7 @@ def _refine_mls(
     from scipy.spatial import cKDTree
 
     n = len(xyz)
-    if n < MLS_K * 10:
+    if n < k * 10:
         return xyz, rgb, 0
     tree = cKDTree(xyz)
     out = np.array(xyz, dtype=np.float64, copy=True)
@@ -809,11 +887,11 @@ def _refine_mls(
     batch = 400_000
     for i0 in range(0, n, batch):
         sl = slice(i0, min(i0 + batch, n))
-        _, idx = tree.query(xyz[sl], k=MLS_K + 1, workers=-1)
+        _, idx = tree.query(xyz[sl], k=k + 1, workers=-1)
         nb = xyz[idx]
         centre = nb.mean(axis=1)
         diff = nb - centre[:, None, :]
-        cov = np.einsum("bki,bkj->bij", diff, diff) / (MLS_K + 1)
+        cov = np.einsum("bki,bkj->bij", diff, diff) / (k + 1)
         evals, evecs = np.linalg.eigh(cov)
         normal = evecs[:, :, 0]
         thickness = np.sqrt(np.maximum(evals[:, 0], 0.0))
