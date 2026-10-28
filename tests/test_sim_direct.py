@@ -76,7 +76,8 @@ def test_direct_runs_the_tools_evaluates_looks_and_finishes(clean, tmp_path):
                           workdir=tmp_path / "direct", on_event=events.append)
     assert res.finished and res.notes.startswith("A slow walk-in")
     assert res.timeline["rig"]["kind"] == "handheld"
-    assert len(res.timeline["camera"]["keys"]) == 2 and res.timeline["actors"]["Maya"]["height_m"] == 1.68
+    own = [k for k in res.timeline["camera"]["keys"] if not k.get("routed")]
+    assert len(own) == 2 and res.timeline["actors"]["Maya"]["height_m"] == 1.68
     assert res.evaluation["frames"] and res.evaluation["frames"][0]["actors"]["Maya"]
     assert res.looks == 1 and (tmp_path / "direct" / "looks").is_dir()
     kinds = [e["kind"] for e in events]
