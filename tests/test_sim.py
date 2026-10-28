@@ -521,3 +521,46 @@ def test_blender_script_carries_the_room_the_camera_every_frame_and_the_problems
     summary = sim.blender_summary(tl, ev)
     assert any("Dolly Track" in s for s in summary) and any("Maya" in s for s in summary)
     assert any("1-73" in s for s in summary)
+
+
+BLENDER = "/Applications/Blender.app/Contents/MacOS/Blender"
+
+
+def test_blender_script_runs_headless_in_a_real_blender_when_one_is_installed(room, tmp_path):
+    """Compiles always; when the Blender binary is present the script is run
+    against a GLB exported the way `locaish export` does it, and the summary
+    line the script ends with is asserted (every camera frame keyed, the room
+    the twin's size, a .blend saved beside the script)."""
+    import os
+    import re
+    import subprocess
+
+    twin, maps, occ = room
+    tl = _tl("dolly", keys=[{"t": 0.0, "pos": [-1.0, -0.6, 1.2], "look_at": "Maya", "focal_mm": 35.0},
+                            {"t": 2.0, "pos": [1.0, -0.6, 1.2], "look_at": "Maya", "focal_mm": 50.0}],
+             actors="walk", duration=2.0)
+    ev = sim.evaluate(tl, twin, maps=maps, occupancy=occ)
+    glb = tmp_path / "room.glb"
+    script = sim.blender_script(tl, ev, glb_path=str(glb), twin=twin)
+    compile(script, "blender.py", "exec")
+    assert "LOCAISH SUMMARY" in script and "channelbag" in script and "save_as_mainfile" in script
+    if not (os.path.exists(BLENDER) and os.access(BLENDER, os.X_OK)) or twin.mesh is None:
+        pytest.skip("no Blender binary at the known path (or the twin has no mesh)")
+    import trimesh
+    trimesh.Trimesh(vertices=twin.mesh.vertices, faces=twin.mesh.faces,
+                    vertex_colors=twin.mesh.vertex_colors, process=False).export(glb)
+    path = tmp_path / "blender.py"
+    path.write_text(script)
+    run = subprocess.run([BLENDER, "-b", "--python", str(path)], cwd=tmp_path, capture_output=True, text=True, timeout=240)
+    out = run.stdout + run.stderr
+    assert run.returncode == 0, out[-3000:]
+    assert "Traceback" not in out, out[-3000:]
+    summary = [line for line in out.splitlines() if line.startswith("LOCAISH SUMMARY:")]
+    assert len(summary) == 1, out[-3000:]
+    assert f"camera keyframes {len(ev.frames)} of {len(ev.frames)} frames" in summary[0]
+    assert "Locaish Camera" in summary[0] and "Dolly Track" in summary[0]
+    ceiling = float(twin.structure.ceiling_z) - float(twin.structure.floor_z)
+    m = re.search(r"room ([\d.]+) x ([\d.]+) x ([\d.]+) m", summary[0])
+    assert m and abs(float(m.group(3)) - ceiling) < 0.1, summary[0]
+    assert "WARNING" not in out
+    assert (tmp_path / "blender.blend").exists()

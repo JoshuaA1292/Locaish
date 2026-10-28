@@ -1772,7 +1772,7 @@ def blender_summary(timeline: Timeline, evaluation: Evaluation | None = None) ->
     n = len(evaluation.frames) if evaluation is not None else int(round(tl.duration_s * tl.fps)) + 1
     sensor = optics.SENSORS.get(tl.sensor)
     out = [
-        f"imports the room GLB under an empty 'Locaish Twin' rotated -90° about X so the twin's Z-up survives the glTF Y-up import",
+        "imports the room GLB under an empty 'Locaish Twin' rotated by whichever axis correction lands the import on the twin's bounding box (Blender reads glTF as Y-up)",
         f"sets the scene to {tl.fps} fps, frames 1-{n} ({tl.duration_s:g} s), metric units",
         f"a camera 'Locaish Camera' with a {sensor.width_mm:g} x {sensor.height_mm:g} mm sensor ({sensor.name}), "
         f"lens, location, rotation_euler and focus_distance keyed on every frame, DoF at f/{tl.aperture_f:g}"
@@ -1797,9 +1797,14 @@ def blender_script(timeline: Timeline, evaluation: Evaluation, *, glb_path: str,
 
     Units are metres and the twin's frame is used as is. The GLB written by
     `locaish export` carries the twin's Z-up vertices unconverted into a
-    format Blender reads as Y-up, so the import is parented to an empty that
-    undoes Blender's Y-up to Z-up rotation; the camera, actors and track are
-    placed in twin coordinates directly.
+    format Blender reads as Y-up, so the import is parented to an empty whose
+    rotation is *measured*: of nine axis rotations the one that lands the
+    imported bounding box on the twin's own (`twin.structure` footprint and
+    floor/ceiling) is applied, and the script warns if the heights still
+    disagree. The camera, actors and track are placed in twin coordinates
+    directly. In background mode the script saves a .blend beside itself and
+    ends with a "LOCAISH SUMMARY:" line. Verified against Blender 5.2.3
+    (slotted actions; F-curves reached through the channelbag).
     """
     tl = evaluation.timeline
     sensor = optics.SENSORS[tl.sensor]
@@ -1813,12 +1818,14 @@ def blender_script(timeline: Timeline, evaluation: Evaluation, *, glb_path: str,
         px, py = tl.rig.params["pivot"]
         pivot = [float(px), float(py), floor_z + _f(tl.rig.params.get("base_height_m"), 1.0)]
     problems = [f"{s['t_start']:.2f}-{s['t_end']:.2f} s  [{s['severity']}]  {s['text']}" for s in evaluation.segments]
-    extent = None
+    bbox = None
     if twin is not None and getattr(twin, "structure", None) is not None:
         st = twin.structure
-        if st.footprint is not None and len(st.footprint) >= 3 and st.ceiling_z is not None:
-            fp = np.asarray(st.footprint)
-            extent = [float(np.ptp(fp[:, 0])), float(np.ptp(fp[:, 1])), float(st.ceiling_z - st.floor_z)]
+        if st.footprint is not None and len(st.footprint) >= 3:
+            fp = np.asarray(st.footprint, dtype=np.float64)
+            top = float(st.ceiling_z) if st.ceiling_z is not None else float(st.floor_z) + 2.7
+            bbox = [[float(fp[:, 0].min()), float(fp[:, 1].min()), float(st.floor_z)],
+                    [float(fp[:, 0].max()), float(fp[:, 1].max()), top]]
     res_x = 1920
     res_y = int(round(res_x / sensor.aspect))
 
@@ -1827,7 +1834,7 @@ def blender_script(timeline: Timeline, evaluation: Evaluation, *, glb_path: str,
         "sensor_width_mm": sensor.width_mm, "sensor_height_mm": sensor.height_mm,
         "aperture_f": tl.aperture_f, "res": [res_x, res_y],
         "frames": frames, "actors": actors, "track": track, "rail_z": rail_z, "pivot": pivot,
-        "problems": problems, "extent": extent, "floor_z": floor_z,
+        "problems": problems, "bbox": bbox, "floor_z": floor_z,
         "rig": tl.rig.kind,
     }
     payload = json.dumps(_jsonable(data), indent=None)
@@ -1842,8 +1849,10 @@ _BLENDER_TEMPLATE = r'''# Locaish camera simulation -> Blender 4.x
 import json
 import math
 
+import os
+
 import bpy
-from mathutils import Vector
+from mathutils import Euler, Vector
 
 DATA = json.loads(r"""__DATA__""")
 
@@ -1868,28 +1877,56 @@ def link(obj):
 
 
 # -- the room ---------------------------------------------------------------
-# The GLB holds the twin's Z-up vertices unconverted. Blender's importer turns
-# glTF Y-up into Z-up by rotating +90 degrees about X, which lays this room on
-# its side; the parent empty below rotates it back.
+# The GLB holds the twin's Z-up vertices unconverted, and Blender's importer
+# treats glTF as Y-up and rotates it. Rather than trust either convention,
+# the import is measured: the correction applied to the parent empty is the
+# axis rotation that lands the room's bounding box on the twin's own.
 before = set(bpy.data.objects)
 bpy.ops.import_scene.gltf(filepath=DATA["glb"])
 imported = [o for o in bpy.data.objects if o not in before]
 room = bpy.data.objects.new("Locaish Twin", None)
 link(room)
-room.rotation_euler = (-math.pi / 2.0, 0.0, 0.0)
-for o in imported:
-    if o.parent is None:
-        o.parent = room
 bpy.context.view_layer.update()
-if DATA.get("extent") and imported:
-    pts = [room.matrix_world @ o.matrix_world @ Vector(c) for o in imported if o.type == "MESH" for c in o.bound_box]
-    if pts:
-        zs = [p.z for p in pts]
-        got = max(zs) - min(zs)
-        want = DATA["extent"][2]
-        if abs(got - want) > 0.25 * max(want, 0.1):
-            print("Locaish: the imported room's height is %.2f m, the twin's is %.2f m; "
-                  "check the GLB axis convention" % (got, want))
+corners = [o.matrix_world @ Vector(c) for o in imported if o.type == "MESH" for c in o.bound_box]
+
+
+def bbox_of(points):
+    lo = Vector((min(p.x for p in points), min(p.y for p in points), min(p.z for p in points)))
+    hi = Vector((max(p.x for p in points), max(p.y for p in points), max(p.z for p in points)))
+    return lo, hi
+
+
+CANDIDATES = [("none", (0.0, 0.0, 0.0)),
+              ("X -90", (-math.pi / 2, 0.0, 0.0)), ("X +90", (math.pi / 2, 0.0, 0.0)), ("X 180", (math.pi, 0.0, 0.0)),
+              ("Y -90", (0.0, -math.pi / 2, 0.0)), ("Y +90", (0.0, math.pi / 2, 0.0)),
+              ("Z -90", (0.0, 0.0, -math.pi / 2)), ("Z +90", (0.0, 0.0, math.pi / 2)), ("Z 180", (0.0, 0.0, math.pi))]
+correction = ("X -90", (-math.pi / 2, 0.0, 0.0))
+room_lo = room_hi = None
+if corners:
+    if DATA.get("bbox"):
+        want_lo, want_hi = Vector(DATA["bbox"][0]), Vector(DATA["bbox"][1])
+        best = None
+        for name, eul in CANDIDATES:
+            R = Euler(eul, "XYZ").to_matrix()
+            lo, hi = bbox_of([R @ p for p in corners])
+            score = (lo - want_lo).length + (hi - want_hi).length
+            if best is None or score < best[0]:
+                best = (score, name, eul)
+        correction = (best[1], best[2])
+        print("Locaish: room import corrected by rotation %s (bbox mismatch %.2f m)" % (best[1], best[0]))
+    room.rotation_euler = correction[1]
+    for o in imported:
+        if o.parent is None:
+            o.parent = room
+    bpy.context.view_layer.update()
+    room_lo, room_hi = bbox_of([o.matrix_world @ Vector(c) for o in imported if o.type == "MESH" for c in o.bound_box])
+    if DATA.get("bbox"):
+        want_h = DATA["bbox"][1][2] - DATA["bbox"][0][2]
+        got_h = room_hi.z - room_lo.z
+        if abs(got_h - want_h) > 0.25 * max(want_h, 0.1):
+            print("Locaish: WARNING the imported room is %.2f m tall, the twin %.2f m; check the GLB" % (got_h, want_h))
+else:
+    print("Locaish: WARNING the GLB imported no mesh")
 
 # -- the camera -------------------------------------------------------------
 cam_data = bpy.data.cameras.new("Locaish Camera")
@@ -1912,9 +1949,30 @@ for fr in DATA["frames"]:
     cam_data.keyframe_insert("lens", frame=f)
     cam_data.dof.focus_distance = fr["focus"]
     cam_data.dof.keyframe_insert("focus_distance", frame=f)
-for fc in (cam.animation_data.action.fcurves if cam.animation_data and cam.animation_data.action else []):
+
+
+def fcurves_of(obj):
+    """An object's animation F-curves across Blender versions: slotted
+    actions (4.4+) keep them in a channelbag; older actions on the action."""
+    ad = obj.animation_data
+    if ad is None or ad.action is None:
+        return []
+    act = ad.action
+    if hasattr(act, "fcurves"):
+        return list(act.fcurves)
+    try:
+        return list(act.layers[0].strips[0].channelbag(ad.action_slot, ensure=True).fcurves)
+    except Exception as e:  # noqa: BLE001
+        print("Locaish: could not reach the F-curves (%s)" % e)
+        return []
+
+
+camera_keyframes = 0
+for fc in fcurves_of(cam) + fcurves_of(cam_data):
     for kp in fc.keyframe_points:
         kp.interpolation = "LINEAR"
+    if fc.data_path == "location" and fc.array_index == 0:
+        camera_keyframes = len(fc.keyframe_points)
 
 # -- the cast ---------------------------------------------------------------
 for name, actor in DATA["actors"].items():
@@ -1968,6 +2026,19 @@ text.size = 0.12
 label = bpy.data.objects.new("Locaish Problems", text)
 link(label)
 label.location = (0.0, 0.0, DATA["floor_z"] + 0.02)
-print("Locaish: built %d camera frames, %d actors, %d problem segments" % (
-    len(DATA["frames"]), len(DATA["actors"]), len(DATA["problems"])))
+
+# -- done -------------------------------------------------------------------
+created = [o.name for o in coll.objects]
+extents = ("%.2f x %.2f x %.2f m" % tuple(room_hi[i] - room_lo[i] for i in range(3))) if room_lo is not None else "no room"
+print("LOCAISH SUMMARY: %d objects created (%s); camera keyframes %d of %d frames; room %s; correction %s" % (
+    len(created), ", ".join(created[:6]) + (", ..." if len(created) > 6 else ""),
+    camera_keyframes, len(DATA["frames"]), extents, correction[0]))
+if bpy.app.background:
+    try:
+        base = os.path.splitext(os.path.abspath(__file__))[0] if "__file__" in globals() else os.path.join(os.getcwd(), "locaish_sim")
+        out = base + ".blend"
+        bpy.ops.wm.save_as_mainfile(filepath=out)
+        print("Locaish: saved %s" % out)
+    except Exception as e:  # noqa: BLE001
+        print("Locaish: could not save the .blend (%s)" % e)
 '''
