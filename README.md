@@ -58,6 +58,18 @@ the scene in this room*:
   from the twin's gaussian field with the cast drawn in, a blocking diagram,
   a typed call sheet, and the shoot day laid out so every window-dependent
   shot sits inside its window's direct sun. A typed scene needs no model.
+- **Simulate the camera.** A timeline of keyframes on a real rig: tripod,
+  slider, dolly on a track with the catalogue's gear, jib with an arm and a
+  counterweight, handheld with micro-shake, steadicam, crane, drone. The
+  engine snaps the keys onto the rig's degrees of freedom and runs every frame
+  through the measured room: gear fit, headroom, sightline, speed and
+  acceleration, the jib arm through a wall, the subject leaving the frame,
+  depth of field. In the twin, Simulate mode is a timeline bar with keys and
+  problem segments, keys dragged on the floor, the frustum and the rails
+  drawn, the cast as figures, playback through the camera. **Direct it:**
+  say what the camera should do and Muse Wonder operates it through the
+  engine's tools while Muse Spark reads the rendered frames as a DP, until
+  the move holds. Render the move to video from the gaussian field.
 - **Finish the frame.** Muse Image turns any animatic frame photoreal from
   the cast's headshots, and stamps it *render, not a measurement*.
 - **Scan through a crowd.** SAM 3.1 masks people, pets and vehicles out of
@@ -74,7 +86,8 @@ open-weight SAM 3D models on Modal (`locaish/meta/sam3d.py`,
 says becomes a measurement except the stature anchor, through the fusion.
 Gemini remains available behind `LOCAISH_AGENT_PROVIDER` and
 `LOCAISH_VISION_PROVIDER`. The engine is `locaish/film/rehearsal.py`; the
-agent is `locaish/agent/rehearsal.py`; the studio's stage is
+agent is `locaish/agent/rehearsal.py`; the simulator is `locaish/film/sim.py` with
+its operator in `locaish/agent/sim.py`; the studio's stage is
 `locaish/product/stage.py`. Plan and status: [docs/META_HACKATHON.md](docs/META_HACKATHON.md).
 
 ```bash

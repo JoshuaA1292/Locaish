@@ -93,7 +93,7 @@ ephemeris, or a catalogue; the models planned and judged, the geometry answered.
 
 ## Status, 24 October (before the window opens)
 
-Built on branch `meta-hackathon`, 458 tests green, nothing run against a live
+Built on branch `meta-hackathon`, 547 tests green (27 Oct), nothing run against a live
 Meta key or a deployed Modal endpoint yet:
 
 | Piece | Where | State |
@@ -109,6 +109,10 @@ Meta key or a deployed Modal endpoint yet:
 | Rehearsal engine: blocking, timing, camera, dolly check, sun, schedule, animatic, blocking SVG, call sheet | `locaish/film/rehearsal.py` | done, deterministic |
 | Muse Spark breakdown, placement from the shot table, notes | `locaish/agent/rehearsal.py` | done against a scripted model |
 | Muse Image frame finishing, stamped | `locaish/meta/finish.py` | done; endpoint path unverified |
+| Camera simulator: timeline, eight rigs, solve, per-frame checks, segments, from-rehearsal | `locaish/film/sim.py` | done, 30 tests |
+| Simulate mode in the viewer: timeline bar, keys, drag, frustum, rails, figures, camera-view playback | `locaish/viewer/template.html` | done, screenshot-verified (SwiftShader) |
+| Simulator routes: evaluate on edit, figures, frame at playhead, video render (ffmpeg), hand-off files | `locaish/product/stage.py`, `serve.py`, `viewer/stage.js` | done, 9 route tests |
+| The operator: Muse Wonder on the engine's tools, Muse Spark reading frames, directing route with events | `locaish/agent/sim.py` | done against a scripted model, 4 tests |
 | Studio stage: routes, page, animatic scrubber, finish button | `locaish/product/stage.py`, `locaish/viewer/stage.js`, `serve.py` | done, screenshot-verified on a real room |
 
 **Next, in order:** get a META_API_KEY and run the vision, breakdown and
