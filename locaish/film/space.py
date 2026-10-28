@@ -368,8 +368,17 @@ def placements(
 
 
 def occupancy(twin: Twin, *, cell: float = 0.08) -> tuple[np.ndarray, np.ndarray, float]:
-    """A 3D occupancy volume for line-of-sight tests. Returns (grid, origin, cell)."""
-    xyz = np.asarray(twin.points.xyz, dtype=np.float64)
+    """A 3D occupancy volume for line-of-sight tests. Returns (grid, origin, cell).
+
+    Measured points only, as the floor maps and the twin's own contract
+    require: the carved frontier and the learned fill close the room where
+    the scan never looked, and a sightline that stops at a surface nobody
+    measured is a sightline through fog. On a real bedroom the fill sat
+    right at the camera's first position and declared every frame blocked.
+    """
+    xyz = np.asarray(twin.points.measured().xyz, dtype=np.float64)
+    if len(xyz) == 0:
+        xyz = np.asarray(twin.points.xyz, dtype=np.float64)
     lo = xyz.min(axis=0) - cell
     dims = np.maximum(np.ceil((xyz.max(axis=0) + cell - lo) / cell).astype(int), 1)
     idx = np.floor((xyz - lo) / cell).astype(np.int64)

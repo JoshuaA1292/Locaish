@@ -904,7 +904,7 @@ class Stage:
                 if (i + 1) % step == 0 or i + 1 == len(chosen):
                     run.emit("progress", f"frame {i + 1} of {len(chosen)}", done=i + 1, total=len(chosen),
                              frame=f"/sim-file/{job.id}/{sim_id}/frame_{i:05d}.png")
-            mp4 = run.workdir.parent / "move.mp4"
+            mp4 = (run.workdir.parent / "move.mp4").resolve()
             note = ""
             ffmpeg = shutil.which("ffmpeg")
             if ffmpeg:

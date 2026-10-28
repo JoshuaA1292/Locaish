@@ -526,3 +526,24 @@ def test_the_report_renders_to_text():
     text = report.render_text(report.build(_box_twin(name="Location A")))
     for heading in ("LOCATION: Location A", "SPACE", "CAMERA", "GRIP", "SOUND"):
         assert heading in text
+
+
+def test_occupancy_ignores_inferred_points():
+    """A sheet of inferred points between camera and subject is fog, not a wall."""
+    import numpy as np
+
+    from locaish.film import space as spacemod
+    from locaish.types import PointCloud, Twin
+
+    rng = np.random.default_rng(3)
+    floor = np.column_stack([rng.uniform(-3, 3, 4000), rng.uniform(-3, 3, 4000), np.zeros(4000)])
+    sheet = np.column_stack([np.zeros(40000), rng.uniform(-3, 3, 40000), rng.uniform(0, 2.5, 40000)])
+    xyz = np.vstack([floor, sheet])
+    inferred = np.concatenate([np.zeros(4000), np.ones(40000)]).astype(np.float32)
+    twin = Twin(name="fog", points=PointCloud(xyz=xyz, inferred=inferred))
+    grid, origin, cell = spacemod.occupancy(twin)
+    a, b = np.array([-2.0, 0.0, 1.5]), np.array([2.0, 0.0, 1.5])
+    assert spacemod.visible(grid, origin, cell, a, b)
+    solid = Twin(name="wall", points=PointCloud(xyz=xyz))
+    grid, origin, cell = spacemod.occupancy(solid)
+    assert not spacemod.visible(grid, origin, cell, a, b)
