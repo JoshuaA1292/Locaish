@@ -564,3 +564,63 @@ def test_blender_script_runs_headless_in_a_real_blender_when_one_is_installed(ro
     assert m and abs(float(m.group(3)) - ceiling) < 0.1, summary[0]
     assert "WARNING" not in out
     assert (tmp_path / "blender.blend").exists()
+
+
+def test_walking_rigs_route_round_the_furniture(clean):
+    """A handheld move whose straight line crosses the furniture gets routed
+    keys inserted on the standable floor; the keys are derived, and a second
+    solve drops and re-derives them rather than piling them up."""
+    import numpy as np
+    import pytest
+
+    from locaish.film import rehearsal as reh
+    from locaish.film import sim, space
+
+    result, _fx = clean
+    twin = result.twin
+    fz = float(twin.structure.floor_z)
+    maps = space.floor_maps(twin)
+    mask = maps.standable(radius_m=sim.OPERATOR_RADIUS_M + float(maps.cell))
+    cells = np.asarray(maps.world_of(np.argwhere(mask))).reshape(-1, 2)
+    rng = np.random.default_rng(0)
+    if len(cells) > 160:
+        cells = cells[rng.choice(len(cells), 160, replace=False)]
+    occ = space.occupancy(twin)
+    # The longest pair whose straight line leaves the operator's floor but
+    # which a route joins: the furniture box sits between them.
+    best = None
+    for i in range(len(cells)):
+        for j in range(i + 1, len(cells)):
+            L = float(np.linalg.norm(cells[j] - cells[i]))
+            if best is not None and L <= best[0]:
+                continue
+            if reh._segment_walkable(maps, mask, cells[i], cells[j]):
+                continue
+            r = reh.route(maps, occ, cells[i], cells[j], mask=mask)
+            if not r.blocked and len(r.points) >= 3:
+                best = (L, cells[i], cells[j])
+    if best is None:
+        pytest.skip("the fixture has no pair of standable cells with furniture between them")
+    _L, a, b = best
+    tl = sim.Timeline.from_dict({
+        "id": "walk", "title": "walk", "fps": 12, "duration_s": 4.0, "sensor": "fullframe", "aperture_f": 2.8,
+        "rig": {"kind": "handheld", "params": {"shake": 0.0}},
+        "camera": {"interp": "linear", "keys": [
+            {"t": 0.0, "pos": [float(a[0]), float(a[1]), fz + 1.5], "aim": [float(b[0]), float(b[1]), fz + 1.2], "focal_mm": 24},
+            {"t": 4.0, "pos": [float(b[0]), float(b[1]), fz + 1.5], "aim": [float(b[0]), float(b[1]), fz + 1.2], "focal_mm": 24}]},
+        "actors": {}, "pieces": [], "notes": []})
+    solved = sim.solve(tl, twin, maps=maps)
+    routed = [k for k in solved.camera_keys if k.routed]
+    assert routed, "the straight line through the furniture should have been routed round it"
+    assert any(n.startswith("walked round") for n in solved.notes)
+    assert not solved.camera_keys[0].routed and not solved.camera_keys[-1].routed
+    ts = [k.t for k in solved.camera_keys]
+    assert ts == sorted(ts) and 0.0 < min(k.t for k in routed) <= max(k.t for k in routed) < 4.0
+    again = sim.solve(solved, twin, maps=maps)
+    assert sum(k.routed for k in again.camera_keys) == len(routed)
+    ev = sim.evaluate(solved, twin, maps=maps)
+    off = [f for f in ev.frames if any("off the standable floor" in p for p in f.problems)]
+    assert not off, [f.t for f in off][:5]
+    d = solved.to_dict()
+    assert any(k.get("routed") for k in d["camera"]["keys"])
+    assert sim.Timeline.from_dict(d).camera_keys[1].routed is True

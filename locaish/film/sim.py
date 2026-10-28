@@ -143,6 +143,7 @@ class CameraKey:
     roll_deg: float = 0.0
     ease: str = "inout"
     snapped_from: list[float] | None = None
+    routed: bool = False      # inserted by the solve to walk the operator round furniture
 
     def to_dict(self) -> dict:
         d = {
@@ -156,6 +157,8 @@ class CameraKey:
         }
         if self.snapped_from is not None:
             d["snapped_from"] = _r(self.snapped_from)
+        if self.routed:
+            d["routed"] = True
         return d
 
     @classmethod
@@ -170,6 +173,7 @@ class CameraKey:
             roll_deg=_f(d.get("roll_deg"), 0.0),
             ease=str(d.get("ease") or "inout"),
             snapped_from=None if d.get("snapped_from") is None else _xyz(d["snapped_from"]),
+            routed=bool(d.get("routed") or False),
         )
 
 
@@ -1099,6 +1103,9 @@ def solve(timeline: Timeline, twin=None, *, maps: space.FloorMaps | None = None)
     if hard:
         raise ValueError("; ".join(hard))
     tl = copy.deepcopy(timeline)
+    # Keys an earlier solve inserted to walk round furniture are derived, not
+    # the director's: drop them and route again from the keys that are.
+    tl.camera_keys = [k for k in tl.camera_keys if not k.routed]
     tl.sort()
     rig = RIGS[tl.rig.kind]
     floor_z = _floor_z(twin, maps)
@@ -1117,10 +1124,85 @@ def solve(timeline: Timeline, twin=None, *, maps: space.FloorMaps | None = None)
             k.snapped_from = None
         k.pos = [float(v) for v in new]
     tl.rig.params = {k: v for k, v in params.items()}
+    if rig.kind in WALKING_RIGS and maps is not None:
+        notes.extend(_route_walking_keys(tl, maps, twin))
     # Re-solving a solved timeline replaces its snap notes rather than piling them up.
-    tl.notes = [n for n in tl.notes if not (n.startswith("key ") and " moved " in n)]
+    tl.notes = [n for n in tl.notes if not (n.startswith("key ") and " moved " in n)
+                and not n.startswith("walked round") and not n.startswith("no walkable route")]
     tl.notes.extend(n for n in notes if n not in tl.notes)
     return tl
+
+
+WALKING_RIGS = ("handheld", "steadicam")
+OPERATOR_RADIUS_M = 0.42      # the handheld entry in the catalogue: shoulder width plus the rig
+ROUTE_DETOUR_MIN_M = 0.05
+
+
+def _route_walking_keys(tl: Timeline, maps: space.FloorMaps, twin) -> list[str]:
+    """An operator walks round the furniture, not through it.
+
+    Between each pair of the director's keys the straight line is tried on
+    the floor an operator can stand on (42 cm of clear radius, as the
+    catalogue's handheld entry needs); where it leaves that floor, the
+    rehearsal engine's A* route replaces it and intermediate keys are
+    inserted along the route at times proportional to arc length, marked
+    `routed` so the page can draw them as derived and the next solve can
+    drop them. A pair with no walkable route keeps its straight line and
+    says so; the evaluation will then fail those frames honestly.
+    """
+    from . import rehearsal as reh
+
+    keys = tl.camera_keys
+    if len(keys) < 2:
+        return []
+    # One cell of margin over the operator's radius: the frame check samples
+    # the clearance map between cell centres, and a route planned on the
+    # centres alone can still read a few centimetres short halfway between.
+    mask = maps.standable(radius_m=OPERATOR_RADIUS_M + float(maps.cell))
+    if not mask.any():
+        return ["no floor in this room gives an operator 42 cm of clear radius; the keys stand as typed"]
+    occupancy = space.occupancy(twin) if twin is not None else None
+    notes: list[str] = []
+    out: list[CameraKey] = []
+    for a, b in zip(keys, keys[1:]):
+        out.append(a)
+        if b.t - a.t <= 1e-6:
+            continue                                   # a cut: no walk
+        pa, pb = np.asarray(a.pos, dtype=np.float64), np.asarray(b.pos, dtype=np.float64)
+        if reh._segment_walkable(maps, mask, pa[:2], pb[:2]):
+            continue
+        if occupancy is None:
+            notes.append(f"no walkable route between key at {a.t:.1f} s and {b.t:.1f} s could be checked without the twin")
+            continue
+        r = reh.route(maps, occupancy, pa[:2], pb[:2], mask=mask)
+        if r.blocked or len(r.points) < 3:
+            notes.append(f"no walkable route between the keys at {a.t:.1f} s and {b.t:.1f} s; the straight line stands")
+            continue
+        pts = np.asarray(r.points, dtype=np.float64)
+        seg = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+        arc = np.concatenate([[0.0], np.cumsum(seg)])
+        total = float(arc[-1])
+        if total <= 1e-6 or total - float(np.linalg.norm(pb[:2] - pa[:2])) < ROUTE_DETOUR_MIN_M:
+            continue
+        for k in range(1, len(pts) - 1):
+            u = float(arc[k] / total)
+            t = a.t + (b.t - a.t) * u
+            z = float(pa[2] + (pb[2] - pa[2]) * u)
+            focal = float(math.exp(math.log(a.focal_mm) + (math.log(b.focal_mm) - math.log(a.focal_mm)) * u))
+            aim = None
+            if a.look_at is None and b.look_at is None and a.aim is not None and b.aim is not None:
+                aim = [float(a.aim[i] + (b.aim[i] - a.aim[i]) * u) for i in range(3)]
+            out.append(CameraKey(
+                t=t, pos=[float(pts[k][0]), float(pts[k][1]), z], aim=aim,
+                look_at=a.look_at or b.look_at, focal_mm=focal,
+                roll_deg=float(a.roll_deg + (b.roll_deg - a.roll_deg) * u), ease="linear", routed=True,
+            ))
+        notes.append(f"walked round the furniture between the keys at {a.t:.1f} s and {b.t:.1f} s: "
+                     f"{len(pts) - 2} routed keys, {total:.2f} m instead of {float(np.linalg.norm(pb[:2] - pa[:2])):.2f} m")
+    out.append(keys[-1])
+    tl.camera_keys = out
+    tl.sort()
+    return notes
 
 
 # ---------------------------------------------------------------------------
