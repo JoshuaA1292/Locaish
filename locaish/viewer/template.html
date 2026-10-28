@@ -179,8 +179,97 @@ label.slider .val { font-family: var(--mono); color: var(--ink); min-width: 34px
   #panel { width: auto; left: 12px; top: auto; height: 45%; }
   #legend { display: none; }
 }
-body.embed #toolbar > :not(#btn-splat):not(#btn-both):not(#btn-viewfinder):not(#btn-label) { display: none !important; }
+body.embed #toolbar > :not(#btn-splat):not(#btn-both):not(#btn-viewfinder):not(#btn-label):not(#btn-sim) { display: none !important; }
 body.embed #toolbar { padding: 6px 8px; }
+
+/* simulate: the left panel edits the move, the bottom bar plays it. Same
+   language as the rest of the instrument: dark, one accent, monospace where
+   a number lives. Both are DOM overlays; the 3D view underneath draws the
+   path, the rig and the frustum. */
+#simpanel {
+  position: fixed; top: 58px; left: 12px; bottom: 120px; width: 276px; z-index: 5;
+  background: rgba(19,21,23,0.94); border: 1px solid var(--line); border-radius: 3px;
+  display: none; flex-direction: column; overflow: hidden;
+}
+body.sim #simpanel { display: flex; }
+#simpanel header { padding: 10px 14px 8px; border-bottom: 1px solid var(--line); }
+#simpanel header h1 { font-size: 13px; font-weight: 600; margin: 0 0 2px; }
+#simpanel header .sub { font: 10px/1.4 var(--mono); color: var(--ink-faint); }
+#simpanel .body { overflow-y: auto; padding: 0 0 12px; }
+#simpanel .body::-webkit-scrollbar { width: 8px; }
+#simpanel .body::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+#simpanel input, #simpanel select {
+  font: 11px/1.3 var(--mono); color: var(--ink); background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: 2px; padding: 3px 5px; width: 100%; min-width: 0;
+  outline: none;
+}
+#simpanel input:focus, #simpanel select:focus { border-color: var(--accent); }
+#simpanel input[type=number] { text-align: right; -moz-appearance: textfield; }
+#simpanel input[type=range] { padding: 0; border: 0; background: transparent; }
+.sgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 8px; }
+.sgrid.c3 { grid-template-columns: 1fr 1fr 1fr; }
+.sgrid.c4 { grid-template-columns: repeat(4, 1fr); }
+label.f, div.f { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.f > span { font: 10px/1 var(--sans); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-faint); }
+.f.inline { flex-direction: row; align-items: center; gap: 5px; }
+.btns { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-top: 8px; }
+button.sbtn {
+  font: 11px/1 var(--sans); color: var(--ink-dim); background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: 2px; padding: 5px 7px; cursor: pointer; white-space: nowrap;
+}
+button.sbtn:hover { color: var(--ink); border-color: var(--ink-faint); }
+button.sbtn.primary { color: var(--bg); background: var(--accent); border-color: var(--accent); }
+button.sbtn[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: rgba(86,180,233,0.1); }
+button.sbtn .k { opacity: .55; margin-left: 5px; font-family: var(--mono); }
+button.sbtn:disabled { opacity: .4; cursor: default; }
+.dimtxt { font: 10.5px/1.4 var(--mono); color: var(--ink-faint); }
+ul.klist { list-style: none; margin: 8px 0 0; padding: 0; font: 11px/1.4 var(--mono); }
+ul.klist li {
+  display: flex; justify-content: space-between; align-items: center; gap: 6px;
+  padding: 3px 5px; border-bottom: 1px solid rgba(36,40,44,0.5); cursor: pointer; color: var(--ink-dim);
+}
+ul.klist li:hover { color: var(--ink); background: var(--panel-2); }
+ul.klist li.sel { color: var(--accent); background: rgba(86,180,233,0.08); }
+ul.klist li .sw { display: inline-block; width: 8px; height: 8px; border-radius: 1px; margin-right: 6px; }
+ul.klist li .acts { display: flex; gap: 3px; }
+ul.klist li .acts button { font: 10px/1 var(--sans); color: var(--ink-dim); background: transparent; border: 1px solid var(--line); border-radius: 2px; padding: 2px 5px; cursor: pointer; }
+ul.klist li .acts button:hover { color: var(--ink); border-color: var(--ink-faint); }
+#sp-keyfields { margin-top: 8px; display: flex; flex-direction: column; gap: 5px; }
+#sp-keyfields.hidden { display: none; }
+#sp-note { font-size: 11.5px; color: var(--ink-dim); }
+#sp-note .hint { color: var(--ink-faint); }
+
+#simbar {
+  position: fixed; left: 12px; right: 12px; bottom: 12px; z-index: 6;
+  background: rgba(19,21,23,0.94); border: 1px solid var(--line); border-radius: 3px;
+  display: none; flex-direction: column; padding: 5px 8px 4px; gap: 3px;
+  font: 11px/1.4 var(--mono); color: var(--ink-dim);
+}
+body.sim #simbar { display: flex; }
+#simbar.shifted { right: 356px; }
+#simbar .row { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; min-height: 24px; }
+#simbar .row .sep { width: 1px; height: 16px; background: var(--line); margin: 0 2px; flex: 0 0 1px; }
+#simbar .rd { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#simbar .rd.ink { color: var(--ink); }
+#simbar .rd.fail { color: var(--fail); flex: 1 1 auto; text-align: right; }
+#simbar .rd.warn { color: var(--warn); }
+#simbar button.tool { padding: 4px 7px; }
+#sb-track { position: relative; height: 50px; cursor: crosshair; user-select: none; }
+#sb-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+#sb-keys { position: absolute; inset: 0; pointer-events: none; }
+.kd {
+  position: absolute; top: 13px; width: 9px; height: 9px; margin-left: -4.5px;
+  background: var(--ink-dim); transform: rotate(45deg); pointer-events: auto; cursor: ew-resize;
+  border: 1px solid var(--bg);
+}
+.kd.sel { background: var(--accent); width: 11px; height: 11px; margin-left: -5.5px; top: 12px; }
+.kd.actor { top: 29px; width: 6px; height: 6px; margin-left: -3px; cursor: default; }
+#sb-note { font: 10.5px/1.3 var(--mono); color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 14px; }
+#sb-note.warn { color: var(--warn); }
+#sb-note.fail { color: var(--fail); }
+body.sim #readout { left: 300px; bottom: 124px; }
+body.sim #legend { display: none; }
+@media (max-width: 820px) { #simpanel { display: none !important; } }
 </style>
 </head>
 <body>
@@ -206,7 +295,113 @@ body.embed #toolbar { padding: 6px 8px; }
   <button class="tool" id="btn-inside">Inside<span class="k">I</span></button>
   <button class="tool" id="btn-frame">Frame<span class="k">F</span></button>
   <button class="tool" id="btn-viewfinder" aria-pressed="false">Viewfinder<span class="k">V</span></button>
+  <button class="tool" id="btn-sim" aria-pressed="false">Simulate<span class="k">6</span></button>
   <button class="tool" id="btn-panel" aria-pressed="true">Panel<span class="k">H</span></button>
+</div>
+
+<!-- simulate: the move's editor (left) and its timeline (bottom) -->
+<aside id="simpanel">
+  <header>
+    <h1>Simulate</h1>
+    <div class="sub" id="sp-sub">a camera move through the measured room</div>
+  </header>
+  <div class="body">
+    <section class="blk">
+      <h2>Move</h2>
+      <label class="f"><span>title</span><input id="sp-title" type="text" spellcheck="false"></label>
+      <div class="sgrid c3" style="margin-top:6px">
+        <label class="f"><span>duration s</span><input id="sp-dur" type="number" step="0.5" min="0.5"></label>
+        <label class="f"><span>fps</span><input id="sp-fps" type="number" step="1" min="1"></label>
+        <label class="f"><span>f-stop</span><input id="sp-ap" type="number" step="0.1" min="0.7"></label>
+      </div>
+      <div class="sgrid" style="margin-top:6px">
+        <label class="f"><span>sensor</span><select id="sp-sensor">
+          <option value="ff">full frame</option><option value="s35">super 35</option>
+          <option value="m43">micro 4/3</option><option value="phone">phone</option></select></label>
+        <label class="f"><span>interp</span><select id="sp-interp">
+          <option value="catmull">catmull</option><option value="linear">linear</option></select></label>
+      </div>
+    </section>
+    <section class="blk">
+      <h2>Rig</h2>
+      <label class="f"><span>kind</span><select id="sp-rig"></select></label>
+      <div class="rigp" data-rig="dolly">
+        <div class="sgrid" style="margin-top:6px">
+          <label class="f"><span>gear key</span><input id="sp-gear" type="text" spellcheck="false"></label>
+          <label class="f"><span>rail height m</span><input id="sp-railh" type="number" step="0.05"></label>
+        </div>
+        <div class="btns"><button class="sbtn" id="sp-track-keys">Track from keys</button>
+          <button class="sbtn" id="sp-track-clear">Clear</button><span class="dimtxt" id="sp-track-n"></span></div>
+      </div>
+      <div class="rigp" data-rig="jib">
+        <div class="sgrid" style="margin-top:6px">
+          <label class="f"><span>arm m</span><input id="sp-arm" type="number" step="0.1" min="0.5"></label>
+          <label class="f"><span>base height m</span><input id="sp-baseh" type="number" step="0.05" min="0"></label>
+        </div>
+        <div class="btns"><button class="sbtn" id="sp-pivot">Pivot from click</button><span class="dimtxt" id="sp-pivot-t"></span></div>
+      </div>
+      <div class="rigp" data-rig="handheld">
+        <label class="slider" style="margin-top:6px"><span>shake</span>
+          <input id="sp-shake" type="range" min="0" max="1" step="0.05"><span class="val" id="sp-shake-v"></span></label>
+      </div>
+      <div class="btns"><button class="sbtn" id="sp-snap">Snap to rig</button><span class="dimtxt" id="sp-rig-note"></span></div>
+    </section>
+    <section class="blk">
+      <h2>Camera keys</h2>
+      <div class="btns" style="margin-top:0">
+        <button class="sbtn primary" id="sp-keyview">Key the view<span class="k">K</span></button>
+        <button class="sbtn" id="sp-keyclick" aria-pressed="false">Key on click</button>
+        <label class="f inline"><span>at h</span><input id="sp-keyh" type="number" step="0.05" value="1.50" style="width:62px"></label>
+        <button class="sbtn" id="sp-delkey">Delete key<span class="k">⌫</span></button>
+      </div>
+      <ul class="klist" id="sp-keys"></ul>
+      <div id="sp-keyfields" class="hidden">
+        <div class="sgrid c4">
+          <label class="f"><span>t s</span><input id="sk-t" type="number" step="0.04"></label>
+          <label class="f"><span>x</span><input id="sk-x" type="number" step="0.05"></label>
+          <label class="f"><span>y</span><input id="sk-y" type="number" step="0.05"></label>
+          <label class="f"><span>z</span><input id="sk-z" type="number" step="0.05"></label>
+        </div>
+        <div class="sgrid c3">
+          <label class="f"><span>focal mm</span><input id="sk-focal" type="number" step="1" min="1"></label>
+          <label class="f"><span>roll °</span><input id="sk-roll" type="number" step="1"></label>
+          <label class="f"><span>ease</span><select id="sk-ease">
+            <option value="inout">in-out</option><option value="in">in</option><option value="out">out</option><option value="linear">linear</option></select></label>
+        </div>
+        <label class="f"><span>look at</span><select id="sk-lookat"></select></label>
+        <div class="sgrid c3" id="sk-aimrow">
+          <label class="f"><span>aim x</span><input id="sk-ax" type="number" step="0.05"></label>
+          <label class="f"><span>aim y</span><input id="sk-ay" type="number" step="0.05"></label>
+          <label class="f"><span>aim z</span><input id="sk-az" type="number" step="0.05"></label>
+        </div>
+      </div>
+    </section>
+    <section class="blk">
+      <h2>Actors</h2>
+      <div class="sgrid c3">
+        <input id="sp-aname" type="text" placeholder="name" spellcheck="false">
+        <input id="sp-aheight" type="number" step="0.01" min="0.5" placeholder="height m">
+        <button class="sbtn" id="sp-aadd">+ actor</button>
+      </div>
+      <ul class="klist" id="sp-actors"></ul>
+    </section>
+    <section class="blk" id="sp-note"></section>
+  </div>
+</aside>
+
+<div id="simbar">
+  <div class="row">
+    <button class="tool" id="sb-play">Play<span class="k">␣</span></button>
+    <button class="tool" id="sb-loop" aria-pressed="true">Loop</button>
+    <button class="tool" id="sb-cam" aria-pressed="false">Camera view<span class="k">C</span></button>
+    <span class="sep"></span>
+    <span class="rd ink" id="sb-time">—</span>
+    <span class="sep"></span>
+    <span class="rd" id="sb-shot"></span>
+    <span class="rd fail" id="sb-problems"></span>
+  </div>
+  <div id="sb-track"><canvas id="sb-canvas"></canvas><div id="sb-keys"></div></div>
+  <div id="sb-note"></div>
 </div>
 
 <div id="letterbox">
@@ -242,6 +437,7 @@ body.embed #toolbar { padding: 6px 8px; }
   <b>R</b><span>reset camera</span>
   <b>F</b><span>frame geometry</span>
   <b>V [ ]</b><span>viewfinder · lens</span>
+  <b>6</b><span>simulate a camera move</span>
   <b>H</b><span>hide panel</span>
 </div>
 
@@ -1112,14 +1308,21 @@ let dragging = null, lastX = 0, lastY = 0, downX = 0, downY = 0, downT = 0, move
 canvas.addEventListener("contextmenu", e => e.preventDefault());
 canvas.addEventListener("pointerdown", e => {
   canvas.setPointerCapture(e.pointerId);
-  dragging = (e.button === 2 || e.button === 1 || e.shiftKey) ? "pan" : "orbit";
   lastX = downX = e.clientX; lastY = downY = e.clientY; downT = performance.now(); moved = 0;
+  // A key diamond under the pointer is grabbed rather than orbited around.
+  if (sim.on && e.button === 0 && !sim.armed) {
+    const rect = canvas.getBoundingClientRect();
+    const i = simKeyAt(e.clientX - rect.left, e.clientY - rect.top);
+    if (i >= 0) { simSelect(simKeys()[i]); sim.drag = { key: simKeys()[i] }; dragging = "key"; return; }
+  }
+  dragging = (e.button === 2 || e.button === 1 || e.shiftKey) ? "pan" : "orbit";
 });
 canvas.addEventListener("pointermove", e => {
   if (!dragging) return;
   const dx = e.clientX - lastX, dy = e.clientY - lastY;
   lastX = e.clientX; lastY = e.clientY;
   moved += Math.abs(dx) + Math.abs(dy);
+  if (dragging === "key") { if (moved >= 3) simDragMove(e); needsRedraw = true; return; }
   if (dragging === "orbit") {
     cam.gYaw -= dx * 0.006;
     cam.gPitch = clamp(cam.gPitch + dy * 0.006, -1.53, 1.53);
@@ -1133,8 +1336,15 @@ canvas.addEventListener("pointermove", e => {
   needsRedraw = true;
 });
 function endDrag(e) {
+  if (dragging === "key") {
+    const was = moved >= 3;
+    dragging = null; sim.drag = null;
+    if (was) simChanged();           // the key moved: tell the engine
+    return;
+  }
   if (dragging && moved < 6 && performance.now() - downT < 500) {
-    if (measureMode) onMeasureClick(e.clientX, e.clientY);
+    if (sim.on && simClick(e.clientX, e.clientY)) { /* handled */ }
+    else if (measureMode) onMeasureClick(e.clientX, e.clientY);
     else if (labelMode) onLabelClick(e.clientX, e.clientY);
   }
   dragging = null;
@@ -1569,6 +1779,8 @@ function placeCamera(eye, target) {
 
 function enterViewfinder(msg) {
   msg = msg || {};
+  // A setup from the studio takes the viewfinder back from the simulation.
+  if (sim.camView) { sim.camView = false; simBarSync(); simRebuildDyn(); }
   const fz = floorInternal();
   if (msg.cam && msg.subj) {
     const eye = [msg.cam[0] - ORIGIN[0], msg.cam[1] - ORIGIN[1], msg.cam[2] - ORIGIN[2]];
@@ -1606,13 +1818,14 @@ function enterViewfinder(msg) {
 function exitViewfinder() {
   if (!vf.on) return;
   vf.on = false;
+  if (sim.camView) { sim.camView = false; simBarSync(); simRebuildDyn(); }
   FOV = DEFAULT_FOV;
   document.getElementById("legend").style.display = "";
   if (vf.hadPanel && !show.panel) { show.panel = true; syncToolbar(); }
   document.getElementById("btn-viewfinder").setAttribute("aria-pressed", "false");
   layoutLetterbox();
   rebuildFigures();
-  setReadout('<span class="hint">Drag to orbit · right-drag or shift-drag to pan · scroll to zoom · WASD/QE to fly</span>');
+  setReadout(sim.on ? SIM_HINT : '<span class="hint">Drag to orbit · right-drag or shift-drag to pan · scroll to zoom · WASD/QE to fly</span>');
   postVfState(true);
   needsRedraw = true;
 }
@@ -1676,6 +1889,1162 @@ function rebuildObjectLabels() {
   needsRedraw = true;
 }
 
+/* ------------------------------------------------------------------ *
+ * simulate: a camera move, edited in the room and solved on the server
+ *
+ * The timeline is the object the studio and the engine share -- absolute
+ * twin metres, keys with times -- and it is kept here exactly as it travels,
+ * converted to page coordinates only at the moment something is drawn or
+ * picked. The page edits keys and plays frames; it does no physics. Between
+ * round trips, and standalone with no parent at all, it interpolates
+ * linearly, which is honest about what it is: a preview of where the keys
+ * are, not of what the rig will do with them. The server's evaluation, when
+ * one arrives, replaces the preview frame for frame.
+ * ------------------------------------------------------------------ */
+
+const SIM_RIGS = ["tripod", "slider", "dolly", "jib", "handheld", "steadicam", "crane", "drone"];
+// The contract's sensor names onto the viewfinder's table; unknown → super35.
+const SIM_SENSOR_KEYS = {
+  ff: "fullframe", fullframe: "fullframe", s35: "super35", super35: "super35",
+  "super35-4perf": "super35-4perf", m43: "m43", phone: "phone-main", "phone-main": "phone-main",
+};
+const SIM_PALETTE = [[0.36, 0.76, 0.96], [0.94, 0.64, 0.25], [0.60, 0.82, 0.42], [0.86, 0.52, 0.76], [0.95, 0.86, 0.36], [0.55, 0.70, 0.98]];
+const SIM_RAIL_HALF = 0.31, SIM_SLEEPER_STEP = 0.5;
+const FLOOR_T = (P.structure && isFinite(P.structure.floor_z)) ? P.structure.floor_z : 0;
+const STANDALONE = window.parent === window;
+const SIM_HINT = '<span class="hint">K keys the view · click a diamond to select · drag it on the floor, shift-drag for height · space plays</span>';
+const DEFAULT_HINT = '<span class="hint">Drag to orbit · right-drag or shift-drag to pan · scroll to zoom · WASD/QE to fly</span>';
+
+const sim = {
+  on: false, tl: null, ev: null, frames: [], t: 0, fi: 0, playing: false, loop: true, camView: false,
+  sel: null, armed: null, parentFigures: false, drag: null, barDrag: null, editTimer: null,
+  lastTimePost: 0, adoptSolved: false, labels: [],
+};
+let simStatic = null, simDyn = null;
+const simFigs = [];
+const simBodyCache = {};
+if (gl) { simStatic = flatBatch(gl.LINES); simDyn = flatBatch(gl.LINES); }
+
+const $s = id => document.getElementById(id);
+function V(p) { return [p[0] - ORIGIN[0], p[1] - ORIGIN[1], (p.length > 2 ? p[2] : FLOOR_T) - ORIGIN[2]]; }
+function simSensorKey() {
+  const k = sim.tl ? SIM_SENSOR_KEYS[String(sim.tl.sensor || "").toLowerCase()] : null;
+  return SENSORS[k] ? k : "super35";
+}
+function simFps() { return Math.max(1, (sim.ev && +sim.ev.fps) || (sim.tl && +sim.tl.fps) || 24); }
+function simDur() { return Math.max(1 / simFps(), (sim.tl && +sim.tl.duration_s) || 0); }
+function simKeys() { return (sim.tl && sim.tl.camera && sim.tl.camera.keys) || []; }
+function simActors() { return (sim.tl && sim.tl.actors) || {}; }
+function simSnapT(t) { return clamp(Math.round(t * simFps()) / simFps(), 0, simDur()); }
+function simFrame() { return sim.frames.length ? sim.frames[sim.fi] : null; }
+function simRoomCentre() {
+  // twin coordinates: the footprint's centroid, else the geometry's centre
+  const fp = P.structure && P.structure.footprint;
+  let cx = CENTER[0], cy = CENTER[1];
+  if (fp && fp.length >= 3) {
+    cx = fp.reduce((a, p) => a + p[0], 0) / fp.length;
+    cy = fp.reduce((a, p) => a + p[1], 0) / fp.length;
+  }
+  return [cx + ORIGIN[0], cy + ORIGIN[1]];
+}
+function simBlankTimeline() {
+  return {
+    id: Math.random().toString(16).slice(2, 10), title: "Untitled move", fps: 24, duration_s: 8.0,
+    sensor: "ff", aperture_f: 2.8, rig: { kind: "tripod", params: {} },
+    camera: { interp: "catmull", keys: [] }, actors: {}, pieces: [], notes: [],
+  };
+}
+// Sort every key list by time and keep the selection on its key object, so an
+// index is only ever computed at the moment the parent is told.
+function simNormalise() {
+  if (!sim.tl) return;
+  if (!sim.tl.camera) sim.tl.camera = { interp: "catmull", keys: [] };
+  if (!Array.isArray(sim.tl.camera.keys)) sim.tl.camera.keys = [];
+  if (!sim.tl.rig) sim.tl.rig = { kind: "tripod", params: {} };
+  if (!sim.tl.rig.params) sim.tl.rig.params = {};
+  if (!sim.tl.actors || typeof sim.tl.actors !== "object") sim.tl.actors = {};
+  sim.tl.camera.keys.sort((a, b) => a.t - b.t);
+  for (const name in sim.tl.actors) {
+    const a = sim.tl.actors[name];
+    if (!Array.isArray(a.keys)) a.keys = [];
+    a.keys.sort((x, y) => x.t - y.t);
+  }
+  if (sim.sel && !sim.tl.camera.keys.includes(sim.sel)) sim.sel = null;
+}
+
+/* --- local interpolation: linear, the preview between round trips ------ */
+
+function lerp(a, b, u) { return a + (b - a) * u; }
+function lerp3(a, b, u) { return [lerp(a[0], b[0], u), lerp(a[1], b[1], u), lerp(a[2], b[2], u)]; }
+function lerpDeg(a, b, u) { return a + (((b - a + 540) % 360) - 180) * u; }
+function bracket(keys, t) {
+  if (!keys.length) return null;
+  if (t <= keys[0].t) return [keys[0], keys[0], 0];
+  for (let i = 0; i + 1 < keys.length; i++) {
+    const a = keys[i], b = keys[i + 1];
+    if (t <= b.t) { const span = b.t - a.t; return [a, b, span > 1e-9 ? (t - a.t) / span : 1]; }
+  }
+  const l = keys[keys.length - 1];
+  return [l, l, 0];
+}
+function simActorAt(name, t) {
+  const a = simActors()[name];
+  if (!a || !a.keys || !a.keys.length) return null;
+  const [k0, k1, u] = bracket(a.keys, t);
+  return [lerp(k0.pos[0], k1.pos[0], u), lerp(k0.pos[1], k1.pos[1], u), lerpDeg(+k0.facing_deg || 0, +k1.facing_deg || 0, u)];
+}
+function simAimOf(key, t) {
+  if (key.look_at) {
+    const a = simActors()[key.look_at], p = simActorAt(key.look_at, t);
+    if (p) return [p[0], p[1], FLOOR_T + EYELINE * ((a && +a.height_m) || SUBJECT_H)];
+  }
+  if (key.aim) return key.aim.slice();
+  const c = simRoomCentre();
+  return [c[0], c[1], FLOOR_T + 1.2];
+}
+function simCamAt(t) {
+  const br = bracket(simKeys(), t);
+  if (!br) return null;
+  const [a, b, u] = br;
+  return {
+    cam: lerp3(a.pos, b.pos, u), aim: lerp3(simAimOf(a, t), simAimOf(b, t), u),
+    focal_mm: lerp(+a.focal_mm || 35, +b.focal_mm || 35, u), roll_deg: lerp(+a.roll_deg || 0, +b.roll_deg || 0, u),
+  };
+}
+function simLocalFrames() {
+  const out = [];
+  if (!simKeys().length) return out;
+  const fps = simFps(), dur = simDur(), n = Math.round(dur * fps) + 1;
+  let prev = null;
+  for (let i = 0; i < n; i++) {
+    const t = Math.min(i / fps, dur);
+    const c = simCamAt(t);
+    const actors = {};
+    for (const name in simActors()) { const p = simActorAt(name, t); if (p) actors[name] = p; }
+    const d = sub3(c.aim, c.cam), dist = len3(d);
+    const fr = {
+      t, cam: c.cam, aim: c.aim, focal_mm: c.focal_mm, roll_deg: c.roll_deg,
+      pan_deg: Math.atan2(d[1], d[0]) * 180 / Math.PI,
+      tilt_deg: Math.asin(clamp(d[2] / Math.max(dist, 1e-9), -1, 1)) * 180 / Math.PI,
+      speed_mps: prev ? len3(sub3(c.cam, prev.cam)) * fps : 0,
+      actors, shot_size: null, distance_m: dist, dof: null, problems: [],
+    };
+    out.push(fr);
+    prev = fr;
+  }
+  return out;
+}
+
+/* --- talking to the studio --------------------------------------------- */
+
+function simPost(msg) { if (STANDALONE) return; try { window.parent.postMessage(msg, "*"); } catch (_) {} }
+function simPostTime(force) {
+  const now = performance.now();
+  if (!force && now - sim.lastTimePost < 100) return;
+  sim.lastTimePost = now;
+  simPost({ type: "locaish:sim-time", t: sim.t, playing: sim.playing });
+}
+function simPostEditNow() {
+  clearTimeout(sim.editTimer); sim.editTimer = null;
+  if (sim.tl) simPost({ type: "locaish:sim-edit", timeline: sim.tl });
+}
+function simScheduleEdit() { clearTimeout(sim.editTimer); sim.editTimer = setTimeout(simPostEditNow, 250); }
+// After any edit the evaluation is stale -- the keys it was solved from have
+// moved -- so the local preview takes over until the studio answers.
+function simChanged() { sim.ev = null; simRefresh(); simScheduleEdit(); }
+function simLoad(timeline, evaluation) {
+  const ev = evaluation && typeof evaluation === "object" ? evaluation : null;
+  const solved = ev && ev.timeline && typeof ev.timeline === "object" ? ev.timeline : null;
+  const incoming = timeline && typeof timeline === "object" ? timeline : null;
+  // "Snap to rig" asked for the solved keys to become the edited keys.
+  sim.tl = (sim.adoptSolved && solved) || incoming || solved || sim.tl || simBlankTimeline();
+  sim.adoptSolved = false;
+  sim.ev = ev;
+  sim.sel = null;
+  if (!sim.on) setSimMode(true, true);
+  simRefresh();
+}
+
+/* --- state ---------------------------------------------------------------- */
+
+function simRefresh() {
+  if (!sim.tl) sim.frames = [];
+  else {
+    simNormalise();
+    sim.frames = (sim.ev && Array.isArray(sim.ev.frames) && sim.ev.frames.length) ? sim.ev.frames : simLocalFrames();
+  }
+  simRebuildStatic();
+  simRebuildLabels();
+  simSetTime(sim.t, { silent: true, force: true });
+  simPanelFill();
+  simPanelLists();
+  simFillKeyFields();
+  simBarLayout();
+  simBarSync();
+}
+function simSetTime(t, o) {
+  o = o || {};
+  sim.t = clamp(+t || 0, 0, simDur());
+  const n = sim.frames.length;
+  const fi = n ? clamp(Math.round(sim.t * simFps()), 0, n - 1) : 0;
+  const changed = fi !== sim.fi || o.force;
+  sim.fi = fi;
+  if (changed) { simApplyFrame(); simRebuildDyn(); simRebuildCapsules(); simBarReadout(); }
+  simBarDraw();
+  if (!o.silent) simPostTime(o.forcePost);
+  needsRedraw = true;
+}
+function simPlay(on, t) {
+  if (t !== undefined && t !== null && isFinite(+t)) simSetTime(+t, { silent: true });
+  sim.playing = !!on && sim.frames.length > 1;
+  if (sim.playing && sim.t >= simDur() - 1e-9) simSetTime(0, { silent: true });
+  simBarSync();
+  simPostTime(true);
+  needsRedraw = true;
+}
+function simAdvance(dt) {
+  let t = sim.t + dt;
+  const dur = simDur();
+  if (t > dur) {
+    if (sim.loop) t = t % dur;
+    else { t = dur; sim.playing = false; simBarSync(); }
+  }
+  simSetTime(t, { forcePost: !sim.playing });
+}
+function simStepFrame(n) { sim.playing = false; simBarSync(); simSetTime(simSnapT(sim.t + n / simFps()), { forcePost: true }); }
+function simSelect(key) {
+  if (key === sim.sel) return;
+  sim.sel = key;
+  simRebuildStatic();
+  simPanelLists();
+  simFillKeyFields();
+  simBarLayout();
+  simPost({ type: "locaish:sim-select", key_index: key ? simKeys().indexOf(key) : null });
+  needsRedraw = true;
+}
+function simSelIndex() { return sim.sel ? simKeys().indexOf(sim.sel) : -1; }
+
+function setSimMode(on, quiet) {
+  on = !!on;
+  if (on === sim.on) return;
+  sim.on = on;
+  document.body.classList.toggle("sim", on);
+  $s("btn-sim").setAttribute("aria-pressed", String(on));
+  if (on) {
+    if (measureMode) setMeasureMode(false);
+    if (labelMode) setLabelMode(false);
+    if (!sim.tl) sim.tl = simBlankTimeline();
+    simRefresh();
+    simLayout();
+    setReadout(SIM_HINT);
+  } else {
+    sim.playing = false;
+    simArm(null);
+    if (sim.camView) simSetCamView(false);
+    setReadout(DEFAULT_HINT);
+  }
+  syncToolbar();
+  syncLabels();
+  if (!quiet) simPost({ type: "locaish:sim-mode", on });
+  needsRedraw = true;
+}
+
+// Camera view: play through the viewfinder. The viewfinder machinery is
+// reused as is -- letterbox, lens FOV -- but entered lightly, because the pose
+// is re-placed every frame and `enterViewfinder` does work meant for once.
+function simSetCamView(on) {
+  on = !!on;
+  if (on === sim.camView) return;
+  sim.camView = on;
+  if (on) {
+    if (!vf.on) {
+      vf.hadPanel = show.panel;
+      if (show.panel) { show.panel = false; syncToolbar(); }
+      $s("legend").style.display = "none";
+    }
+    vf.on = true;
+    vf.subj = null; vf.marks = [];
+    vf.sensor = simSensorKey();
+    vf.label = (sim.tl && sim.tl.title) || "";
+    $s("btn-viewfinder").setAttribute("aria-pressed", "true");
+    layoutLetterbox();
+    rebuildFigures();
+    simSetTime(sim.t, { silent: true, force: true });
+  } else if (vf.on) {
+    exitViewfinder();            // puts the panel, legend and FOV back
+  }
+  simBarSync();
+  needsRedraw = true;
+}
+function simApplyFrame() {
+  const fr = simFrame();
+  if (!fr || !sim.camView || !vf.on) return;
+  placeCamera(V(fr.cam), V(fr.aim));
+  // a tenth of a millimetre: the letterbox tag quotes this number
+  const f = Math.max(1, Math.round((+fr.focal_mm || 35) * 10) / 10);
+  if (Math.abs(f - vf.focal) > 1e-6) { vf.focal = f; layoutLetterbox(); }
+  const eyeH = fr.cam[2] - FLOOR_T;
+  setReadout(
+    '<div class="big">' + Math.round(f) + " mm</div>" +
+    "<div>" + (vf.label ? vf.label + " · " : "") + vfSensor().name + " · " + fmt(fr.distance_m, 2) + " m to aim · h " + fmt(eyeH, 2) + " m</div>" +
+    '<div class="hint">C back to the orbit view · space plays</div>'
+  );
+}
+
+/* --- editing -------------------------------------------------------------- */
+
+function simArm(what) {
+  sim.armed = what;
+  canvas.classList.toggle("measuring", !!what);
+  $s("sp-keyclick").setAttribute("aria-pressed", String(!!(what && what.kind === "key")));
+  $s("sp-pivot").setAttribute("aria-pressed", String(!!(what && what.kind === "jib")));
+  if (!what) { if (sim.on) setReadout(SIM_HINT); return; }
+  if (what.kind === "key") setReadout('<span class="hint">click the floor where the camera should stand · esc cancels</span>');
+  else if (what.kind === "jib") setReadout('<span class="hint">click where the jib’s pivot stands · esc cancels</span>');
+  else if (what.kind === "actor") setReadout('<span class="hint">click where ' + what.name + " stands at " + fmt(sim.t, 2) + " s · esc cancels</span>");
+}
+function simKeyNear(t) { return simKeys().find(k => Math.abs(k.t - t) < 0.5 / simFps()) || null; }
+function simNewKey(t, pos, from) {
+  const k = {
+    t, pos, aim: from && from.aim ? from.aim.slice() : null, look_at: (from && from.look_at) || null,
+    focal_mm: from ? (+from.focal_mm || 35) : 35, roll_deg: 0, ease: "inout",
+  };
+  if (!k.aim && !k.look_at) k.aim = simAimOf({}, t);
+  return k;
+}
+// A key from where the orbit camera stands and what it looks at; the lens is
+// the viewfinder's when it is up, else the selected key's, else 35.
+function simKeyView() {
+  if (!sim.tl) return;
+  const eye = twinCoord(camEye()), tgt = twinCoord(cam.gTarget);
+  const focal = vf.on ? vf.focal : (sim.sel ? (+sim.sel.focal_mm || 35) : 35);
+  const t = simSnapT(sim.t);
+  let k = simKeyNear(t);
+  if (!k) { k = simNewKey(t, eye, sim.sel); k.aim = tgt; k.look_at = null; k.focal_mm = focal; simKeys().push(k); }
+  else { k.pos = eye; if (!k.look_at) k.aim = tgt; k.focal_mm = focal; }
+  simSelect(k);
+  simChanged();
+}
+function simKeyOnClick(hitView) {
+  const tp = twinCoord(hitView), t = simSnapT(sim.t);
+  const h = +$s("sp-keyh").value;
+  const pos = [tp[0], tp[1], FLOOR_T + (isFinite(h) ? h : 1.5)];
+  const keys = simKeys();
+  let k = simKeyNear(t);
+  if (!k) {
+    const prev = keys.filter(x => x.t <= t + 1e-9).pop() || keys[0] || null;
+    k = simNewKey(t, pos, prev);
+    keys.push(k);
+  } else k.pos = pos;
+  simSelect(k);
+  simChanged();
+}
+function simDeleteKey() {
+  const keys = simKeys(), i = simSelIndex();
+  if (i < 0) return;
+  keys.splice(i, 1);
+  sim.sel = null;
+  simPost({ type: "locaish:sim-select", key_index: null });
+  simChanged();
+}
+function simNudge(dx, dy, dz) {
+  const k = sim.sel;
+  if (!k) return;
+  k.pos = [k.pos[0] + dx, k.pos[1] + dy, Math.max(FLOOR_T, k.pos[2] + dz)];
+  simChanged();
+}
+// Arrow keys nudge in the screen's directions snapped to the twin's axes, so a
+// nudge is always a clean 5 cm along x or y and the readout stays legible.
+function simAxisSnap(v) {
+  return Math.abs(v[0]) >= Math.abs(v[1]) ? [Math.sign(v[0]) || 1, 0] : [0, Math.sign(v[1]) || 1];
+}
+function simNudgeScreen(key, big) {
+  const step = big ? 0.25 : 0.05;
+  const { fwd, right } = camBasis();
+  const r = simAxisSnap(right), f = simAxisSnap(fwd);
+  if (key === "arrowleft") simNudge(-r[0] * step, -r[1] * step, 0);
+  else if (key === "arrowright") simNudge(r[0] * step, r[1] * step, 0);
+  else if (key === "arrowup") simNudge(f[0] * step, f[1] * step, 0);
+  else if (key === "arrowdown") simNudge(-f[0] * step, -f[1] * step, 0);
+}
+function simSetRigKind(kind) {
+  if (!sim.tl || !SIM_RIGS.includes(kind)) return;
+  const old = sim.tl.rig && sim.tl.rig.params || {};
+  const defaults = {
+    dolly: { track: null, rail_height_m: 0.0, gear_key: "doorway-dolly" },
+    jib: { pivot: null, base_height_m: 1.2, arm_m: 3.0 },
+    handheld: { shake: 0.5 },
+  }[kind] || {};
+  const params = {};
+  for (const k in defaults) params[k] = (k in old) ? old[k] : defaults[k];
+  sim.tl.rig = { kind, params };
+  simChanged();
+}
+function simTrackFromKeys() {
+  const keys = simKeys();
+  if (!sim.tl || sim.tl.rig.kind !== "dolly" || keys.length < 2) return;
+  const track = [];
+  for (const k of keys) {
+    const p = [k.pos[0], k.pos[1]];
+    const l = track[track.length - 1];
+    if (!l || Math.hypot(l[0] - p[0], l[1] - p[1]) > 1e-3) track.push(p);
+  }
+  sim.tl.rig.params.track = track.length >= 2 ? track : null;
+  simChanged();
+}
+function simAddActor() {
+  if (!sim.tl) return;
+  const name = $s("sp-aname").value.trim(), h = +$s("sp-aheight").value;
+  if (!name || !isFinite(h) || h <= 0) return;
+  const c = simRoomCentre();
+  const facing = 0;
+  sim.tl.actors[name] = sim.tl.actors[name] || { height_m: h, keys: [] };
+  sim.tl.actors[name].height_m = h;
+  if (!sim.tl.actors[name].keys.length) sim.tl.actors[name].keys.push({ t: simSnapT(sim.t), pos: c, facing_deg: facing });
+  $s("sp-aname").value = ""; $s("sp-aheight").value = "";
+  simChanged();
+}
+function simActorKeyOnClick(name, hitView) {
+  const a = simActors()[name];
+  if (!a) return;
+  const tp = twinCoord(hitView), t = simSnapT(sim.t);
+  // face the camera of the moment: a mark is usually hit looking at the lens
+  const fr = simFrame();
+  const facing = fr ? Math.atan2(fr.cam[1] - tp[1], fr.cam[0] - tp[0]) * 180 / Math.PI : 0;
+  let k = a.keys.find(x => Math.abs(x.t - t) < 0.5 / simFps());
+  if (!k) { k = { t, pos: [tp[0], tp[1]], facing_deg: facing }; a.keys.push(k); }
+  else { k.pos = [tp[0], tp[1]]; k.facing_deg = facing; }
+  simChanged();
+}
+
+// A click in simulate mode: an armed pick, a key diamond, or nothing (then the
+// measure and label tools get their turn).
+function simClick(cx, cy) {
+  if (!sim.on) return false;
+  const rect = canvas.getBoundingClientRect();
+  if (sim.armed) {
+    const hit = pick(cx - rect.left, cy - rect.top);
+    const what = sim.armed;
+    if (!hit) { setReadout('<span class="hint">no surface under the cursor — aim at the floor</span>'); return true; }
+    simArm(null);
+    if (what.kind === "key") simKeyOnClick(hit.p);
+    else if (what.kind === "jib") { const tp = twinCoord(hit.p); sim.tl.rig.params.pivot = [tp[0], tp[1]]; simChanged(); }
+    else if (what.kind === "actor") simActorKeyOnClick(what.name, hit.p);
+    return true;
+  }
+  const i = simKeyAt(cx - rect.left, cy - rect.top);
+  if (i >= 0) { simSelect(simKeys()[i]); return true; }
+  if (sim.sel) { simSelect(null); return true; }
+  return false;
+}
+// Screen-space nearest key diamond within a finger's slop.
+function simKeyAt(px, py) {
+  const keys = simKeys();
+  if (!keys.length) return -1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  let best = -1, bestD = 14;
+  for (let i = 0; i < keys.length; i++) {
+    const p = V(keys[i].pos);
+    const cw = viewProj[3] * p[0] + viewProj[7] * p[1] + viewProj[11] * p[2] + viewProj[15];
+    if (cw <= 1e-4) continue;
+    const sx = ((viewProj[0] * p[0] + viewProj[4] * p[1] + viewProj[8] * p[2] + viewProj[12]) / cw * 0.5 + 0.5) * w;
+    const sy = (0.5 - (viewProj[1] * p[0] + viewProj[5] * p[1] + viewProj[9] * p[2] + viewProj[13]) / cw * 0.5) * h;
+    const d = Math.hypot(sx - px, sy - py);
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  return best;
+}
+// Drag a key: pointer ray against the floor-parallel plane through the key
+// (shift: against the vertical plane facing the camera, moving only z).
+function simDragMove(e) {
+  const k = sim.drag && sim.drag.key;
+  if (!k) return;
+  const invVP = mat4Invert(mat4(), viewProj);
+  if (!invVP) return;
+  const rect = canvas.getBoundingClientRect();
+  const ray = rayFromPixel(e.clientX - rect.left, e.clientY - rect.top, invVP, cam.eye);
+  const p = V(k.pos);
+  if (e.shiftKey) {
+    const { fwd } = camBasis();
+    const n = norm3([fwd[0], fwd[1], 0]);
+    const den = ray.d[0] * n[0] + ray.d[1] * n[1];
+    if (Math.abs(den) < 1e-6) return;
+    const t = ((p[0] - ray.o[0]) * n[0] + (p[1] - ray.o[1]) * n[1]) / den;
+    if (t <= 0) return;
+    k.pos = [k.pos[0], k.pos[1], Math.max(FLOOR_T, ray.o[2] + ray.d[2] * t + ORIGIN[2])];
+  } else {
+    if (Math.abs(ray.d[2]) < 1e-6) return;
+    const t = (p[2] - ray.o[2]) / ray.d[2];
+    if (t <= 0) return;
+    k.pos = [ray.o[0] + ray.d[0] * t + ORIGIN[0], ray.o[1] + ray.d[1] * t + ORIGIN[1], k.pos[2]];
+  }
+  sim.ev = null;
+  sim.frames = simLocalFrames();
+  simRebuildStatic();
+  simRebuildLabels();
+  simSetTime(sim.t, { silent: true, force: true });
+  simFillKeyFields();
+}
+
+/* --- 3D drawing ------------------------------------------------------------ */
+
+function diamond(b, p, s, col) {
+  const ring = [[p[0] + s, p[1], p[2]], [p[0], p[1] + s, p[2]], [p[0] - s, p[1], p[2]], [p[0], p[1] - s, p[2]]];
+  const top = [p[0], p[1], p[2] + s], bot = [p[0], p[1], p[2] - s];
+  for (let i = 0; i < 4; i++) { seg(b, ring[i], ring[(i + 1) % 4], col); seg(b, ring[i], top, col); seg(b, ring[i], bot, col); }
+}
+function dotted(b, a, z, col, dash) {
+  const d = sub3(z, a), L = len3(d);
+  if (L < 1e-6) return;
+  const n = Math.max(1, Math.floor(L / (dash * 2)));
+  for (let i = 0; i < n; i++) {
+    const u0 = (i * 2 * dash) / L, u1 = Math.min(((i * 2 + 1) * dash) / L, 1);
+    seg(b, [a[0] + d[0] * u0, a[1] + d[1] * u0, a[2] + d[2] * u0], [a[0] + d[0] * u1, a[1] + d[1] * u1, a[2] + d[2] * u1], col);
+  }
+}
+// Two rails ±0.31 m off the track's centreline, mitred at the bends, with a
+// sleeper every half metre: the thing a grip would lay.
+function simRails(b, track, z, col, dim) {
+  const n = track.length;
+  const segN = [];
+  for (let i = 0; i + 1 < n; i++) {
+    const dx = track[i + 1][0] - track[i][0], dy = track[i + 1][1] - track[i][1];
+    const l = Math.hypot(dx, dy) || 1;
+    segN.push([-dy / l, dx / l]);
+  }
+  const vn = [];
+  for (let i = 0; i < n; i++) {
+    const a = segN[Math.max(0, i - 1)], c = segN[Math.min(segN.length - 1, i)];
+    const m = [a[0] + c[0], a[1] + c[1]], l = Math.hypot(m[0], m[1]) || 1;
+    vn.push([m[0] / l, m[1] / l]);
+  }
+  for (const side of [-1, 1]) {
+    for (let i = 0; i + 1 < n; i++) {
+      const p = V([track[i][0] + vn[i][0] * SIM_RAIL_HALF * side, track[i][1] + vn[i][1] * SIM_RAIL_HALF * side, z]);
+      const q = V([track[i + 1][0] + vn[i + 1][0] * SIM_RAIL_HALF * side, track[i + 1][1] + vn[i + 1][1] * SIM_RAIL_HALF * side, z]);
+      seg(b, p, q, col);
+    }
+  }
+  let carry = 0;
+  for (let i = 0; i + 1 < n; i++) {
+    const dx = track[i + 1][0] - track[i][0], dy = track[i + 1][1] - track[i][1];
+    const L = Math.hypot(dx, dy);
+    if (L < 1e-9) continue;
+    const nx = -dy / L, ny = dx / L;
+    for (let s = carry; s <= L; s += SIM_SLEEPER_STEP) {
+      const x = track[i][0] + dx * s / L, y = track[i][1] + dy * s / L;
+      seg(b, V([x - nx * 0.38, y - ny * 0.38, z]), V([x + nx * 0.38, y + ny * 0.38, z]), dim);
+      carry = s + SIM_SLEEPER_STEP - L;
+    }
+  }
+}
+function simFrustum(b, camV, aimV, focal, rollDeg, col) {
+  const s = SENSORS[simSensorKey()];
+  const fwd = norm3(sub3(aimV, camV));
+  let right = cross3(fwd, [0, 0, 1]);
+  if (len3(right) < 1e-6) right = [1, 0, 0];
+  right = norm3(right);
+  let up = cross3(right, fwd);
+  if (rollDeg) {
+    const c = Math.cos(rollDeg * Math.PI / 180), sn = Math.sin(rollDeg * Math.PI / 180);
+    const r2 = [right[0] * c + up[0] * sn, right[1] * c + up[1] * sn, right[2] * c + up[2] * sn];
+    up = [up[0] * c - right[0] * sn, up[1] * c - right[1] * sn, up[2] * c - right[2] * sn];
+    right = r2;
+  }
+  const hw = s.w / 2 / Math.max(focal, 1), hh = s.h / 2 / Math.max(focal, 1);     // at 1 m
+  const at = (x, y) => [camV[0] + fwd[0] + right[0] * x + up[0] * y, camV[1] + fwd[1] + right[1] * x + up[1] * y, camV[2] + fwd[2] + right[2] * x + up[2] * y];
+  const c = [at(-hw, -hh), at(hw, -hh), at(hw, hh), at(-hw, hh)];
+  for (let i = 0; i < 4; i++) { seg(b, c[i], c[(i + 1) % 4], col); seg(b, camV, c[i], [col[0], col[1], col[2], col[3] * 0.6]); }
+  const tm = at(0, hh), tk = at(0, hh + 0.35 * hh);
+  seg(b, tm, tk, col);
+  // a small body behind the lens so the camera has a place, not just a cone
+  const bk = [camV[0] - fwd[0] * 0.12, camV[1] - fwd[1] * 0.12, camV[2] - fwd[2] * 0.12];
+  diamond(b, bk, 0.05, col);
+}
+function simRebuildStatic() {
+  if (!simStatic) return;
+  const b = Builder();
+  if (sim.tl) {
+    const keys = simKeys();
+    const path = [ACCENT[0], ACCENT[1], ACCENT[2], 0.9];
+    const pts = sim.frames.length ? sim.frames.map(f => V(f.cam)) : keys.map(k => V(k.pos));
+    for (let i = 0; i + 1 < pts.length; i++) seg(b, pts[i], pts[i + 1], path);
+    const keyCol = [0.85, 0.87, 0.90, 0.95], selCol = [1.0, 0.81, 0.35, 1.0];
+    for (const k of keys) diamond(b, V(k.pos), k === sim.sel ? 0.13 : 0.085, k === sim.sel ? selCol : keyCol);
+    let ai = 0;
+    for (const name in simActors()) {
+      const c = SIM_PALETTE[ai++ % SIM_PALETTE.length];
+      const col = [c[0], c[1], c[2], 0.9];
+      for (const k of (simActors()[name].keys || [])) diamond(b, V([k.pos[0], k.pos[1], FLOOR_T + 0.04]), 0.05, col);
+    }
+    const rig = sim.tl.rig || {}, pr = rig.params || {};
+    if (rig.kind === "dolly" && Array.isArray(pr.track) && pr.track.length >= 2) {
+      simRails(b, pr.track, FLOOR_T + (+pr.rail_height_m || 0), [0.72, 0.75, 0.78, 0.9], [0.72, 0.75, 0.78, 0.45]);
+    }
+    if (rig.kind === "jib" && Array.isArray(pr.pivot) && pr.pivot.length >= 2) {
+      const col = [0.94, 0.64, 0.25, 0.9];
+      const base = FLOOR_T + (+pr.base_height_m || 0);
+      seg(b, V([pr.pivot[0], pr.pivot[1], FLOOR_T]), V([pr.pivot[0], pr.pivot[1], base]), col);
+      diamond(b, V([pr.pivot[0], pr.pivot[1], base]), 0.07, col);
+      const s = 0.3;
+      seg(b, V([pr.pivot[0] - s, pr.pivot[1], FLOOR_T + 0.01]), V([pr.pivot[0] + s, pr.pivot[1], FLOOR_T + 0.01]), [col[0], col[1], col[2], 0.5]);
+      seg(b, V([pr.pivot[0], pr.pivot[1] - s, FLOOR_T + 0.01]), V([pr.pivot[0], pr.pivot[1] + s, FLOOR_T + 0.01]), [col[0], col[1], col[2], 0.5]);
+    }
+  }
+  commit(simStatic, b);
+  needsRedraw = true;
+}
+function simRebuildDyn() {
+  if (!simDyn) return;
+  const b = Builder();
+  const fr = simFrame();
+  if (fr && sim.tl) {
+    const camV = V(fr.cam), aimV = V(fr.aim);
+    const bad = (fr.problems || []).length > 0;
+    const col = bad ? [0.84, 0.37, 0.0, 1.0] : [ACCENT[0], ACCENT[1], ACCENT[2], 1.0];
+    if (!sim.camView) simFrustum(b, camV, aimV, +fr.focal_mm || 35, +fr.roll_deg || 0, col);
+    dotted(b, camV, aimV, [col[0], col[1], col[2], 0.55], 0.08);
+    const s = 0.07;
+    seg(b, [aimV[0] - s, aimV[1], aimV[2]], [aimV[0] + s, aimV[1], aimV[2]], col);
+    seg(b, [aimV[0], aimV[1] - s, aimV[2]], [aimV[0], aimV[1] + s, aimV[2]], col);
+    seg(b, [aimV[0], aimV[1], aimV[2] - s], [aimV[0], aimV[1], aimV[2] + s], col);
+    const rig = sim.tl.rig || {}, pr = rig.params || {};
+    if (rig.kind === "jib" && Array.isArray(pr.pivot) && pr.pivot.length >= 2) {
+      seg(b, V([pr.pivot[0], pr.pivot[1], FLOOR_T + (+pr.base_height_m || 0)]), camV, [0.94, 0.64, 0.25, 0.9]);
+    }
+  }
+  commit(simDyn, b);
+  needsRedraw = true;
+}
+
+/* --- the cast: figures from the studio, or capsules sampled here ---------- */
+
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+// A body in its own frame (u lateral, v forward, z up) scaled to a stature:
+// a head sphere, a tapering torso, two arms and two legs, ~2700 surface
+// samples. Seeded, so the figure does not shimmer frame to frame.
+function simBodyTemplate(h) {
+  const key = h.toFixed(3);
+  if (simBodyCache[key]) return simBodyCache[key];
+  const k = h / 1.75, rnd = mulberry32(7), pts = [];
+  const put = (u, v, z) => pts.push(u, v, z);
+  const r = 0.11 * k, hz = h - r;
+  const nHead = 420;
+  for (let i = 0; i < nHead; i++) {
+    const y = 1 - 2 * (i + 0.5) / nHead, rr = Math.sqrt(Math.max(0, 1 - y * y)), a = i * 2.39996323;
+    put(r * rr * Math.cos(a), r * rr * Math.sin(a), hz + r * y);
+  }
+  for (let i = 0; i < 1000; i++) {
+    const s = rnd(), a = rnd() * Math.PI * 2;
+    const aw = (0.155 + 0.055 * s) * k, bd = 0.10 * k;
+    put(aw * Math.cos(a), bd * Math.sin(a), 0.50 * h + s * 0.34 * h);
+  }
+  for (const side of [-1, 1]) {
+    for (let i = 0; i < 220; i++) {
+      const s = rnd(), a = rnd() * Math.PI * 2, ra = 0.045 * k;
+      put(side * 0.25 * k + ra * Math.cos(a), ra * Math.sin(a), 0.82 * h - s * 0.36 * h);
+    }
+    for (let i = 0; i < 320; i++) {
+      const s = rnd(), a = rnd() * Math.PI * 2, rl = 0.075 * k;
+      put(side * 0.09 * k + rl * Math.cos(a), rl * Math.sin(a), s * 0.50 * h);
+    }
+  }
+  const tpl = { xyz: new Float32Array(pts), head: nHead };
+  simBodyCache[key] = tpl;
+  return tpl;
+}
+function simFig(i) {
+  while (simFigs.length <= i) {
+    const vao = gl.createVertexArray(), pb = gl.createBuffer(), cb = gl.createBuffer();
+    gl.bindVertexArray(vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, pb);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, cb);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 3, gl.UNSIGNED_BYTE, true, 0, 0);
+    gl.bindVertexArray(null);
+    simFigs.push({ vao, pb, cb, count: 0, radius: 0.02 });
+  }
+  return simFigs[i];
+}
+function simUploadFig(i, xyz, rgb, radius) {
+  const f = simFig(i);
+  gl.bindBuffer(gl.ARRAY_BUFFER, f.pb);
+  gl.bufferData(gl.ARRAY_BUFFER, xyz, gl.DYNAMIC_DRAW);
+  gl.bindBuffer(gl.ARRAY_BUFFER, f.cb);
+  gl.bufferData(gl.ARRAY_BUFFER, rgb, gl.DYNAMIC_DRAW);
+  f.count = xyz.length / 3;
+  f.radius = radius;
+}
+function simClearFigsFrom(i) { for (; i < simFigs.length; i++) simFigs[i].count = 0; }
+function simRebuildCapsules() {
+  if (!gl || sim.parentFigures) return;
+  const fr = simFrame();
+  let i = 0, ai = 0;
+  if (fr) {
+    for (const name in simActors()) {
+      const a = simActors()[name];
+      const c = SIM_PALETTE[ai++ % SIM_PALETTE.length];
+      const at = (fr.actors && fr.actors[name]) || simActorAt(name, sim.t);
+      if (!at) continue;
+      const h = +a.height_m || SUBJECT_H;
+      const tpl = simBodyTemplate(h);
+      const n = tpl.xyz.length / 3;
+      const xyz = new Float32Array(n * 3), rgb = new Uint8Array(n * 3);
+      const ang = (+at[2] || 0) * Math.PI / 180;
+      const fx = Math.cos(ang), fy = Math.sin(ang), lx = -fy, ly = fx;
+      const ox = at[0] - ORIGIN[0], oy = at[1] - ORIGIN[1], oz = FLOOR_T - ORIGIN[2];
+      for (let j = 0; j < n; j++) {
+        const u = tpl.xyz[j * 3], v = tpl.xyz[j * 3 + 1], z = tpl.xyz[j * 3 + 2];
+        xyz[j * 3] = ox + u * lx + v * fx;
+        xyz[j * 3 + 1] = oy + u * ly + v * fy;
+        xyz[j * 3 + 2] = oz + z;
+        const light = j < tpl.head ? 1.12 : 0.92;
+        rgb[j * 3] = clamp(c[0] * light * 255, 0, 255);
+        rgb[j * 3 + 1] = clamp(c[1] * light * 255, 0, 255);
+        rgb[j * 3 + 2] = clamp(c[2] * light * 255, 0, 255);
+      }
+      simUploadFig(i++, xyz, rgb, 0.013 * h / 1.75);
+      const lbl = sim.labels.find(l => l.actor === name);
+      if (lbl) { lbl.p[0] = ox; lbl.p[1] = oy; lbl.p[2] = oz + h + 0.12; }
+    }
+  }
+  simClearFigsFrom(i);
+}
+// `locaish:figures`: point sets the studio sampled for this moment (SAM 3D
+// bodies, lifted set pieces). They replace the capsules until an empty list
+// hands the cast back to the page.
+function simSetFigures(list) {
+  if (!gl) return;
+  list = Array.isArray(list) ? list : [];
+  sim.parentFigures = list.length > 0;
+  let i = 0;
+  for (const f of list) {
+    const src = f && f.xyz;
+    if (!src || !src.length) continue;
+    const n = Math.floor(src.length / 3);
+    const xyz = new Float32Array(n * 3), rgb = new Uint8Array(n * 3);
+    let col = Array.isArray(f.colour) && f.colour.length >= 3 ? f.colour.slice(0, 3) : [180, 180, 180];
+    if (Math.max(col[0], col[1], col[2]) <= 1.0) col = col.map(v => v * 255);
+    let top = -Infinity, sx = 0, sy = 0;
+    for (let j = 0; j < n; j++) {
+      const x = src[j * 3] - ORIGIN[0], y = src[j * 3 + 1] - ORIGIN[1], z = src[j * 3 + 2] - ORIGIN[2];
+      xyz[j * 3] = x; xyz[j * 3 + 1] = y; xyz[j * 3 + 2] = z;
+      rgb[j * 3] = clamp(col[0], 0, 255); rgb[j * 3 + 1] = clamp(col[1], 0, 255); rgb[j * 3 + 2] = clamp(col[2], 0, 255);
+      if (z > top) top = z;
+      sx += x; sy += y;
+    }
+    simUploadFig(i++, xyz, rgb, Math.max(+f.radius_m || 0.015, 0.003));
+    const lbl = f.name && sim.labels.find(l => l.actor === f.name);
+    if (lbl && n) { lbl.p[0] = sx / n; lbl.p[1] = sy / n; lbl.p[2] = top + 0.12; }
+  }
+  simClearFigsFrom(i);
+  if (!sim.parentFigures) simRebuildCapsules();
+  needsRedraw = true;
+}
+function drawSimFigures() {
+  if (!sim.on || !simFigs.length) return;
+  gl.useProgram(progPoints.prog);
+  gl.uniformMatrix4fv(progPoints.u.uVP, false, viewProj);
+  const pxPerMetre = canvas.height / (2 * Math.tan(FOV / 2));
+  // capped low: a figure a hand's width from the eye should break into
+  // samples, not turn into one blue disc
+  gl.uniform1f(progPoints.u.uMaxSize, 26.0);
+  gl.uniform1i(progPoints.u.uColorMode, 0);
+  gl.uniform2f(progPoints.u.uZSpan, LO[2], HI[2]);
+  gl.depthMask(true);
+  for (const f of simFigs) {
+    if (!f.count) continue;
+    gl.uniform1f(progPoints.u.uPointScale, 2.0 * f.radius * pxPerMetre);
+    gl.bindVertexArray(f.vao);
+    gl.drawArrays(gl.POINTS, 0, f.count);
+  }
+  gl.bindVertexArray(null);
+}
+function simRebuildLabels() {
+  sim.labels = [];
+  if (!sim.tl) { syncLabels(); return; }
+  const keys = simKeys();
+  keys.forEach((k, i) => sim.labels.push({
+    p: V([k.pos[0], k.pos[1], k.pos[2] + 0.2]), cls: "lbl dim", group: "sim",
+    text: "K" + (i + 1) + " · " + fmt(k.t, 2) + " s · " + Math.round(+k.focal_mm || 35) + " mm",
+  }));
+  for (const name in simActors()) {
+    const a = simActors()[name];
+    const at = simActorAt(name, sim.t) || simRoomCentre();
+    sim.labels.push({ p: V([at[0], at[1], FLOOR_T + (+a.height_m || SUBJECT_H) + 0.12]), text: name, cls: "lbl", group: "sim", actor: name });
+  }
+  syncLabels();
+}
+
+/* --- the sim panel ----------------------------------------------------------- */
+
+function simPanelBuild() {
+  const rig = $s("sp-rig");
+  for (const k of SIM_RIGS) { const o = document.createElement("option"); o.value = k; o.textContent = k; rig.appendChild(o); }
+  const bind = (id, fn) => { $s(id).addEventListener("change", () => { if (sim.tl) { fn($s(id)); simChanged(); } }); };
+  bind("sp-title", el => { sim.tl.title = el.value; });
+  bind("sp-dur", el => { const v = +el.value; if (isFinite(v) && v > 0) sim.tl.duration_s = v; });
+  bind("sp-fps", el => { const v = Math.round(+el.value); if (isFinite(v) && v > 0) sim.tl.fps = v; });
+  bind("sp-ap", el => { const v = +el.value; if (isFinite(v) && v > 0) sim.tl.aperture_f = v; });
+  bind("sp-sensor", el => { sim.tl.sensor = el.value; if (sim.camView) { vf.sensor = simSensorKey(); layoutLetterbox(); } });
+  bind("sp-interp", el => { sim.tl.camera.interp = el.value; });
+  $s("sp-rig").addEventListener("change", () => simSetRigKind($s("sp-rig").value));
+  bind("sp-gear", el => { sim.tl.rig.params.gear_key = el.value; });
+  bind("sp-railh", el => { sim.tl.rig.params.rail_height_m = +el.value || 0; });
+  bind("sp-arm", el => { sim.tl.rig.params.arm_m = +el.value || 0; });
+  bind("sp-baseh", el => { sim.tl.rig.params.base_height_m = +el.value || 0; });
+  $s("sp-shake").addEventListener("input", () => {
+    if (!sim.tl) return;
+    sim.tl.rig.params.shake = +$s("sp-shake").value;
+    $s("sp-shake-v").textContent = (+$s("sp-shake").value).toFixed(2);
+    simScheduleEdit();
+  });
+  $s("sp-track-keys").onclick = simTrackFromKeys;
+  $s("sp-track-clear").onclick = () => { if (sim.tl) { sim.tl.rig.params.track = null; simChanged(); } };
+  $s("sp-pivot").onclick = () => simArm(sim.armed && sim.armed.kind === "jib" ? null : { kind: "jib" });
+  $s("sp-snap").onclick = () => {
+    if (STANDALONE) { $s("sp-rig-note").textContent = "needs the studio"; return; }
+    sim.adoptSolved = true;
+    simPostEditNow();
+    $s("sp-rig-note").textContent = "asking the engine…";
+  };
+  $s("sp-keyview").onclick = simKeyView;
+  $s("sp-keyclick").onclick = () => simArm(sim.armed && sim.armed.kind === "key" ? null : { kind: "key" });
+  $s("sp-delkey").onclick = simDeleteKey;
+  $s("sp-aadd").onclick = simAddActor;
+  $s("sp-aheight").addEventListener("keydown", e => { if (e.key === "Enter") simAddActor(); });
+  const kbind = (id, fn) => { $s(id).addEventListener("change", () => { if (sim.sel) { fn($s(id), sim.sel); simChanged(); } }); };
+  kbind("sk-t", (el, k) => { const v = +el.value; if (isFinite(v)) k.t = clamp(v, 0, simDur()); });
+  kbind("sk-x", (el, k) => { const v = +el.value; if (isFinite(v)) k.pos = [v, k.pos[1], k.pos[2]]; });
+  kbind("sk-y", (el, k) => { const v = +el.value; if (isFinite(v)) k.pos = [k.pos[0], v, k.pos[2]]; });
+  kbind("sk-z", (el, k) => { const v = +el.value; if (isFinite(v)) k.pos = [k.pos[0], k.pos[1], v]; });
+  kbind("sk-focal", (el, k) => { const v = +el.value; if (isFinite(v) && v > 0) k.focal_mm = v; });
+  kbind("sk-roll", (el, k) => { const v = +el.value; if (isFinite(v)) k.roll_deg = v; });
+  kbind("sk-ease", (el, k) => { k.ease = el.value; });
+  kbind("sk-lookat", (el, k) => {
+    k.look_at = el.value || null;
+    if (!k.look_at && !k.aim) k.aim = simAimOf(k, k.t);
+  });
+  const aimSet = (el, k, i) => { const v = +el.value; if (!isFinite(v)) return; const a = k.aim ? k.aim.slice() : simAimOf(k, k.t); a[i] = v; k.aim = a; k.look_at = null; };
+  kbind("sk-ax", (el, k) => aimSet(el, k, 0));
+  kbind("sk-ay", (el, k) => aimSet(el, k, 1));
+  kbind("sk-az", (el, k) => aimSet(el, k, 2));
+  // Buttons must not take focus: space is the play key, and a focused button
+  // would fire its click again on the same keystroke.
+  for (const root of [$s("simpanel"), $s("simbar")]) {
+    root.addEventListener("pointerdown", e => { if (e.target.closest && e.target.closest("button")) e.preventDefault(); });
+  }
+  $s("sp-note").innerHTML = STANDALONE
+    ? "Standalone: the preview between keys is linear and nothing is checked. " +
+      '<span class="hint">Open this room in the studio for rigs, checks and rendering.</span>'
+    : '<span class="hint">Every edit is solved on the server: the path, the problems and the cast come back from the engine.</span>';
+}
+function simPanelFill() {
+  const tl = sim.tl;
+  if (!tl) return;
+  const set = (id, v) => { const el = $s(id); if (document.activeElement !== el) el.value = v; };
+  set("sp-title", tl.title || "");
+  set("sp-dur", tl.duration_s);
+  set("sp-fps", tl.fps);
+  set("sp-ap", tl.aperture_f == null ? "" : tl.aperture_f);
+  const sk = String(tl.sensor || "ff").toLowerCase();
+  set("sp-sensor", $s("sp-sensor").querySelector('option[value="' + sk + '"]') ? sk : (SIM_SENSOR_KEYS[sk] === "super35" ? "s35" : "ff"));
+  set("sp-interp", (tl.camera && tl.camera.interp) || "catmull");
+  const rig = tl.rig || { kind: "tripod", params: {} }, pr = rig.params || {};
+  set("sp-rig", SIM_RIGS.includes(rig.kind) ? rig.kind : "tripod");
+  document.querySelectorAll("#simpanel .rigp").forEach(d => { d.style.display = d.dataset.rig === rig.kind ? "" : "none"; });
+  set("sp-gear", pr.gear_key || "");
+  set("sp-railh", pr.rail_height_m == null ? 0 : pr.rail_height_m);
+  $s("sp-track-n").textContent = Array.isArray(pr.track) && pr.track.length ? pr.track.length + " track points" : "no track: follows the keys";
+  set("sp-arm", pr.arm_m == null ? 3 : pr.arm_m);
+  set("sp-baseh", pr.base_height_m == null ? 1.2 : pr.base_height_m);
+  $s("sp-pivot-t").textContent = Array.isArray(pr.pivot) ? "pivot " + fmt(pr.pivot[0], 2) + ", " + fmt(pr.pivot[1], 2) : "no pivot yet";
+  set("sp-shake", pr.shake == null ? 0.5 : pr.shake);
+  $s("sp-shake-v").textContent = (pr.shake == null ? 0.5 : +pr.shake).toFixed(2);
+  $s("sp-sub").textContent = (sim.ev ? "solved by the engine" : (STANDALONE ? "local linear preview" : "preview · awaiting the engine")) +
+    " · " + simKeys().length + " keys · " + Object.keys(simActors()).length + " actors";
+  if (sim.ev) $s("sp-rig-note").textContent = "";
+}
+function simPanelLists() {
+  const ul = $s("sp-keys");
+  ul.textContent = "";
+  const keys = simKeys();
+  if (!keys.length) { const li = el("li", "empty", "no keys yet"); li.style.cursor = "default"; ul.appendChild(li); }
+  keys.forEach((k, i) => {
+    const li = el("li", k === sim.sel ? "sel" : null);
+    li.appendChild(el("span", null, "K" + (i + 1) + "  " + fmt(k.t, 2) + " s"));
+    li.appendChild(el("span", null, (k.look_at ? "→ " + k.look_at + "  " : "") + Math.round(+k.focal_mm || 35) + " mm"));
+    li.onclick = () => { simSelect(k); simSetTime(k.t, { forcePost: true }); };
+    ul.appendChild(li);
+  });
+  const al = $s("sp-actors");
+  al.textContent = "";
+  const names = Object.keys(simActors());
+  if (!names.length) { const li = el("li", "empty", "no one cast yet"); li.style.cursor = "default"; al.appendChild(li); }
+  names.forEach((name, i) => {
+    const a = simActors()[name];
+    const li = el("li");
+    li.style.cursor = "default";
+    const left = el("span");
+    const sw = el("span", "sw");
+    const c = SIM_PALETTE[i % SIM_PALETTE.length];
+    sw.style.background = "rgb(" + Math.round(c[0] * 255) + "," + Math.round(c[1] * 255) + "," + Math.round(c[2] * 255) + ")";
+    left.appendChild(sw);
+    left.appendChild(document.createTextNode(name + "  " + fmt(+a.height_m || 0, 2) + " m · " + (a.keys || []).length + " keys"));
+    li.appendChild(left);
+    const acts = el("span", "acts");
+    const kb = el("button", null, "key on click");
+    kb.title = "next click on the floor places " + name + " at the current time";
+    kb.onclick = () => simArm(sim.armed && sim.armed.kind === "actor" && sim.armed.name === name ? null : { kind: "actor", name });
+    const db = el("button", null, "– key");
+    db.title = "remove this actor's key at the current time";
+    db.onclick = () => {
+      const t = simSnapT(sim.t), j = a.keys.findIndex(x => Math.abs(x.t - t) < 0.5 / simFps());
+      if (j >= 0) { a.keys.splice(j, 1); simChanged(); }
+    };
+    const xb = el("button", null, "×");
+    xb.title = "remove " + name;
+    xb.onclick = () => {
+      delete sim.tl.actors[name];
+      for (const k of simKeys()) if (k.look_at === name) { k.look_at = null; if (!k.aim) k.aim = simAimOf({}, k.t); }
+      simChanged();
+    };
+    acts.appendChild(kb); acts.appendChild(db); acts.appendChild(xb);
+    li.appendChild(acts);
+    al.appendChild(li);
+  });
+}
+function simFillKeyFields() {
+  const box = $s("sp-keyfields"), k = sim.sel;
+  box.classList.toggle("hidden", !k);
+  if (!k) return;
+  const set = (id, v) => { const e2 = $s(id); if (document.activeElement !== e2) e2.value = v; };
+  set("sk-t", (+k.t).toFixed(3));
+  set("sk-x", (+k.pos[0]).toFixed(3)); set("sk-y", (+k.pos[1]).toFixed(3)); set("sk-z", (+k.pos[2]).toFixed(3));
+  set("sk-focal", Math.round(+k.focal_mm || 35));
+  set("sk-roll", +k.roll_deg || 0);
+  set("sk-ease", k.ease || "inout");
+  const la = $s("sk-lookat");
+  la.textContent = "";
+  const none = document.createElement("option"); none.value = ""; none.textContent = "— aim point —"; la.appendChild(none);
+  for (const name in simActors()) { const o = document.createElement("option"); o.value = name; o.textContent = name; la.appendChild(o); }
+  la.value = k.look_at && simActors()[k.look_at] ? k.look_at : "";
+  const aim = simAimOf(k, k.t);
+  set("sk-ax", aim[0].toFixed(3)); set("sk-ay", aim[1].toFixed(3)); set("sk-az", aim[2].toFixed(3));
+  for (const id of ["sk-ax", "sk-ay", "sk-az"]) $s(id).disabled = !!k.look_at;
+}
+function simLayout() {
+  const tb = $s("toolbar"), sp = $s("simpanel");
+  sp.style.top = (tb.offsetTop + tb.offsetHeight + 8) + "px";
+  simBarLayout();
+}
+
+/* --- the timeline bar ----------------------------------------------------- */
+
+const sbCanvas = $s("sb-canvas"), sbTrack = $s("sb-track");
+function simBarSync() {
+  $s("sb-play").innerHTML = (sim.playing ? "Pause" : "Play") + '<span class="k">␣</span>';
+  $s("sb-loop").setAttribute("aria-pressed", String(sim.loop));
+  $s("sb-cam").setAttribute("aria-pressed", String(sim.camView));
+  $s("simbar").classList.toggle("shifted", show.panel && !vf.on);
+}
+function simBarReadout() {
+  const fr = simFrame(), n = sim.frames.length;
+  $s("sb-time").textContent = "t " + sim.t.toFixed(3) + " s · f " + String(n ? sim.fi : 0).padStart(3, "0") + " / " + (n ? n - 1 : 0) + " · " + simFps() + " fps";
+  const shot = $s("sb-shot"), prob = $s("sb-problems");
+  if (!fr) {
+    shot.textContent = simKeys().length ? "" : "no camera keys yet — K keys the view, or “key on click”";
+    prob.textContent = "";
+    return;
+  }
+  const parts = [Math.round(+fr.focal_mm || 35) + " mm"];
+  if (fr.shot_size) parts.push(String(fr.shot_size).toUpperCase());
+  if (isFinite(+fr.distance_m)) parts.push(fmt(+fr.distance_m, 2) + " m");
+  if (fr.dof && isFinite(+fr.dof.near_m)) parts.push("DoF " + fmt(+fr.dof.near_m, 2) + "–" + (fr.dof.infinite ? "∞" : fmt(+fr.dof.far_m, 2)) + " m");
+  if (isFinite(+fr.speed_mps)) parts.push(fmt(+fr.speed_mps, 2) + " m/s");
+  if (isFinite(+fr.pan_deg)) parts.push("pan " + fmt(+fr.pan_deg, 0) + "° tilt " + fmt(+fr.tilt_deg, 0) + "°");
+  shot.textContent = parts.join(" · ");
+  prob.textContent = (fr.problems || []).join(" · ");
+}
+// The diamonds are DOM so they can be grabbed; the ruler, the bands and the
+// playhead are one small 2D canvas redrawn on every time change.
+function simBarLayout() {
+  const box = $s("sb-keys");
+  box.textContent = "";
+  if (!sim.tl) { simBarDraw(); return; }
+  const dur = simDur();
+  simKeys().forEach((k, i) => {
+    const d = document.createElement("div");
+    d.className = "kd" + (k === sim.sel ? " sel" : "");
+    d.style.left = (clamp(k.t / dur, 0, 1) * 100) + "%";
+    d.title = "K" + (i + 1) + " · " + fmt(k.t, 2) + " s · " + Math.round(+k.focal_mm || 35) + " mm";
+    d.dataset.i = String(i);
+    box.appendChild(d);
+  });
+  let ai = 0;
+  for (const name in simActors()) {
+    const c = SIM_PALETTE[ai++ % SIM_PALETTE.length];
+    for (const k of (simActors()[name].keys || [])) {
+      const d = document.createElement("div");
+      d.className = "kd actor";
+      d.style.left = (clamp(k.t / dur, 0, 1) * 100) + "%";
+      d.style.background = "rgb(" + Math.round(c[0] * 255) + "," + Math.round(c[1] * 255) + "," + Math.round(c[2] * 255) + ")";
+      d.title = name + " · " + fmt(k.t, 2) + " s";
+      box.appendChild(d);
+    }
+  }
+  simBarDraw();
+}
+function simBarDraw() {
+  if (!sim.on) return;
+  const W = sbTrack.clientWidth, H = sbTrack.clientHeight;
+  if (W < 2 || H < 2) return;
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  if (sbCanvas.width !== Math.round(W * dpr) || sbCanvas.height !== Math.round(H * dpr)) { sbCanvas.width = Math.round(W * dpr); sbCanvas.height = Math.round(H * dpr); }
+  const g = sbCanvas.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, W, H);
+  const dur = simDur(), fps = simFps(), nF = Math.round(dur * fps);
+  const x = t => (t / dur) * (W - 1) + 0.5;
+  // ruler
+  g.strokeStyle = "rgba(93,100,107,0.9)";
+  g.lineWidth = 1;
+  g.beginPath(); g.moveTo(0, 24.5); g.lineTo(W, 24.5); g.stroke();
+  const pxPerFrame = (W - 1) / Math.max(nF, 1);
+  const frameStep = pxPerFrame >= 4 ? 1 : (pxPerFrame >= 1.5 ? Math.ceil(4 / pxPerFrame) : 0);
+  g.strokeStyle = "rgba(93,100,107,0.55)";
+  if (frameStep) {
+    g.beginPath();
+    for (let f = 0; f <= nF; f += frameStep) { const px = Math.round(x(f / fps)) + 0.5; g.moveTo(px, 21); g.lineTo(px, 25); }
+    g.stroke();
+  }
+  g.fillStyle = "rgba(139,146,154,0.9)";
+  g.font = "9px ui-monospace, Menlo, monospace";
+  g.textBaseline = "top";
+  const secStep = dur > 30 ? 5 : (dur > 12 ? 2 : 1);
+  g.strokeStyle = "rgba(139,146,154,0.8)";
+  g.beginPath();
+  for (let s = 0; s <= dur + 1e-9; s += secStep) { const px = Math.round(x(s)) + 0.5; g.moveTo(px, 18); g.lineTo(px, 25); }
+  g.stroke();
+  for (let s = 0; s <= dur + 1e-9; s += secStep) { const px = x(s); g.fillText(s + " s", Math.min(px + 2, W - 22), 0); }
+  // problem segments
+  const segs = (sim.ev && Array.isArray(sim.ev.segments)) ? sim.ev.segments : [];
+  for (const sg of segs) {
+    const x0 = x(clamp(+sg.t_start || 0, 0, dur)), x1 = x(clamp(+sg.t_end || 0, 0, dur));
+    g.fillStyle = sg.severity === "fail" ? "rgba(213,94,0,0.75)" : "rgba(230,159,0,0.7)";
+    g.fillRect(Math.min(x0, x1), 40, Math.max(2, Math.abs(x1 - x0)), 7);
+  }
+  // frames with problems, as a hairline strip under the ruler (the engine's
+  // per-frame complaints, which need not be grouped into segments)
+  g.fillStyle = "rgba(213,94,0,0.55)";
+  for (let i = 0; i < sim.frames.length; i++) {
+    const fr = sim.frames[i];
+    if (fr.problems && fr.problems.length) g.fillRect(x(fr.t) - Math.max(pxPerFrame / 2, 0.5), 36, Math.max(pxPerFrame, 1), 3);
+  }
+  // playhead
+  const px = Math.round(x(sim.t)) + 0.5;
+  g.strokeStyle = "#56b4e9";
+  g.beginPath(); g.moveTo(px, 10); g.lineTo(px, H); g.stroke();
+  g.fillStyle = "#56b4e9";
+  g.beginPath(); g.moveTo(px - 4, 10); g.lineTo(px + 4, 10); g.lineTo(px, 16); g.closePath(); g.fill();
+}
+function simBarTimeAt(clientX) {
+  const r = sbTrack.getBoundingClientRect();
+  return simSnapT(clamp((clientX - r.left - 0.5) / Math.max(r.width - 1, 1), 0, 1) * simDur());
+}
+function simBandAt(clientX, clientY) {
+  const r = sbTrack.getBoundingClientRect();
+  const y = clientY - r.top;
+  if (y < 34) return null;
+  const t = clamp((clientX - r.left) / Math.max(r.width, 1), 0, 1) * simDur();
+  const segs = (sim.ev && Array.isArray(sim.ev.segments)) ? sim.ev.segments : [];
+  return segs.find(sg => t >= +sg.t_start - 1e-9 && t <= +sg.t_end + 1e-9) || null;
+}
+function simBarNote(text, severity) {
+  const n = $s("sb-note");
+  n.className = severity || "";
+  n.textContent = text || (STANDALONE ? "open in the studio for rigs, checks and rendering" : "");
+}
+sbTrack.addEventListener("pointerdown", e => {
+  if (!sim.tl) return;
+  sbTrack.setPointerCapture(e.pointerId);
+  const kd = e.target.closest && e.target.closest(".kd:not(.actor)");
+  if (kd) {
+    const k = simKeys()[+kd.dataset.i];
+    if (k) { simSelect(k); sim.barDrag = { key: k, moved: false, el: kd }; return; }
+  }
+  sim.barDrag = { scrub: true };
+  sim.playing = false; simBarSync();
+  simSetTime(simBarTimeAt(e.clientX), { forcePost: true });
+});
+sbTrack.addEventListener("pointermove", e => {
+  if (!sim.tl) return;
+  const bd = sim.barDrag;
+  if (!bd) {
+    const sg = simBandAt(e.clientX, e.clientY);
+    simBarNote(sg ? sg.text : "", sg ? sg.severity : "");
+    return;
+  }
+  const t = simBarTimeAt(e.clientX);
+  if (bd.scrub) { simSetTime(t); return; }
+  if (Math.abs(t - bd.key.t) > 1e-9) {
+    bd.key.t = t; bd.moved = true;
+    bd.el.style.left = (clamp(t / simDur(), 0, 1) * 100) + "%";
+    sim.ev = null;
+    sim.frames = simLocalFrames();
+    simRebuildStatic();
+    simRebuildLabels();
+    simSetTime(t, { silent: true, force: true });
+    simFillKeyFields();
+  }
+});
+function simBarRelease() {
+  const bd = sim.barDrag;
+  sim.barDrag = null;
+  if (!bd) return;
+  if (bd.scrub) { simPostTime(true); return; }
+  if (bd.moved) simChanged();
+}
+sbTrack.addEventListener("pointerup", simBarRelease);
+sbTrack.addEventListener("pointercancel", simBarRelease);
+sbTrack.addEventListener("pointerleave", () => { if (!sim.barDrag) simBarNote(""); });
+$s("sb-play").onclick = () => simPlay(!sim.playing);
+$s("sb-loop").onclick = () => { sim.loop = !sim.loop; simBarSync(); };
+$s("sb-cam").onclick = () => simSetCamView(!sim.camView);
+$s("btn-sim").onclick = () => setSimMode(!sim.on);
+addEventListener("resize", () => { if (sim.on) simLayout(); });
+simPanelBuild();
+simBarNote("");
+
+// `?sim=1` opens the simulator on a demo move -- a dolly push-in on one actor
+// -- so a screenshot, or a first look, shows the whole instrument at once.
+function simDemoTimeline() {
+  const c = simRoomCentre(), fz = FLOOR_T;
+  const k0 = [c[0] - 2.2, c[1] - 1.6, fz + 1.55], k1 = [c[0] - 0.9, c[1] - 0.7, fz + 1.35];
+  return {
+    id: "demo0001", title: "Push-in on Maya", fps: 24, duration_s: 8.0, sensor: "ff", aperture_f: 2.8,
+    rig: { kind: "dolly", params: { track: [[k0[0], k0[1]], [k1[0], k1[1]]], rail_height_m: 0.0, gear_key: "doorway-dolly" } },
+    camera: { interp: "catmull", keys: [
+      { t: 0.0, pos: k0, aim: null, look_at: "Maya", focal_mm: 35.0, roll_deg: 0.0, ease: "inout" },
+      { t: 8.0, pos: k1, aim: null, look_at: "Maya", focal_mm: 50.0, roll_deg: 0.0, ease: "inout" },
+    ] },
+    actors: { Maya: { height_m: 1.68, keys: [
+      { t: 0.0, pos: [c[0] + 0.6, c[1] + 0.4], facing_deg: 200.0 },
+      { t: 8.0, pos: [c[0] - 0.3, c[1] + 0.9], facing_deg: 225.0 },
+    ] } },
+    pieces: [], notes: [],
+  };
+}
+
 addEventListener("message", e => {
   const m = e.data;
   if (!m || typeof m !== "object") return;
@@ -1683,6 +3052,12 @@ addEventListener("message", e => {
   else if (m.type === "locaish:lens") setLens(m.focal_mm);
   else if (m.type === "locaish:labels") { labelPick.length = 0; setObjectLabels(m.labels); }
   else if (m.type === "locaish:labelmode") setLabelMode(!!m.on);
+  else if (m.type === "locaish:sim") simLoad(m.timeline, m.evaluation || null);
+  else if (m.type === "locaish:sim-mode") setSimMode(!!m.on, true);
+  else if (m.type === "locaish:sim-play") { if (!sim.on) setSimMode(true, true); simPlay(!!m.on, m.t); }
+  else if (m.type === "locaish:sim-time") { if (sim.on) { sim.playing = false; simBarSync(); simSetTime(+m.t || 0, { silent: true }); } }
+  else if (m.type === "locaish:figures") simSetFigures(m.figures);
+  else if (m.type === "locaish:sim-rig") { if (sim.tl && m.rig && typeof m.rig === "object") { sim.tl.rig = m.rig; simChanged(); } }
 });
 // Served by the studio (or a share link) the page knows its own job: fetch
 // the names of what is in the room so a full-screen twin carries them too.
@@ -1709,6 +3084,7 @@ function syncLabels() {
   if (show.extents) groups.push(extentLabels);
   groups.push(measureLabels);
   groups.push(objectLabels);
+  if (sim.on) groups.push(sim.labels);
   for (const g of groups) {
     for (const l of g) {
       const el = document.createElement("div");
@@ -1787,6 +3163,8 @@ function syncToolbar() {
   }
   document.getElementById("panel").classList.toggle("collapsed", !show.panel);
   document.getElementById("legend").classList.toggle("shifted", show.panel);
+  document.getElementById("btn-sim").setAttribute("aria-pressed", String(sim.on));
+  document.getElementById("simbar").classList.toggle("shifted", show.panel && !vf.on);
   needsRedraw = true;
 }
 function setViewMode(m) { viewMode = m; syncToolbar(); }
@@ -1831,7 +3209,30 @@ addEventListener("keydown", e => {
   else if (k === "v") { if (vf.on) exitViewfinder(); else enterViewfinder(); }
   else if (k === "[" && vf.on) stepLens(-1);
   else if (k === "]" && vf.on) stepLens(+1);
-  else if (k === "escape") { if (vf.on) exitViewfinder(); else { setMeasureMode(false); setLabelMode(false); } }
+  else if (k === "6") setSimMode(!sim.on);
+  // the simulator's keys, Blender's where Blender has one
+  else if (sim.on && k === " ") simPlay(!sim.playing);
+  else if (sim.on && k === "k") simKeyView();
+  else if (sim.on && k === "c") simSetCamView(!sim.camView);
+  else if (sim.on && (k === "delete" || k === "backspace")) simDeleteKey();
+  else if (sim.on && k === ",") simStepFrame(-1);
+  else if (sim.on && k === ".") simStepFrame(+1);
+  else if (sim.on && k === "home") { sim.playing = false; simBarSync(); simSetTime(0, { forcePost: true }); }
+  else if (sim.on && k === "end") { sim.playing = false; simBarSync(); simSetTime(simDur(), { forcePost: true }); }
+  else if (sim.on && k.startsWith("arrow")) {
+    if (sim.sel) simNudgeScreen(k, e.shiftKey);
+    else if (k === "arrowleft") simStepFrame(-1);
+    else if (k === "arrowright") simStepFrame(+1);
+  }
+  else if (sim.on && k === "pageup") simNudge(0, 0, e.shiftKey ? 0.25 : 0.05);
+  else if (sim.on && k === "pagedown") simNudge(0, 0, e.shiftKey ? -0.25 : -0.05);
+  else if (k === "escape") {
+    if (sim.on && sim.armed) simArm(null);
+    else if (sim.on && sim.camView) simSetCamView(false);
+    else if (vf.on) exitViewfinder();
+    else if (sim.on && sim.sel) simSelect(null);
+    else { setMeasureMode(false); setLabelMode(false); }
+  }
   else if ("wasdqe".includes(k) || k === "shift") { keys.add(k); return; }
   else return;
   e.preventDefault();
@@ -2138,12 +3539,17 @@ function step() {
   const after = cam.yaw + cam.pitch + cam.dist + cam.target[0] + cam.target[1] + cam.target[2];
   if (Math.abs(after - before) > 1e-7) needsRedraw = true;
 
+  // the simulation's clock: real seconds, so a 24 fps move plays at 24 fps
+  if (sim.on && sim.playing) simAdvance(dt);
+
   if (!needsRedraw || !gl) return;
   needsRedraw = false;
   resize();
   // The viewfinder's stand-ins face the lens and its readout quotes the
-  // distance, so both follow the camera; the parent is told at ~10/s.
-  if (vf.on) { rebuildFigures(); needsRedraw = false; vfReadout(); postVfState(false); }
+  // distance, so both follow the camera; the parent is told at ~10/s. When
+  // the simulation drives the viewfinder the pose is the timeline's, not the
+  // operator's, so neither the readout nor the parent hear about it as one.
+  if (vf.on) { rebuildFigures(); needsRedraw = false; if (!sim.camView) { vfReadout(); postVfState(false); } }
   render();
 }
 
@@ -2274,6 +3680,11 @@ function render() {
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
   }
 
+  // 2b'. the cast: the figures the studio sampled for this frame, or the
+  //      capsules the page samples itself, drawn as round splats like the
+  //      cloud so a body reads as a surface and not as a wire stick
+  if (sim.on) drawSimFigures();
+
   // 2c. the structure over the field: the fitted shell as a translucent
   //     container, drawn after the gaussians so it reads as the measurement
   //     laid on the picture rather than a wall in front of it
@@ -2327,6 +3738,16 @@ function render() {
     drawFlat(vfBatch, true, false, 1.0, 2.0 * PT_SPACING);
   }
 
+  // 7. the simulation: path, rails, key diamonds (static) and the frustum,
+  //    the aim and the jib arm of the current frame (dynamic), the same
+  //    ghost-then-solid pair so a camera behind a wall is still findable
+  if (sim.on) {
+    drawFlat(simStatic, false, false, 0.2, 0.0);
+    drawFlat(simStatic, true, false, 1.0, 2.0 * PT_SPACING);
+    drawFlat(simDyn, false, false, 0.28, 0.0);
+    drawFlat(simDyn, true, false, 1.0, 2.0 * PT_SPACING);
+  }
+
   gl.disable(gl.BLEND);
   positionLabels();
 }
@@ -2349,6 +3770,21 @@ syncLabels();
 resize();
 if (gl) requestAnimationFrame(step);
 if (!HAS_GEOM) setReadout('<span class="hint">this twin carries no geometry — the grid is all there is to see</span>');
+// `?sim=1` (or `#sim=1`): open on the simulator with a demo push-in.
+if (/[?&#]sim=1/.test(location.search + location.hash)) {
+  simLoad(simDemoTimeline(), null);
+  simSelect(simKeys()[0] || null);
+  simSetTime(3.0, { silent: true, force: true });
+  // Stand behind and above the dolly's first mark, looking at the actor, so
+  // the rails, the path, the frustum and the cast are all in one view.
+  const k0 = simKeys()[0], maya = simActorAt("Maya", 3.0);
+  if (k0 && maya) {
+    const back = norm3([k0.pos[0] - maya[0], k0.pos[1] - maya[1], 0]);
+    placeCamera(V([k0.pos[0] + back[0] * 1.2, k0.pos[1] + back[1] * 1.2, k0.pos[2] + 0.9]),
+                V([(k0.pos[0] + maya[0]) / 2, (k0.pos[1] + maya[1]) / 2, FLOOR_T + 1.0]));
+  }
+  if (/[?&#]cam=1/.test(location.search + location.hash)) simSetCamView(true);
+}
 </script>
 </body>
 </html>

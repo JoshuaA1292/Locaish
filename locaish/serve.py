@@ -857,8 +857,9 @@ def _safe_name(name: str) -> str:
 
 
 _STAGE_GET = ("stage.js", "stage-status", "stage-plan", "cast", "headshot", "setpieces", "rehearsals",
-              "rehearsal", "rehearsal-events", "rehearsal-image")
-_STAGE_POST = ("cast", "setpieces", "rehearse", "rehearsal")
+              "rehearsal", "rehearsal-events", "rehearsal-image",
+              "sims", "sim", "sim-events", "sim-file", "sim-frame", "sim-direct-events")
+_STAGE_POST = ("cast", "setpieces", "rehearse", "rehearsal", "sims", "sim")
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -1312,12 +1313,26 @@ class _Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
+    def do_PUT(self) -> None:
+        url = urlparse(self.path)
+        parts = [p for p in url.path.split("/") if p]
+        if not self._allowed(parts):
+            return self._deny()
+        if len(parts) == 3 and parts[0] == "sim":
+            return self._stage_post(parts)
+        self._json({"error": "not found"}, 404)
+
     def do_DELETE(self) -> None:
         url = urlparse(self.path)
         parts = [p for p in url.path.split("/") if p]
         if not self._allowed(parts):
             return self._deny()
         store = self.studio.store
+        if len(parts) == 3 and parts[0] == "sim":
+            job = self._stage_job(parts[1])
+            if job is None:
+                return self._json({"error": "no finished twin on that job"}, 404)
+            return self._json({"removed": bool(self.studio.stage.delete_sim(job, parts[2]))})
         if len(parts) == 2 and parts[0] == "share":
             return self._json({"revoked": store.revoke_share(parts[1])})
         if len(parts) == 2 and parts[0] == "project":
@@ -1416,6 +1431,45 @@ class _Handler(BaseHTTPRequestHandler):
                 if not f.exists():
                     return self._json({"error": "not yet"}, 404)
                 return self._file(f, files[name][1])
+            # the camera simulation
+            if head == "sims" and len(parts) == 2:
+                return self._json({"sims": stage.sims(job)})
+            if head == "sim" and len(parts) == 3:
+                return self._json(stage.sim(job, parts[2]))
+            if head == "sim" and len(parts) == 4 and parts[3] == "figures":
+                t = float((params.get("t") or ["0"])[0])
+                return self._json(stage.sim_figures(job, parts[2], t))
+            if head == "sim-frame" and len(parts) == 3:
+                t = float((params.get("t") or ["0"])[0])
+                w = int((params.get("w") or params.get("width_px") or ["640"])[0])
+                data = stage.sim_frame_png(job, parts[2], t, width_px=w)
+                return self._bytes(data, "image/png", cache="private, max-age=30")
+            if head == "sim-file" and len(parts) == 4:
+                data, ctype = stage.sim_file(job, parts[2], parts[3])
+                download = parts[3] if parts[3] in ("blender.py", "room.glb", "timeline.json") else None
+                return self._bytes(data, ctype, download=download)
+            if head == "sim-events" and len(parts) == 4:
+                run = stage.sim_render(job, parts[2], parts[3])
+                if run is None:
+                    return self._json({"error": "no such render"}, 404)
+                return self._stream(
+                    run.events, run.state,
+                    done_item=run.done_item,
+                    error_item=lambda: {"kind": "error", "text": run.error or "failed"},
+                )
+            if head == "sim-direct-events" and len(parts) == 4:
+                run = stage.sim_direct(job, parts[2], parts[3])
+                if run is None:
+                    return self._json({"error": "no such directing run"}, 404)
+                return self._stream(
+                    run.events, run.state,
+                    done_item=run.done_item,
+                    error_item=lambda: {"kind": "error", "text": run.error or "failed"},
+                )
+        except KeyError as exc:
+            return self._json({"error": str(exc).strip("'")}, 404)
+        except ValueError as exc:
+            return self._json({"error": str(exc)}, 400)
         except Exception as exc:  # noqa: BLE001 - the page shows the reason
             return self._json({"error": f"{type(exc).__name__}: {exc}"}, 500)
         return self._json({"error": "not found"}, 404)
@@ -1452,6 +1506,19 @@ class _Handler(BaseHTTPRequestHandler):
                 if run is None or run.state != "done":
                     return self._json({"error": "no finished rehearsal"}, 404)
                 return self._json(stage.finish(job, run, parts[4], body))
+            # the camera simulation
+            if head == "sims" and len(parts) == 2:
+                return self._json(stage.create_sim(job, body))
+            if head == "sim" and len(parts) == 3:
+                return self._json(stage.save_sim(job, parts[2], body))
+            if head == "sim" and len(parts) == 4 and parts[3] == "from-rehearsal":
+                return self._json(stage.sim_from_rehearsal(job, parts[2], body))
+            if head == "sim" and len(parts) == 4 and parts[3] == "render":
+                run = stage.start_sim_render(job, parts[2], body)
+                return self._json({"run": run.id, "events": f"/sim-events/{job.id}/{parts[2]}/{run.id}"})
+            if head == "sim" and len(parts) == 4 and parts[3] == "direct":
+                run = stage.start_direct(job, parts[2], body)
+                return self._json({"run": run.id, "events": f"/sim-direct-events/{job.id}/{parts[2]}/{run.id}"})
         except KeyError as exc:
             return self._json({"error": str(exc).strip("'")}, 404)
         except ValueError as exc:
@@ -1833,6 +1900,17 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
+    def _bytes(self, data: bytes, content_type: str, *, download: str | None = None, cache: str | None = None) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        if cache:
+            self.send_header("Cache-Control", cache)
+        if download:
+            self.send_header("Content-Disposition", f'attachment; filename="{download}"')
+        self.end_headers()
+        self.wfile.write(data)
+
     def _file(self, path: Path, content_type: str, download: str | None = None) -> None:
         data = path.read_bytes()
         self.send_response(200)
@@ -1976,6 +2054,35 @@ PAGE = """<!doctype html>
   .st_shot:first-child { border-top: 0; }
   .st_links { display: flex; gap: 18px; margin-top: 10px; font-size: 12.5px; }
   .st_links a { color: var(--mute); }
+  .sm_direct { margin-bottom: 12px; }
+  .sm_direct input { flex: 1; min-width: 260px; }
+  .sm_looks { display: flex; gap: 8px; overflow-x: auto; margin-top: 8px; }
+  .sm_looks figure { margin: 0; flex: none; width: 220px; font-size: 11.5px; color: var(--dim); }
+  .sm_looks img { width: 220px; border-radius: 8px; display: block; }
+  .sm_looks b { color: var(--ink); }
+  .sm_list { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+  .sm_item { display: inline-flex; gap: 8px; align-items: center; border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; background: var(--surface2); font-size: 13px; cursor: pointer; }
+  .sm_item.active { border-color: var(--accent); }
+  .sm_item .sm_probs { color: var(--bad); font-size: 12px; }
+  .sm_item .st_x { padding: 0 6px; }
+  .sm_grid { display: grid; grid-template-columns: 1.2fr 1fr; gap: 12px; margin-top: 12px; }
+  @media (max-width: 1000px) { .sm_grid { grid-template-columns: 1fr; } }
+  .sm_frame img { width: 100%; border-radius: 10px; display: block; background: #0a0c0f; min-height: 120px; }
+  .sm_frame .dim { margin-top: 4px; }
+  .sm_rig { font-size: 13px; }
+  .sm_rig p { margin: 6px 0 0; color: var(--dim); font-size: 12.5px; }
+  .sm_seg { display: flex; gap: 8px; align-items: baseline; font-size: 12.5px; padding: 3px 0; border-top: 1px solid var(--line); }
+  .sm_seg:first-child { border-top: 0; }
+  .sm_seg b { font-weight: 500; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .sm_seg.red { color: var(--bad); }
+  .sm_seg.amber { color: var(--warn); }
+  .sm_summary { font-size: 13px; color: var(--dim); margin-top: 8px; }
+  .sm_summary b { color: var(--ink); font-weight: 500; }
+  .sm_acts { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
+  .sm_acts .primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  .sm_video video { width: 100%; border-radius: 10px; display: block; margin-top: 10px; background: #000; }
+  .sm_howto { font-size: 12.5px; color: var(--dim); margin-top: 8px; }
+  .sm_howto code { color: var(--ink); }
   #st_blocking svg { width: 100%; height: auto; }
   .chip { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--line); border-radius: 999px;
           padding: 4px 6px 4px 11px; font-size: 13px; background: var(--surface2); cursor: default; }
@@ -2396,6 +2503,37 @@ PAGE = """<!doctype html>
           <div class="panelbox"><h4>Blocking</h4><div id="st_blocking"></div></div>
         </div>
         <div id="st_links" class="st_links"></div>
+      </div>
+    </section>
+    <section id="sim">
+      <div class="sechead">
+        <div class="sub"><h2>Simulate the camera</h2>
+          <p>Tell the operator what the camera should do, or key the move yourself in the twin. Either way the engine runs it through the measured room frame by frame on a real rig: where the dolly cannot go, where the lens loses the size, where the crane arm meets the wall. Then render the move.</p></div>
+      </div>
+      <div class="sm_list" id="sm_list"></div>
+      <div class="st_row"><button id="sm_new" class="lensbtn">+ new</button><select id="sm_fromreh"><option value="">from rehearsal ▾</option></select><span class="dim" id="sm_status"></span></div>
+      <div id="sm_open" class="hidden">
+        <div class="panelbox sm_direct"><h4>Direct the camera</h4>
+          <div class="st_row"><input id="sm_instruction" placeholder="push in on Maya over four seconds on the 50, low, as she sits"><button id="sm_directbtn" class="primary">Direct</button></div>
+          <div class="dim" id="sm_directnote"></div>
+          <div class="st_log" id="sm_directlog"></div>
+          <div class="sm_looks" id="sm_looks"></div>
+          <div id="sm_directnotes"></div>
+        </div>
+        <div class="sm_grid">
+          <div class="panelbox sm_frame"><h4>Frame at the playhead</h4><img id="sm_frameimg" alt="frame at the playhead"><div class="dim" id="sm_frametext"></div>
+            <div class="sm_acts"><button id="sm_twin" class="primary">Open in the twin</button><button id="sm_render" class="lensbtn">Render the move</button></div>
+            <div class="st_log" id="sm_log"></div>
+            <div class="sm_video" id="sm_video"></div>
+          </div>
+          <div class="panelbox"><h4>Rig</h4><div class="sm_rig" id="sm_rig"></div>
+            <h4 style="margin-top:14px">What does not work</h4><div id="sm_problems"></div>
+            <div class="sm_summary" id="sm_summary"></div>
+            <h4 style="margin-top:14px">Hand-off</h4>
+            <div class="st_links" id="sm_links"></div>
+            <div class="sm_howto">The move as data: the timeline and its evaluation, the video, the room as a mesh, and the camera as a script another package can read.</div>
+          </div>
+        </div>
       </div>
     </section>
 

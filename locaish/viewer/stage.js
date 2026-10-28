@@ -23,6 +23,7 @@ function initStage(id) {
   const d = $('d_shoot_date'); if (d && d.value) $('st_date').value = d.value;
   fetch('/stage-status/' + id).then(r => r.json()).then(s => { stStatus = s || {}; paintStatus(); }).catch(() => {});
   loadCast(); loadPieces(); loadRuns();
+  if (typeof initSim === 'function') initSim(id);
 }
 
 function paintStatus() {
@@ -281,3 +282,284 @@ function finishFrame(f) {
 
 function togglePlay() { if (stPlaying) stopAnimatic(); else { $('st_play').textContent = 'Pause'; stPlaying = setInterval(() => showFrame((stFrameIdx + 1) % Math.max(1, stFrames.length)), 1000); } }
 function stopAnimatic() { if (stPlaying) clearInterval(stPlaying); stPlaying = null; const b = $('st_play'); if (b) b.textContent = 'Play'; }
+
+/* --- the camera simulation ----------------------------------------------- */
+
+// The page is the relay between the engine (over HTTP) and the viewer (over
+// postMessage): a key moved in the twin is PUT to the server, the evaluation
+// comes back, and the viewer is told; the playhead moving in the twin fetches
+// the cast at that moment and the frame the camera would see.
+let smJob = null, smSims = [], smCur = null, smRun = null, smBusy = false, smMode = false;
+let smFrameTimer = null, smFigTimer = null, smT = 0, smListening = false;
+
+function initDirect() {
+  const btn = $('sm_directbtn'), inp = $('sm_instruction');
+  if (!btn) return;
+  btn.onclick = directCamera;
+  inp.onkeydown = e => { if (e.key === 'Enter') directCamera(); };
+  if (!stStatus.meta) { btn.disabled = true; $('sm_directnote').textContent = 'no Meta key on this studio: key the move in the twin instead'; }
+  else $('sm_directnote').textContent = 'Muse Wonder operates the camera through the engine; Muse Spark looks at the frames.';
+}
+
+function directCamera() {
+  const text = $('sm_instruction').value.trim();
+  if (!text || !smCur || smDirecting) return;
+  smDirecting = true; $('sm_directbtn').disabled = true;
+  $('sm_directlog').innerHTML = ''; $('sm_looks').innerHTML = ''; $('sm_directnotes').innerHTML = '';
+  dlog('directing: ' + text);
+  fetch('/sim/' + stJob + '/' + smCur.id + '/direct', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({instruction: text})})
+    .then(r => r.json()).then(r => {
+      if (!r.run) { dlog(r.error || 'could not start', 'error'); smDirecting = false; $('sm_directbtn').disabled = false; return; }
+      listenDirect(r.events);
+    }).catch(e => { dlog(String(e), 'error'); smDirecting = false; $('sm_directbtn').disabled = false; });
+}
+
+function dlog(text, cls) { const d = document.createElement('div'); d.textContent = text; if (cls) d.className = cls; $('sm_directlog').appendChild(d); $('sm_directlog').scrollTop = 1e9; }
+
+function listenDirect(url) {
+  const es = new EventSource(url);
+  let settled = false;
+  es.onmessage = ev => {
+    const m = JSON.parse(ev.data);
+    if (m.kind === 'stage') dlog(m.text);
+    else if (m.kind === 'call') dlog('→ ' + m.tool + (m.summary ? ': ' + m.summary : ''));
+    else if (m.kind === 'agent') dlog('operator: ' + (m.text || ''), 'ag');
+    else if (m.kind === 'look') {
+      const base = '/sim-file/' + stJob + '/' + smCur.id + '/';
+      const f = document.createElement('figure');
+      f.innerHTML = '<img src="' + base + encodeURIComponent(m.file) + '?t=' + Date.now() + '" alt="look"><figcaption>looked at t ' + Number(m.t).toFixed(1) + ' s</figcaption>';
+      f.dataset.t = Number(m.t).toFixed(2);
+      $('sm_looks').appendChild(f);
+    }
+    else if (m.kind === 'review') {
+      dlog('DP at ' + Number(m.t).toFixed(1) + ' s: ' + (m.score != null ? m.score + '/10 ' : '') + (m.verdict || '') + ' — ' + (m.text || ''), 'note');
+      const fig = [...$('sm_looks').querySelectorAll('figure')].find(x => x.dataset.t === Number(m.t).toFixed(2));
+      if (fig) fig.querySelector('figcaption').innerHTML = '<b>' + (m.score != null ? m.score + '/10 · ' : '') + esc(m.verdict || '') + '</b> ' + esc(m.text || '');
+    }
+    else if (m.kind === 'error') { settled = true; es.close(); dlog(m.text, 'error'); smDirecting = false; $('sm_directbtn').disabled = false; }
+    else if (m.kind === 'done') {
+      settled = true; es.close(); smDirecting = false; $('sm_directbtn').disabled = false;
+      dlog('done: ' + (m.model_calls || 0) + ' model calls, ' + (m.looks || 0) + ' looks, ' + (m.seconds || 0) + ' s' + (m.finished ? '' : ' · the operator ran out of calls'));
+      if (m.notes) $('sm_directnotes').innerHTML = '<h4>The operator\u2019s notes</h4><p>' + esc(m.notes) + '</p>';
+      if (m.timeline) { takeSim(m); loadSims(); }
+    }
+  };
+  es.onerror = () => { es.close(); if (!settled) setTimeout(() => { if (!settled) listenDirect(url); }, 2000); };
+}
+
+let smDirecting = false;
+
+function initSim(id) {
+  initDirect();
+  smJob = id; smCur = null; smRun = null; smBusy = false; smMode = false; smT = 0;
+  if (!$('sm_list')) return;
+  $('sm_open').classList.add('hidden');
+  $('sm_new').onclick = newSim;
+  $('sm_fromreh').onchange = () => { const rid = $('sm_fromreh').value; $('sm_fromreh').value = ''; if (rid) simFromRehearsal(rid); };
+  $('sm_twin').onclick = openInTwin;
+  $('sm_render').onclick = renderMove;
+  if (!smListening) { smListening = true; window.addEventListener('message', simMessage); }
+  loadSims();
+  loadSimRehearsals();
+}
+
+function loadSims() {
+  fetch('/sims/' + smJob).then(r => r.json()).then(r => {
+    smSims = r.sims || []; paintSims();
+    // Coming back to a room shows its last camera move without a click.
+    if (!smCur && smSims.length) openSim(smSims[smSims.length - 1].sim_id);
+  }).catch(() => {});
+}
+
+function loadSimRehearsals() {
+  fetch('/rehearsals/' + smJob).then(r => r.json()).then(r => {
+    const done = (r.rehearsals || []).filter(x => x.state === 'done');
+    $('sm_fromreh').innerHTML = '<option value="">from rehearsal ▾</option>' + done.map(x =>
+      '<option value="' + x.rehearsal_id + '">' + esc(x.title) + ' · ' + x.shots + ' setups · ' + Math.round(x.duration_s || 0) + ' s</option>').join('');
+    $('sm_fromreh').disabled = !done.length;
+  }).catch(() => {});
+}
+
+function paintSims() {
+  const box = $('sm_list');
+  if (!smSims.length) { box.innerHTML = '<span class="dim">no camera moves yet: start one, or build one from a rehearsal</span>'; return; }
+  box.innerHTML = smSims.map(s =>
+    '<span class="sm_item' + (smCur && smCur.timeline.id === s.sim_id ? ' active' : '') + '" data-open="' + s.sim_id + '"><b>' + esc(s.title) + '</b><span class="dim">' + esc(s.rig) + ' · ' + Number(s.duration_s || 0).toFixed(1) + ' s</span>'
+    + (s.problems ? '<span class="sm_probs">' + s.problems + ' problem' + (s.problems === 1 ? '' : 's') + '</span>' : '')
+    + '<button class="st_x" data-del="' + s.sim_id + '" title="delete">×</button></span>').join('');
+  box.querySelectorAll('[data-open]').forEach(el => el.onclick = e => { if (e.target.dataset.del) return; openSim(el.dataset.open); });
+  box.querySelectorAll('[data-del]').forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    fetch('/sim/' + smJob + '/' + b.dataset.del, {method: 'DELETE'}).then(() => {
+      if (smCur && smCur.timeline.id === b.dataset.del) { smCur = null; $('sm_open').classList.add('hidden'); if (smMode) postViewer({type: 'locaish:sim-mode', on: false}); }
+      loadSims();
+    });
+  });
+}
+
+function simFail(text) { $('sm_status').textContent = text || ''; smBusy = false; }
+
+function newSim() {
+  if (smBusy) return;
+  smBusy = true; $('sm_status').textContent = 'placing a tripod where the sweep says a camera can stand…';
+  fetch('/sims/' + smJob, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'})
+    .then(r => r.json()).then(r => { if (r.error) return simFail(r.error); simFail(''); takeSim(r); loadSims(); }).catch(e => simFail(String(e)));
+}
+
+function simFromRehearsal(rid) {
+  if (smBusy) return;
+  smBusy = true; $('sm_status').textContent = 'turning the rehearsal into a timeline…';
+  fetch('/sims/' + smJob, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'})
+    .then(r => r.json()).then(r => {
+      if (r.error) throw new Error(r.error);
+      return fetch('/sim/' + smJob + '/' + r.timeline.id + '/from-rehearsal', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({rehearsal_id: rid})});
+    }).then(r => r.json()).then(r => { if (r.error) return simFail(r.error); simFail(''); takeSim(r); loadSims(); }).catch(e => simFail(String(e)));
+}
+
+function openSim(id) {
+  fetch('/sim/' + smJob + '/' + id).then(r => r.json()).then(r => { if (r.error) return simFail(r.error); takeSim(r); paintSims(); }).catch(e => simFail(String(e)));
+}
+
+function takeSim(r) {
+  smCur = r; smT = 0; smRun = null;
+  $('sm_video').innerHTML = ''; $('sm_log').innerHTML = '';
+  $('sm_open').classList.remove('hidden');
+  paintSim();
+  if (smMode) postViewer({type: 'locaish:sim', timeline: smCur.timeline, evaluation: smCur.evaluation});
+  refreshSimFrame(0);
+}
+
+function fmtVal(v) {
+  if (v == null) return '—';
+  if (typeof v === 'number') return Number.isInteger(v) ? String(v) : v.toFixed(2);
+  if (Array.isArray(v)) return v.map(fmtVal).join(', ');
+  if (typeof v === 'object') return Object.keys(v).map(k => k.replace(/_/g, ' ') + ' ' + fmtVal(v[k])).join(' · ');
+  return String(v);
+}
+
+function paintSim() {
+  const tl = smCur.timeline, ev = smCur.evaluation || {};
+  const rig = tl.rig || {}, params = rig.params || {};
+  const gear = Object.keys(params).map(k => k.replace(/_/g, ' ') + ' ' + fmtVal(params[k])).join(' · ');
+  $('sm_rig').innerHTML = '<b>' + esc(tl.title || 'Camera move') + '</b> · ' + esc(rig.kind || 'tripod') + ' · ' + Number(tl.duration_s || 0).toFixed(1) + ' s at ' + (tl.fps || 24) + ' fps · ' + esc(String(tl.sensor || '')) + ' f/' + (tl.aperture_f || '')
+    + (gear ? '<div class="dim">' + esc(gear) + '</div>' : '') + (smCur.rig_text ? '<p>' + esc(smCur.rig_text) + '</p>' : '')
+    + paramDocs(smCur.rig_info)
+    + '<div class="dim">' + ((tl.camera || {}).keys || []).length + ' camera key(s) · ' + Object.keys(tl.actors || {}).length + ' actor(s) · ' + (tl.pieces || []).length + ' moved piece(s)</div>';
+  const segs = ev.segments || [];
+  $('sm_problems').innerHTML = segs.length ? segs.map(s => {
+    const sev = String(s.severity || '').toLowerCase();
+    const cls = /red|bad|error|fail/.test(sev) ? 'red' : (/amber|warn/.test(sev) ? 'amber' : '');
+    return '<div class="sm_seg ' + cls + '"><b>' + Number(s.t_start).toFixed(1) + '–' + Number(s.t_end).toFixed(1) + ' s</b><span>' + esc(s.text || '') + '</span></div>';
+  }).join('') : '<div class="dim">the move works the whole way</div>';
+  // The summary: what the rig line does not already say, the headline numbers first.
+  const sum = ev.summary || {};
+  const skip = new Set(['title', 'rig', 'duration_s', 'fps', 'frames', 'worst_severity', 'notes']);
+  const lead = {camera_travel_m: 'camera travels', size_range: 'size range', distance_range_m: 'distance to subject, m', focal_range_mm: 'lenses, mm', worst: 'worst problem'};
+  const keys = Object.keys(lead).filter(k => k in sum).concat(Object.keys(sum).filter(k => !(k in lead) && !skip.has(k)));
+  $('sm_summary').innerHTML = keys.filter(k => sum[k] != null && !(Array.isArray(sum[k]) && !sum[k].length)).map(k =>
+    '<div>' + esc(lead[k] || k.replace(/_/g, ' ')) + ' <b>' + esc(k === 'camera_travel_m' ? Number(sum[k]).toFixed(2) + ' m' : fmtVal(sum[k])) + '</b></div>').join('');
+  const base = '/sim-file/' + smJob + '/' + tl.id + '/';
+  $('sm_links').innerHTML = '<a href="' + base + 'blender.py">Blender (.py)</a><a href="' + base + 'room.glb">Room (.glb)</a><a href="' + base + 'timeline.json">Timeline (.json)</a><a href="' + base + 'evaluation.json" target="_blank">Evaluation (.json)</a>';
+  $('sm_twin').textContent = smMode ? 'Editing in the twin' : 'Open in the twin';
+}
+
+function paramDocs(info) {
+  const docs = info && info.params;
+  if (!docs || typeof docs !== 'object') return '';
+  return Object.keys(docs).map(k => {
+    const d = docs[k] || {};
+    return '<div class="dim">' + esc(k.replace(/_/g, ' ')) + (d.default != null ? ' · default ' + esc(fmtVal(d.default)) : '') + (d.doc ? ' · ' + esc(d.doc) : '') + '</div>';
+  }).join('');
+}
+
+function simFrameAt(t) {
+  const ev = smCur && smCur.evaluation, frames = ev && ev.frames || [];
+  if (!frames.length) return null;
+  const fps = ev.fps || (ev.summary && ev.summary.fps) || (smCur.timeline.fps || 24);
+  const i = Math.max(0, Math.min(frames.length - 1, Math.round(t * fps)));
+  return frames[i];
+}
+
+function refreshSimFrame(t) {
+  if (!smCur) return;
+  clearTimeout(smFrameTimer);
+  smFrameTimer = setTimeout(() => {
+    const id = smCur.timeline.id;
+    $('sm_frameimg').src = '/sim-frame/' + smJob + '/' + id + '?t=' + t.toFixed(3) + '&w=640&v=' + encodeURIComponent(smCur.evaluation && smCur.evaluation.frames ? smCur.evaluation.frames.length : 0);
+    const f = simFrameAt(t);
+    $('sm_frametext').innerHTML = f ? 't ' + Number(f.t).toFixed(2) + ' s · ' + Math.round(f.focal_mm || 0) + ' mm · ' + esc(String(f.shot_size || '')) + (f.distance_m != null ? ' · ' + Number(f.distance_m).toFixed(1) + ' m' : '')
+      + ((f.problems || []).length ? ' · <span class="error">' + f.problems.map(esc).join('; ') + '</span>' : '') : '';
+  }, 300);
+}
+
+function openInTwin() {
+  if (!smCur) return;
+  smMode = true;
+  postViewer({type: 'locaish:sim-mode', on: true});
+  postViewer({type: 'locaish:sim', timeline: smCur.timeline, evaluation: smCur.evaluation});
+  postViewer({type: 'locaish:sim-rig', rig: smCur.timeline.rig});
+  $('sm_twin').textContent = 'Editing in the twin';
+  const vw = $('viewerwrap'); if (vw) vw.scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+
+function simMessage(ev) {
+  const m = ev.data;
+  if (!m || typeof m.type !== 'string' || !m.type.startsWith('locaish:sim') || !smCur) return;
+  if (m.type === 'locaish:sim-edit' && m.timeline) {
+    const id = smCur.timeline.id;
+    fetch('/sim/' + smJob + '/' + id, {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({timeline: m.timeline})})
+      .then(r => r.json()).then(r => {
+        if (r.error) { $('sm_status').textContent = r.error; return; }
+        $('sm_status').textContent = '';
+        smCur = Object.assign(smCur, r);
+        paintSim(); loadSims();
+        postViewer({type: 'locaish:sim', timeline: smCur.timeline, evaluation: smCur.evaluation});
+        refreshSimFrame(smT);
+      }).catch(e => { $('sm_status').textContent = String(e); });
+  } else if (m.type === 'locaish:sim-time') {
+    smT = Number(m.t) || 0;
+    clearTimeout(smFigTimer);
+    smFigTimer = setTimeout(() => {
+      fetch('/sim/' + smJob + '/' + smCur.timeline.id + '/figures?t=' + smT.toFixed(3)).then(r => r.json())
+        .then(r => { if (r.figures) postViewer({type: 'locaish:figures', figures: r.figures}); }).catch(() => {});
+    }, 150);
+    clearTimeout(smFrameTimer);
+    smFrameTimer = setTimeout(() => refreshSimFrame(smT), 400);
+  } else if (m.type === 'locaish:sim-mode') {
+    smMode = !!m.on;
+    $('sm_twin').textContent = smMode ? 'Editing in the twin' : 'Open in the twin';
+  } else if (m.type === 'locaish:sim-select') {
+    const k = ((smCur.timeline.camera || {}).keys || [])[m.key_index];
+    if (k) { smT = Number(k.t) || 0; refreshSimFrame(smT); }
+  }
+}
+
+function renderMove() {
+  if (!smCur || smRun) return;
+  const id = smCur.timeline.id;
+  $('sm_render').disabled = true; $('sm_video').innerHTML = ''; $('sm_log').innerHTML = '';
+  smLog('rendering the move…');
+  fetch('/sim/' + smJob + '/' + id + '/render', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({width_px: 640})})
+    .then(r => r.json()).then(r => {
+      if (!r.run) { smLog(r.error || 'could not start', 'error'); $('sm_render').disabled = false; return; }
+      smRun = r.run;
+      const es = new EventSource(r.events);
+      es.onmessage = e => {
+        const m = JSON.parse(e.data);
+        if (m.kind === 'stage') smLog(m.text);
+        else if (m.kind === 'progress') { smLog(m.text); if (m.frame) $('sm_frameimg').src = m.frame; }
+        else if (m.kind === 'done') {
+          es.close(); smRun = null; $('sm_render').disabled = false;
+          smLog((m.frames || 0) + ' frames in ' + (m.seconds || 0) + ' s' + (m.note ? ' · ' + m.note : ''));
+          if (m.mp4) $('sm_video').innerHTML = '<video controls src="' + m.mp4 + '?v=' + Date.now() + '"></video><div class="st_links"><a href="' + m.mp4 + '" download="move.mp4">Download move.mp4</a></div>';
+          refreshSimFrame(smT);
+        } else if (m.kind === 'error') { es.close(); smRun = null; $('sm_render').disabled = false; smLog(m.text, 'error'); }
+      };
+      es.onerror = () => { es.close(); smRun = null; $('sm_render').disabled = false; };
+    }).catch(e => { smLog(String(e), 'error'); $('sm_render').disabled = false; });
+}
+
+function smLog(text, cls) {
+  const d = document.createElement('div'); d.textContent = text; if (cls) d.className = cls;
+  $('sm_log').appendChild(d); $('sm_log').scrollTop = 1e9;
+}
