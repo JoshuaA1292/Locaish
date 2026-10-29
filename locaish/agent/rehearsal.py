@@ -535,5 +535,5 @@ def write_notes(rehearsal: reh.Rehearsal, sched: reh.Schedule | None, placements
     text = _NOTES_PROMPT.format(title=rehearsal.scene.title, facts="\n".join(facts))
     from ..meta.client import model_for
 
-    res = client.chat([{"role": "user", "content": text}], model=model or model_for("breakdown"), max_tokens=400)
+    res = client.chat([{"role": "user", "content": text}], model=model or model_for("breakdown"), max_tokens=700)
     return (res.text or "").strip()

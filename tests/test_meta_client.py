@@ -90,7 +90,8 @@ def test_generate_image_decodes_b64_and_uses_edit_path_with_references():
     out = c.generate_image("a room", references=[png, png])
     assert out == png
     assert seen["path"].endswith("/images/edits")
-    assert len(seen["body"]["image"]) == 2 and seen["body"]["model"] == mc.DEFAULT_MODELS["image"]
+    assert len(seen["body"]["images"]) == 2 and seen["body"]["model"] == mc.DEFAULT_MODELS["image"]
+    assert seen["body"]["images"][0]["image_url"].startswith("data:image/png;base64,")
     c.generate_image("a room")
     assert seen["path"].endswith("/images/generations")
 

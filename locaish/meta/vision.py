@@ -141,7 +141,16 @@ def detect_objects(image: bytes, *, client: Any = None, model: str | None = None
     from ..product.labels import KINDS, _PROMPT, normalise
 
     client = _meta_client(client)
-    data = client.chat_json(_PROMPT, [image], model=model or _client.model_for("vision"))
+    # The API's JSON mode wants an object at the top, and asked for "a list"
+    # Muse Spark answers with the first object alone; wrapping the list under
+    # one key gives it a shape it keeps to.
+    data = client.chat_json(
+        _PROMPT + '\nWrap the list as {"objects": [ ... ]} and include every object you can see.',
+        [image], model=model or _client.model_for("vision"), max_tokens=3000,
+    )
+    if isinstance(data, dict) and "box_2d" in data and not any(
+            isinstance(data.get(k), list) for k in ("objects", "items", "detections", "labels", "results")):
+        data = [data]
     if isinstance(data, dict):
         inner = None
         for key in ("objects", "items", "detections", "labels", "results"):

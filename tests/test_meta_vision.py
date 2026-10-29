@@ -106,7 +106,7 @@ def test_detect_objects_normalises_boxes_and_shapes():
     for o in a + b + c:
         assert set(o) == {"label", "kind", "box"} and len(o["box"]) == 4
     # Same prompt as the Gemini path, one image per call, the vision model.
-    assert all(e["text"] == L._PROMPT and e["images"] == 1 for e in fake.log)
+    assert all(e["text"].startswith(L._PROMPT) and e["images"] == 1 for e in fake.log)
     assert fake.log[0]["model"] == model_for("vision")
 
 

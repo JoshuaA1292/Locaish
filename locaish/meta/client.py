@@ -25,6 +25,7 @@ import base64
 import io
 import json
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -42,6 +43,19 @@ DEFAULT_MODELS: dict[str, str] = {
 }
 
 _TIMEOUT_S = float(os.environ.get("LOCAISH_META_TIMEOUT_S", "120"))
+
+# Muse Spark and Muse Wonder reason before they answer, and the reasoning
+# is billed as output and counted against max_tokens: a 20-token budget
+# comes back empty with finish_reason "length". So a caller's max_tokens is
+# the budget for the *answer*, and this allowance is added for the thinking;
+# the effort knob (minimal, low, medium, high, xhigh, max) keeps the
+# thinking short where the job is reading a frame or a form.
+REASONING_ALLOWANCE = int(os.environ.get("LOCAISH_META_REASONING_ALLOWANCE", "2048"))
+DEFAULT_REASONING = {
+    "vision": os.environ.get("LOCAISH_META_VISION_EFFORT", "low"),
+    "breakdown": os.environ.get("LOCAISH_META_BREAKDOWN_EFFORT", "low"),
+    "agent": os.environ.get("LOCAISH_META_AGENT_EFFORT", "medium"),
+}
 _RETRIES = 2
 _RETRY_STATUSES = {408, 409, 425, 429, 500, 502, 503, 504}
 
@@ -140,6 +154,14 @@ def tool_schema(name: str, description: str, parameters: dict[str, Any]) -> dict
         "type": "function",
         "function": {"name": name, "description": description, "parameters": parameters},
     }
+
+
+def _default_effort(model: str) -> str | None:
+    """The reasoning effort for a model id, by the job it is registered for."""
+    for job, mid in DEFAULT_MODELS.items():
+        if model_for(job) == model or mid == model:
+            return DEFAULT_REASONING.get(job) or None
+    return DEFAULT_REASONING.get("vision") if "spark" in model else DEFAULT_REASONING.get("agent")
 
 
 def parse_json_text(text: str) -> Any:
@@ -255,9 +277,10 @@ class MetaClient:
         if response_format:
             body["response_format"] = response_format
         if max_tokens:
-            body["max_tokens"] = max_tokens
-        if reasoning_effort:
-            body["reasoning_effort"] = reasoning_effort
+            body["max_tokens"] = int(max_tokens) + REASONING_ALLOWANCE
+        effort = reasoning_effort or _default_effort(body["model"])
+        if effort:
+            body["reasoning_effort"] = effort
         data = self._post("/chat/completions", body)
         return _parse_chat(data)
 
@@ -314,7 +337,9 @@ class MetaClient:
         if size:
             body["size"] = size
         if references:
-            body["image"] = [data_url(r) for r in references]
+            # The JSON form of the edit endpoint takes `images`, each an
+            # image_url item; `image` is the multipart form's field.
+            body["images"] = [{"image_url": data_url(r)} for r in references]
             path = os.environ.get("LOCAISH_META_IMAGE_EDIT_PATH", "/images/edits")
         else:
             path = os.environ.get("LOCAISH_META_IMAGE_PATH", "/images/generations")
@@ -345,6 +370,9 @@ class MetaClient:
             content.append({"type": "input_image", "image_url": data_url(f), "frame": i})
         body = {"model": model or model_for("segment"), "input": [{"role": "user", "content": content}]}
         data = self._post("/responses", body)
+        text = _responses_text(data)
+        if text and "<|box" in text:
+            return parse_sam_text(text, default_label=prompt)
         return parse_detections(data, default_label=prompt)
 
 
@@ -402,6 +430,109 @@ def _image_bytes(data: dict[str, Any]) -> bytes:
             r.raise_for_status()
             return r.content
     raise MetaError(f"image answer held no image: {json.dumps(data)[:300]}")
+
+
+def _responses_text(data: Any) -> str:
+    """The concatenated output_text of a Responses-protocol answer."""
+    parts: list[str] = []
+    for item in (data.get("output") or []) if isinstance(data, dict) else []:
+        for c in (item.get("content") or []) if isinstance(item, dict) else []:
+            if isinstance(c, dict) and c.get("type") in ("output_text", "text") and c.get("text"):
+                parts.append(str(c["text"]))
+    return "".join(parts)
+
+
+_BOX_RE = re.compile(r"<\|box;([^|]*)\|>")
+_MASK_RE = re.compile(r"<\|mask;([^|]*)\|>")
+_FIELD_RE = re.compile(r"([a-z0-9]+)=([^;]*)")
+
+
+def parse_sam_text(text: str, *, default_label: str = "") -> list[Detection]:
+    """SAM 3.1 answers in a token grammar, not JSON: for each match a
+    `<|box;x1=..;y1=..;x2=..;y2=..;w=W;h=H|>` in pixels of a WxH frame,
+    followed by `<|mask;x=..;y=..;data=h,w,<rle>|>`, the mask of the box's
+    crop in COCO's compressed run-length string, placed at (x, y) inside the
+    box. Boxes come back normalised and the mask as a full-frame PNG, white
+    where the thing is, so the rest of the product reads them as any other
+    detection."""
+    out: list[Detection] = []
+    boxes = [(m.start(), m.group(1)) for m in _BOX_RE.finditer(text)]
+    masks = [(m.start(), m.group(1)) for m in _MASK_RE.finditer(text)]
+    for i, (pos, fields) in enumerate(boxes):
+        f = dict(_FIELD_RE.findall(fields))
+        try:
+            x1, y1, x2, y2 = (float(f[k]) for k in ("x1", "y1", "x2", "y2"))
+            W, H = float(f["w"]), float(f["h"])
+        except (KeyError, ValueError):
+            continue
+        if W <= 0 or H <= 0:
+            continue
+        box = (max(0.0, x1 / W), max(0.0, y1 / H), min(1.0, x2 / W), min(1.0, y2 / H))
+        # The mask that follows this box and precedes the next one.
+        nxt = boxes[i + 1][0] if i + 1 < len(boxes) else len(text) + 1
+        mfields = next((mf for mp, mf in masks if pos < mp < nxt), None)
+        mask_png = None
+        if mfields is not None:
+            mf = dict(_FIELD_RE.findall(mfields.split("data=", 1)[0])) if "data=" in mfields else {}
+            data = mfields.split("data=", 1)[1] if "data=" in mfields else ""
+            try:
+                mask_png = _sam_mask_png(data, int(round(x1)), int(round(y1)), int(round(x2)), int(round(y2)),
+                                         int(W), int(H), int(float(mf.get("x", 0))), int(float(mf.get("y", 0))))
+            except Exception:  # noqa: BLE001 - a mask that will not decode leaves the box
+                mask_png = None
+        out.append(Detection(label=default_label, box=box, score=1.0, mask_png=mask_png))
+    return out
+
+
+def _coco_rle_counts(s: str) -> list[int]:
+    """pycocotools' string encoding of run lengths: 5-bit groups, LEB-style,
+    with every third count stored as a delta from the one two back."""
+    counts: list[int] = []
+    p, m = 0, 0
+    n = len(s)
+    while p < n:
+        x, k, more = 0, 0, 1
+        while more:
+            c = ord(s[p]) - 48
+            x |= (c & 0x1F) << (5 * k)
+            more = c & 0x20
+            p += 1
+            k += 1
+            if not more and (c & 0x10):
+                x |= -1 << (5 * k)
+        if m > 2:
+            x += counts[m - 2]
+        counts.append(x)
+        m += 1
+    return counts
+
+
+def _sam_mask_png(data: str, x1: int, y1: int, x2: int, y2: int, W: int, H: int, ox: int = 0, oy: int = 0) -> bytes:
+    import numpy as np
+    from PIL import Image
+
+    head, rle = data.split(",", 2)[:2], data.split(",", 2)[2]
+    h, w = int(head[0]), int(head[1])
+    counts = _coco_rle_counts(rle)
+    flat = np.zeros(h * w, dtype=np.uint8)
+    pos, val = 0, 0
+    for c in counts:
+        c = max(0, int(c))
+        if val:
+            flat[pos : pos + c] = 1
+        pos += c
+        val ^= 1
+        if pos >= h * w:
+            break
+    crop = flat.reshape((w, h)).T          # COCO lays the mask out column-major
+    full = np.zeros((H, W), dtype=np.uint8)
+    X0, Y0 = x1 + ox, y1 + oy
+    hh, ww = min(h, H - Y0), min(w, W - X0)
+    if hh > 0 and ww > 0:
+        full[Y0 : Y0 + hh, X0 : X0 + ww] = crop[:hh, :ww]
+    buf = io.BytesIO()
+    Image.fromarray(full * 255, mode="L").save(buf, format="PNG", optimize=True)
+    return buf.getvalue()
 
 
 def parse_detections(data: Any, *, default_label: str = "") -> list[Detection]:

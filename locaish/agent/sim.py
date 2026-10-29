@@ -39,8 +39,8 @@ import numpy as np
 from ..meta.client import ChatResult, model_for, tool_schema, user_message
 from ..types import Twin
 
-MAX_MODEL_CALLS = 14
-MAX_LOOKS = 4
+MAX_MODEL_CALLS = 24
+MAX_LOOKS = 5
 REVIEW_WIDTH_PX = 640
 
 _SYSTEM = """You are a camera operator and DP building one camera move inside a measured 3D twin of a real room, for a director who told you what the shot is.
