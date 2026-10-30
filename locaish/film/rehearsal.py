@@ -85,6 +85,14 @@ SNAP_RADIUS_M = 0.6
 # Height at which a walking path is checked for things in the way.
 BODY_CHECK_HEIGHT_M = 1.2
 
+# Another actor is an occluder too. A standing body is taken as a vertical
+# cylinder of this radius from the floor to the actor's height; one whose
+# cylinder cuts the camera-to-eyeline segment, nearer the lens than the
+# subject, blocks the shot. One closer than LENS_CLEARANCE_M to the lens fills
+# the frame whatever the lens is pointed at.
+OCCLUDER_RADIUS_M = 0.30
+LENS_CLEARANCE_M = 0.6
+
 # A grip pushing a loaded dolly on track; faster than this is a stunt.
 MAX_DOLLY_SPEED_MPS = 1.5
 
@@ -1100,6 +1108,104 @@ def _a(name: str) -> str:
     return ("an " if low[:1] in "aeiou" else "a ") + low
 
 
+# ---------------------------------------------------------------------------
+# other actors as occluders
+# ---------------------------------------------------------------------------
+
+
+def _xy(p) -> np.ndarray:
+    return np.asarray(p, dtype=np.float64).reshape(-1)[:2]
+
+
+def actor_blocks(
+    cam_xyz,
+    subject_xyz,
+    others: dict[str, tuple[float, float]],
+    *,
+    radius_m: float = OCCLUDER_RADIUS_M,
+    heights: dict[str, float] | None = None,
+    floor_z: float = 0.0,
+) -> list[str]:
+    """Names of the other actors whose bodies cut the camera -> subject eyeline.
+
+    `cam_xyz` is the lens, `subject_xyz` the point it is pointed at (the
+    subject's eyeline); `others` maps every other actor to where they stand
+    (x, y, and anything after is ignored). A body is a vertical cylinder of
+    `radius_m` from `floor_z` up to the actor's height in `heights` (an actor
+    not listed there, or no `heights` at all, is a column the eyeline can
+    never pass over). An actor blocks when the cylinder meets the segment and
+    their centre is nearer the lens than the subject by at least a radius: one
+    standing at the subject's shoulder or behind them is in the frame, not in
+    the way. Pure geometry; the order is nearest-to-the-lens first.
+    """
+    cam = np.asarray(cam_xyz, dtype=np.float64).reshape(-1)
+    subj = np.asarray(subject_xyz, dtype=np.float64).reshape(-1)
+    c2, s2 = cam[:2], subj[:2]
+    axis = s2 - c2
+    length = float(np.linalg.norm(axis))
+    if length <= 1e-9:
+        return []
+    axis = axis / length
+    cz = float(cam[2]) if cam.size > 2 else None
+    sz = float(subj[2]) if subj.size > 2 else None
+    hits: list[tuple[float, str]] = []
+    for name, pos in others.items():
+        d = _xy(pos) - c2
+        along = float(d @ axis)
+        if along < 0.0 or along > length - radius_m:
+            continue
+        across = abs(float(d[0] * axis[1] - d[1] * axis[0]))
+        if across > radius_m:
+            continue
+        if heights is not None and cz is not None and sz is not None:
+            top = floor_z + float(heights.get(name, render.SUBJECT_HEIGHT_M))
+            z_here = cz + (along / length) * (sz - cz)
+            if z_here > top:
+                continue
+        hits.append((along, name))
+    return [name for _, name in sorted(hits)]
+
+
+def actor_too_close(cam_xy, others: dict[str, tuple[float, float]], *, min_m: float = LENS_CLEARANCE_M) -> list[str]:
+    """Other actors within `min_m` of the lens horizontally: they fill the
+    frame whatever it is pointed at. Nearest first."""
+    c2 = _xy(cam_xy)
+    near = []
+    for name, pos in others.items():
+        d = float(np.linalg.norm(_xy(pos) - c2))
+        if d < min_m:
+            near.append((d, name))
+    return [name for _, name in sorted(near)]
+
+
+def _actor_occlusion_problems(st: ShotTiming, sp: ShotSpec, scene: Scene, subj_frames: list[Frame], floor_z: float) -> list[str]:
+    """Per frame of the shot: who walks through the eyeline, who is on the lens."""
+    heights = {n: float(h) for n, h in scene.cast.items()}
+    crossing: dict[str, tuple[float, float]] = {}       # name -> (first t, last t)
+    close: dict[str, tuple[float, float]] = {}          # name -> (nearest d, its t)
+    for fr in subj_frames:
+        others = {n: (x, y) for n, (x, y, _f) in fr.actors.items() if n != sp.subject}
+        if not others:
+            continue
+        cam = fr.camera[0]
+        for name in actor_blocks(cam, fr.camera[1], others, heights=heights, floor_z=floor_z):
+            t0, _ = crossing.get(name, (fr.t, fr.t))
+            crossing[name] = (t0, fr.t)
+        for name in actor_too_close(cam, others):
+            d = float(math.dist(cam[:2], others[name]))
+            if name not in close or d < close[name][0]:
+                close[name] = (d, fr.t)
+    out = []
+    for name, (t0, t1) in sorted(crossing.items(), key=lambda kv: kv[1]):
+        s = f"at {t0:.1f} s {name} crosses between the camera and {sp.subject}"
+        if t1 > t0 + DT_S / 2:
+            s += f" and stays there until {t1:.1f} s"
+        out.append(s)
+    for name, (d, t) in sorted(close.items(), key=lambda kv: kv[1][1]):
+        out.append(f"at {t:.1f} s {name} is {d:.1f} m from the lens and fills the frame")
+    return out
+
+
 def _check_shot(st: ShotTiming, sp: ShotSpec, scene: Scene, maps, occupancy, frames, floor_z, stature_m) -> None:
     """The physical questions, answered by the same code the planner uses."""
     grid, origin, cell = occupancy
@@ -1123,6 +1229,9 @@ def _check_shot(st: ShotTiming, sp: ShotSpec, scene: Scene, maps, occupancy, fra
         if not space.visible(grid, origin, cell, fr.camera[0], fr.camera[1]):
             st.problems.append(f"at {fr.t:.1f} s something is between the camera and {sp.subject}")
             break
+    # The other actors, every frame: the room is not the only thing that can
+    # stand between the lens and the subject.
+    st.problems.extend(_actor_occlusion_problems(st, sp, scene, subj_frames, floor_z))
     # Record the subject's start position for the plan's columns.
     sx, sy, _ = subj_frames[0].actors[sp.subject]
     st.setup.update({"subj_x": round(sx, 3), "subj_y": round(sy, 3),

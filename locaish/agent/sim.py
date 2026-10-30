@@ -41,12 +41,21 @@ from ..types import Twin
 
 MAX_MODEL_CALLS = 24
 MAX_LOOKS = 5
+MAX_WATCHES = 2
+FILMSTRIP_FRAMES = 8
 REVIEW_WIDTH_PX = 640
 
 _SYSTEM = """You are a camera operator and DP building one camera move inside a measured 3D twin of a real room, for a director who told you what the shot is.
 You work only through the tools. The room, the rigs and the physics are the engine's; your job is taste: where the camera starts and ends, the lens, the height, the rig that gives that move, and how the actors sit in frame.
-Method: read the room (describe_room), choose a rig (set_rig), write the camera keys (set_camera_keys) and the actors' marks (set_actor_keys) in twin metres, then evaluate. Read every problem the evaluation reports and fix the move until no frame fails; prefer fewer, better keys; look at one or two frames (look) before you finish. Keep the move to the duration the director asked for. When the move holds, call finish with one paragraph for the director: what the move is, what it costs, what to watch on the day.
+Method: read the room (describe_room), choose a rig (set_rig), write the camera keys (set_camera_keys) and the actors' marks (set_actor_keys) in twin metres, then evaluate. Read every problem the evaluation reports and fix the move until no frame fails; prefer fewer, better keys; then watch the whole move (watch) and look at one or two frames (look), and act on what the DP says before you finish. A push-in should end on the size the director named, never with the subject overflowing the frame; keep headroom and look room; a non-subject actor must not stand between the lens and the subject. Keep the move to the duration the director asked for. When the move holds, call finish with one paragraph for the director: what the move is, what it costs, what to watch on the day.
 Rules: keys use absolute twin coordinates as the engine reports them (z is height above the floor plus floor_z, the engine tells you floor_z); subjects are actors by name; never claim a frame holds that the engine said fails; never invent a rig the engine does not list."""
+
+_WATCH_PROMPT = """You are a DP watching a planned camera move in a real room, shown as a filmstrip of {n} frames left to right, top to bottom, each with its time, lens and shot size written under it. The room is rendered from its scan; the actors are coloured stand-in figures at their real heights.
+The move the director asked for: {move}. Rig: {rig}. Duration {duration:.1f} s. Engine problems: {problems}.
+Judge the MOVE, not one frame: does the framing develop the way the director wants, is the speed right for the duration, does the subject stay well placed through it, what ends up behind them, where does it get too tight or too loose. Answer JSON: {{"score": 1-10, "verdict": "keep|adjust|reject", "notes": "<three sentences on the move; name a concrete change to the keys, the lens or the duration if adjust>"}}"""
+
+_VIDEO_PROMPT = """You are a DP watching a previsualisation of a camera move in a real room, rendered from a 3D scan with the actors as coloured stand-in figures. The move: {move}. Rig: {rig}, {duration:.1f} s, {focal} mm.
+Describe the move in two sentences (what the camera does, how the framing changes), then judge it: speed and smoothness, how the subject sits in frame through the move, what is behind them, and one concrete change. JSON: {{"description": str, "score": 1-10, "verdict": "keep|adjust|reject", "notes": str}}"""
 
 _DP_PROMPT = """You are a DP looking at one frame of a planned camera move in a real room. The frame is rendered from the room's scan with the actors drawn as coloured figures at their real heights.
 The move: {move}. This frame: t = {t:.1f} s, {focal:.0f} mm, {size}, subject {subject} at {distance:.1f} m. Engine problems on this frame: {problems}.
@@ -90,6 +99,7 @@ class _Operator:
         self.timeline = copy.deepcopy(timeline)
         self.evaluation: dict | None = None
         self.looks = 0
+        self.watches = 0
         self.notes = ""
         self.finished = False
         self._maps = None
@@ -242,6 +252,72 @@ class _Operator:
         self.on_event({"kind": "review", "t": fr["t"], "score": out["score"], "verdict": out["verdict"], "text": out["notes"]})
         return out
 
+    def watch(self) -> dict:
+        """The DP watches the whole move as a filmstrip: eight frames across
+        the duration tiled in one picture with their times and lenses, read
+        for how the framing develops rather than how one frame sits."""
+        if self.evaluation is None:
+            return {"error": "evaluate first"}
+        if self.watches >= MAX_WATCHES:
+            return {"error": f"you have watched {MAX_WATCHES} times; fix the move or finish"}
+        frames = self.evaluation.get("frames") or []
+        if len(frames) < 2:
+            return {"error": "no frames"}
+        try:
+            sheet, picked = self.filmstrip(frames)
+        except Exception as exc:  # noqa: BLE001
+            return {"error": f"could not render the filmstrip: {type(exc).__name__}: {exc}"}
+        self.watches += 1
+        if self.workdir is not None:
+            p = Path(self.workdir) / "looks" / f"watch_{self.watches:02d}.png"
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(sheet)
+            self.on_event({"kind": "watch", "file": p.name, "frames": [f["t"] for f in picked]})
+        segs = self.evaluation.get("segments") or []
+        prompt = _WATCH_PROMPT.format(
+            n=len(picked), move=self.instruction or self.timeline.get("title") or "the move",
+            rig=(self.timeline.get("rig") or {}).get("kind", "?"), duration=float(self.timeline.get("duration_s") or 0),
+            problems="; ".join(f"{g['t_start']:.1f}-{g['t_end']:.1f}s {g['text']}" for g in segs[:6]) or "none",
+        )
+        try:
+            data = self.client.chat_json(prompt, images=[sheet], model=model_for("vision"))
+        except Exception as exc:  # noqa: BLE001
+            return {"error": f"the DP could not watch: {exc}"}
+        if not isinstance(data, dict):
+            data = {"notes": str(data)}
+        out = {"score": data.get("score"), "verdict": data.get("verdict"), "notes": data.get("notes"),
+               "frames_shown": [round(float(f["t"]), 2) for f in picked]}
+        self.on_event({"kind": "review", "t": None, "score": out["score"], "verdict": out["verdict"],
+                       "text": out["notes"], "scope": "move"})
+        return out
+
+    def filmstrip(self, frames: list[dict], *, n: int = FILMSTRIP_FRAMES, width_px: int = 480) -> tuple[bytes, list[dict]]:
+        """Eight frames across the move, tiled 4 x 2 with a caption each."""
+        from PIL import Image, ImageDraw
+
+        idx = np.linspace(0, len(frames) - 1, min(n, len(frames))).round().astype(int)
+        picked = [frames[int(i)] for i in idx]
+        tiles = []
+        for fr in picked:
+            png = self.render_frame(fr, width_px=width_px)
+            im = Image.open(io.BytesIO(png)).convert("RGB")
+            cap = Image.new("RGB", (im.width, 22), (12, 14, 18))
+            d = ImageDraw.Draw(cap)
+            d.text((6, 5), f"t {float(fr['t']):.1f}s  {float(fr.get('focal_mm') or 0):.0f}mm  {fr.get('shot_size') or ''}  "
+                           f"{float(fr.get('distance_m') or 0):.1f}m", fill=(230, 230, 230))
+            tile = Image.new("RGB", (im.width, im.height + cap.height))
+            tile.paste(im, (0, 0)); tile.paste(cap, (0, im.height))
+            tiles.append(tile)
+        cols = 4
+        rows = (len(tiles) + cols - 1) // cols
+        w, h = tiles[0].size
+        sheet = Image.new("RGB", (cols * w, rows * h), (10, 12, 15))
+        for i, t in enumerate(tiles):
+            sheet.paste(t, ((i % cols) * w, (i // cols) * h))
+        buf = io.BytesIO()
+        sheet.save(buf, format="PNG")
+        return buf.getvalue(), picked
+
     def finish(self, notes: str) -> dict:
         self.notes = str(notes or "").strip()
         self.finished = True
@@ -284,11 +360,22 @@ class _Operator:
 
         floor_z = float(self.twin.structure.floor_z)
         figs = []
+        try:
+            from ..product import figures as figmod
+        except ImportError:  # the articulated figures are optional until they land
+            figmod = None
         for i, (name, v) in enumerate((fr.get("actors") or {}).items()):
             a = self.actors.get(name)
             if a is None:
                 h = float(((self.timeline.get("actors") or {}).get(name) or {}).get("height_m") or 1.75)
                 a = castmod.Actor(name=name, height_m=h, colour=castmod.PALETTE[i % len(castmod.PALETTE)])
+            if figmod is not None and not getattr(a, "body_path", None):
+                speed = self._actor_speed(name, fr)
+                pose = "walking" if speed > 0.15 else "standing"
+                phase = figmod.walk_phase(float(fr.get("t") or 0.0), speed) if pose == "walking" else 0.0
+                figs.append(figmod.figure_for_actor(a, (float(v[0]), float(v[1])), float(v[2]), floor_z,
+                                                    pose=pose, phase=phase))
+                continue
             figs.append(castmod.figure(a, (float(v[0]), float(v[1])), float(v[2]), floor_z,
                                        workdir=self.workdir.parent if self.workdir else None))
         for p in self.pieces:
@@ -298,6 +385,20 @@ class _Operator:
                 except Exception:  # noqa: BLE001
                     continue
         return figs
+
+    def _actor_speed(self, name: str, fr: dict) -> float:
+        """An actor's walking speed at this frame, from the evaluation's neighbours."""
+        frames = (self.evaluation or {}).get("frames") or []
+        if len(frames) < 2:
+            return 0.0
+        t = float(fr.get("t") or 0.0)
+        k = min(range(len(frames)), key=lambda i: abs(float(frames[i]["t"]) - t))
+        j = k + 1 if k + 1 < len(frames) else k - 1
+        a, b = frames[k].get("actors", {}).get(name), frames[j].get("actors", {}).get(name)
+        if not a or not b:
+            return 0.0
+        dt = abs(float(frames[j]["t"]) - float(frames[k]["t"])) or 1.0
+        return float(math.hypot(float(b[0]) - float(a[0]), float(b[1]) - float(a[1])) / dt)
 
     # -- caches --------------------------------------------------------------------
 
@@ -351,6 +452,7 @@ def _tools() -> list[dict]:
             "name": {"type": "string"}, "keys": {"type": "array", "items": akey}, "height_m": {"type": "number"}}, "required": ["name", "keys"]}),
         tool_schema("evaluate", "Solve the rig constraints and check every frame against the room: fit, headroom, sightline, speed, subject in frame. Returns problems by time segment.", {"type": "object", "properties": {}}),
         tool_schema("look", "Render the frame at time t and have a DP read it (headroom, background, whether the move reads). At most four looks.", {"type": "object", "properties": {"t": {"type": "number"}}, "required": ["t"]}),
+        tool_schema("watch", "Have a DP watch the whole move as a filmstrip of eight frames across its duration: how the framing develops, the speed, where it gets too tight. Use after evaluate, before finish. At most two watches.", {"type": "object", "properties": {}}),
         tool_schema("finish", "Done: the move holds. One paragraph for the director.", {"type": "object", "properties": {"notes": {"type": "string"}}, "required": ["notes"]}),
     ]
 
@@ -434,6 +536,8 @@ def _dispatch(op: _Operator, name: str, args: dict) -> dict:
             return op.evaluate()
         if name == "look":
             return op.look(float(args.get("t", 0.0)))
+        if name == "watch":
+            return op.watch()
         if name == "finish":
             return op.finish(str(args.get("notes") or ""))
     except Exception as exc:  # noqa: BLE001 - the model must see why, the run must not die
@@ -448,6 +552,8 @@ def _summarise(name: str, out: dict) -> str:
         return f"evaluate: {out.get('frames')} frames, {out.get('fail_segments')} failing segments, sizes {out.get('sizes')}"
     if name == "look":
         return f"look at {out.get('t')} s: {out.get('score')}/10 {out.get('verdict')}"
+    if name == "watch":
+        return f"watched the move: {out.get('score')}/10 {out.get('verdict')}"
     if name == "set_camera_keys":
         return f"{out.get('keys')} camera keys"
     if name == "set_actor_keys":
@@ -464,3 +570,32 @@ def _summarise(name: str, out: dict) -> str:
 def _short(args: dict) -> dict:
     s = json.dumps(args)
     return args if len(s) < 600 else {"_": s[:600] + "…"}
+
+
+def review_move_video(mp4: bytes, *, client, instruction: str = "", timeline: dict | None = None, model: str | None = None) -> dict:
+    """Muse Spark watches the rendered move as video and answers as a DP.
+
+    The rendered mp4 is the measured previs: the room from its scan, the
+    actors as figures. The answer is a description of what the camera does,
+    a score, a verdict and one concrete change, for the page to show beside
+    the video. Nothing in it changes the timeline; the director decides.
+    """
+    import base64
+
+    tl = timeline or {}
+    keys = (tl.get("camera") or {}).get("keys") or []
+    focal = "/".join(f"{float(k.get('focal_mm') or 0):.0f}" for k in keys[:4]) or "?"
+    prompt = _VIDEO_PROMPT.format(move=instruction or tl.get("title") or "the move",
+                                  rig=(tl.get("rig") or {}).get("kind", "?"),
+                                  duration=float(tl.get("duration_s") or 0), focal=focal)
+    url = "data:video/mp4;base64," + base64.b64encode(mp4).decode("ascii")
+    content = [{"type": "video_url", "video_url": {"url": url}}, {"type": "text", "text": prompt}]
+    res = client.chat([{"role": "user", "content": content}], model=model or model_for("vision"),
+                      response_format={"type": "json_object"}, max_tokens=600)
+    from ..meta.client import parse_json_text
+
+    data = parse_json_text(res.text)
+    if not isinstance(data, dict):
+        data = {"notes": str(data)}
+    return {"description": data.get("description"), "score": data.get("score"), "verdict": data.get("verdict"),
+            "notes": data.get("notes"), "model": res.model or model or model_for("vision"), "provider": "meta"}

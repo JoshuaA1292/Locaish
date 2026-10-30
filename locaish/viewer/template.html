@@ -683,6 +683,40 @@ void main() {
   fragColor = vec4(base * shade, uAlpha);
 }`;
 
+// Figure meshes (the simulator's cast): flat-shaded in one colour. The face
+// normal comes from the position derivatives, so the mesh needs no normals
+// to shade and the parent's meshes shade exactly like the page's own; the
+// vertex normals only drive the silhouette pass, which pushes the mesh out
+// along them by a constant number of pixels before the body is drawn over it.
+const VS_FIG = `#version 300 es
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec3 aNrm;
+uniform mat4 uVP;
+uniform float uPush;   // metres per metre of depth along the normal
+out vec3 vPos;
+void main() {
+  vec4 clip = uVP * vec4(aPos, 1.0);
+  vec3 p = aPos + aNrm * (uPush * max(clip.w, 0.0));
+  vPos = p;
+  gl_Position = uVP * vec4(p, 1.0);
+}`;
+
+const FS_FIG = `#version 300 es
+precision highp float;
+in vec3 vPos;
+uniform vec3 uColour;
+uniform vec3 uLight;   // unit, world, towards the light
+uniform int uLit;      // 0: the silhouette hull, unlit
+out vec4 fragColor;
+void main() {
+  if (uLit == 0) { fragColor = vec4(uColour, 1.0); return; }
+  // Lambert on the face normal: the derivatives give the normal of the side
+  // that faces the eye, which with back faces culled is the outside.
+  vec3 n = normalize(cross(dFdx(vPos), dFdy(vPos)));
+  float lam = max(dot(n, uLight), 0.0);
+  fragColor = vec4(uColour * (0.45 + 0.55 * lam), 1.0);
+}`;
+
 // Gaussian splats, rendered as gaussians: instanced screen-space ellipses
 // with EWA covariance projection, alpha-blended back to front. This is the
 // same picture the splat trainer optimised against, so it is the one view
@@ -790,12 +824,13 @@ let needsRedraw = true;
 const view = mat4(), proj = mat4(), viewProj = mat4();
 let meshTexReady = false;
 
-let progPoints = null, progMesh = null, progFlat = null, progSplat = null;
+let progPoints = null, progMesh = null, progFlat = null, progSplat = null, progFig = null;
 if (gl) {
   progPoints = program(VS_POINTS, FS_POINTS, ["uVP", "uPointScale", "uMaxSize", "uColorMode", "uZSpan"]);
   progMesh = program(VS_MESH, FS_MESH, ["uVP", "uEye", "uUseVertexColor", "uUseTexture", "uTex", "uAlpha"]);
   progFlat = program(VS_FLAT, FS_FLAT, ["uVP", "uAlphaMul", "uEye", "uPull"]);
   progSplat = program(VS_SPLAT, FS_SPLAT, ["uViewM", "uProjM", "uViewport"]);
+  progFig = program(VS_FIG, FS_FIG, ["uVP", "uPush", "uColour", "uLight", "uLit"]);
   gl.enable(gl.DEPTH_TEST);
   gl.depthFunc(gl.LEQUAL);
   gl.clearColor(0.043, 0.047, 0.051, 1.0);
@@ -1922,7 +1957,6 @@ const sim = {
 };
 let simStatic = null, simDyn = null;
 const simFigs = [];
-const simBodyCache = {};
 if (gl) { simStatic = flatBatch(gl.LINES); simDyn = flatBatch(gl.LINES); }
 
 const $s = id => document.getElementById(id);
@@ -2089,7 +2123,7 @@ function simSetTime(t, o) {
   const fi = n ? clamp(Math.round(sim.t * simFps()), 0, n - 1) : 0;
   const changed = fi !== sim.fi || o.force;
   sim.fi = fi;
-  if (changed) { simApplyFrame(); simRebuildDyn(); simRebuildCapsules(); simBarReadout(); }
+  if (changed) { simApplyFrame(); simRebuildDyn(); simRebuildCast(); simBarReadout(); }
   simBarDraw();
   if (!o.silent) simPostTime(o.forcePost);
   needsRedraw = true;
@@ -2517,49 +2551,133 @@ function simRebuildDyn() {
   needsRedraw = true;
 }
 
-/* --- the cast: figures from the studio, or capsules sampled here ---------- */
+/* --- the cast: figure meshes from the studio, or a figure built here ------- */
 
-function mulberry32(a) {
-  return function () {
-    a |= 0; a = a + 0x6D2B79F5 | 0;
-    let t = Math.imul(a ^ a >>> 15, 1 | a);
-    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
-    return ((t ^ t >>> 14) >>> 0) / 4294967296;
-  };
+// A figure is a closed, flat-shaded triangle mesh in the actor's colour: head,
+// torso, limbs. The studio renders the same meshes into its frames, so the
+// twin and the frames agree on where a body is and how much of the room it
+// hides. Without a mesh from the parent the page builds its own articulated
+// figure (below); a parent may also still send point sets, drawn as splats.
+const SIM_FIG_LIGHT = norm3([0.35, -0.45, 0.82]);
+
+// mesh helpers: positions as a flat list, faces wound counter-clockwise seen
+// from outside, so back-face culling hides exactly the far side of a limb
+function MeshBuilder() {
+  const V = [], F = [];
+  const vert = (x, y, z) => { V.push(x, y, z); return V.length / 3 - 1; };
+  const tri = (a, b, c) => { F.push(a, b, c); };
+  const quad = (a, b, c, d) => { tri(a, b, c); tri(a, c, d); };
+  // a frustum box: bottom rectangle at z0 (half-widths w0, d0), top at z1
+  function box(cx, cy, z0, z1, w0, d0, w1, d1) {
+    const b = [vert(cx - w0, cy - d0, z0), vert(cx + w0, cy - d0, z0), vert(cx + w0, cy + d0, z0), vert(cx - w0, cy + d0, z0)];
+    const t = [vert(cx - w1, cy - d1, z1), vert(cx + w1, cy - d1, z1), vert(cx + w1, cy + d1, z1), vert(cx - w1, cy + d1, z1)];
+    quad(b[3], b[2], b[1], b[0]);
+    quad(t[0], t[1], t[2], t[3]);
+    for (let i = 0; i < 4; i++) { const j = (i + 1) % 4; quad(b[i], b[j], t[j], t[i]); }
+  }
+  // a capped cylinder from a to b
+  function cyl(a, b, r, n) {
+    const d = norm3(sub3(b, a));
+    const e1 = norm3(cross3(d, Math.abs(d[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0])), e2 = cross3(d, e1);
+    const ra = [], rb = [];
+    for (let i = 0; i < n; i++) {
+      const c = Math.cos(2 * Math.PI * i / n) * r, s = Math.sin(2 * Math.PI * i / n) * r;
+      const ox = e1[0] * c + e2[0] * s, oy = e1[1] * c + e2[1] * s, oz = e1[2] * c + e2[2] * s;
+      ra.push(vert(a[0] + ox, a[1] + oy, a[2] + oz));
+      rb.push(vert(b[0] + ox, b[1] + oy, b[2] + oz));
+    }
+    const ca = vert(a[0], a[1], a[2]), cb = vert(b[0], b[1], b[2]);
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      quad(ra[i], ra[j], rb[j], rb[i]);
+      tri(ca, ra[j], ra[i]);
+      tri(cb, rb[i], rb[j]);
+    }
+  }
+  // a uv sphere: n segments round, m bands from pole to pole
+  function sphere(c, r, n, m) {
+    const rings = [];
+    for (let i = 1; i < m; i++) {
+      const ph = Math.PI * i / m, z = c[2] - r * Math.cos(ph), rr = r * Math.sin(ph), ring = [];
+      for (let j = 0; j < n; j++) ring.push(vert(c[0] + rr * Math.cos(2 * Math.PI * j / n), c[1] + rr * Math.sin(2 * Math.PI * j / n), z));
+      rings.push(ring);
+    }
+    const lo = vert(c[0], c[1], c[2] - r), hi = vert(c[0], c[1], c[2] + r);
+    for (let j = 0; j < n; j++) {
+      const k = (j + 1) % n;
+      tri(lo, rings[0][k], rings[0][j]);
+      for (let i = 0; i + 1 < rings.length; i++) quad(rings[i][j], rings[i][k], rings[i + 1][k], rings[i + 1][j]);
+      tri(hi, rings[rings.length - 1][j], rings[rings.length - 1][k]);
+    }
+  }
+  return { V, F, vert, tri, quad, box, cyl, sphere };
 }
-// A body in its own frame (u lateral, v forward, z up) scaled to a stature:
-// a head sphere, a tapering torso, two arms and two legs, ~2700 surface
-// samples. Seeded, so the figure does not shimmer frame to frame.
-function simBodyTemplate(h) {
-  const key = h.toFixed(3);
-  if (simBodyCache[key]) return simBodyCache[key];
-  const k = h / 1.75, rnd = mulberry32(7), pts = [];
-  const put = (u, v, z) => pts.push(u, v, z);
-  const r = 0.11 * k, hz = h - r;
-  const nHead = 420;
-  for (let i = 0; i < nHead; i++) {
-    const y = 1 - 2 * (i + 0.5) / nHead, rr = Math.sqrt(Math.max(0, 1 - y * y)), a = i * 2.39996323;
-    put(r * rr * Math.cos(a), r * rr * Math.sin(a), hz + r * y);
-  }
-  for (let i = 0; i < 1000; i++) {
-    const s = rnd(), a = rnd() * Math.PI * 2;
-    const aw = (0.155 + 0.055 * s) * k, bd = 0.10 * k;
-    put(aw * Math.cos(a), bd * Math.sin(a), 0.50 * h + s * 0.34 * h);
-  }
+
+// The page's own figure, in its body frame (u lateral, v forward, z up) for
+// a stature h: a head sphere, neck, tapering torso, pelvis, two arms with
+// hands, two legs with feet -- about 600 triangles, standing. `swing` is the
+// walk, in radians: the left leg forward by that much, the right back, the
+// arms opposite to the leg on their side.
+function simFigureMesh(h, swing) {
+  const k = h / 1.75, m = MeshBuilder();
+  const r = 0.11 * k;
+  m.sphere([0, 0, h - r], r, 14, 9);
+  m.cyl([0, 0, 0.84 * h], [0, 0, h - 1.7 * r], 0.035 * k, 8);
+  m.box(0, 0, 0.50 * h, 0.84 * h, 0.14 * k, 0.085 * k, 0.19 * k, 0.10 * k);
+  m.box(0, 0, 0.44 * h, 0.50 * h, 0.15 * k, 0.10 * k, 0.14 * k, 0.09 * k);
+  const legL = 0.47 * h, armL = 0.33 * h;
   for (const side of [-1, 1]) {
-    for (let i = 0; i < 220; i++) {
-      const s = rnd(), a = rnd() * Math.PI * 2, ra = 0.045 * k;
-      put(side * 0.25 * k + ra * Math.cos(a), ra * Math.sin(a), 0.82 * h - s * 0.36 * h);
-    }
-    for (let i = 0; i < 320; i++) {
-      const s = rnd(), a = rnd() * Math.PI * 2, rl = 0.075 * k;
-      put(side * 0.09 * k + rl * Math.cos(a), rl * Math.sin(a), s * 0.50 * h);
-    }
+    const sw = swing * -side;                    // side -1 is the actor's left: that leg leads by `swing`
+    const hip = [side * 0.09 * k, 0, 0.47 * h];
+    const foot = [hip[0], hip[1] + legL * Math.sin(sw), hip[2] - legL * Math.cos(sw)];
+    // the shin stops at the ankle, inside the foot, so a swung leg's rim does
+    // not poke through the floor
+    m.cyl(hip, [foot[0], foot[1], foot[2] + 0.04 * k], 0.075 * k, 10);
+    m.box(foot[0], foot[1] + 0.05 * k, foot[2] - 0.005 * k, foot[2] + 0.06 * k, 0.05 * k, 0.11 * k, 0.045 * k, 0.10 * k);
+    const sa = -0.8 * sw;
+    const sh = [side * 0.21 * k, 0, 0.82 * h];
+    const hand = [sh[0], sh[1] + armL * Math.sin(sa), sh[2] - armL * Math.cos(sa)];
+    m.cyl(sh, hand, 0.045 * k, 8);
+    m.sphere(hand, 0.045 * k, 8, 4);
   }
-  const tpl = { xyz: new Float32Array(pts), head: nHead };
-  simBodyCache[key] = tpl;
-  return tpl;
+  // mid-stride both legs leave the vertical, so the body drops by what the
+  // planted leg lost in height: the sole stays on the floor
+  const lift = legL * (1 - Math.cos(swing));
+  if (lift > 0) for (let j = 2; j < m.V.length; j += 3) m.V[j] -= lift;
+  return { vertices: new Float32Array(m.V), faces: new Uint32Array(m.F) };
 }
+
+// Area-weighted vertex normals, for the silhouette hull (the shading itself
+// is flat, computed per face in the shader).
+function meshNormals(pos, idx) {
+  const n = new Float32Array(pos.length);
+  for (let f = 0; f + 2 < idx.length; f += 3) {
+    const a = idx[f] * 3, b = idx[f + 1] * 3, c = idx[f + 2] * 3;
+    const ux = pos[b] - pos[a], uy = pos[b + 1] - pos[a + 1], uz = pos[b + 2] - pos[a + 2];
+    const vx = pos[c] - pos[a], vy = pos[c + 1] - pos[a + 1], vz = pos[c + 2] - pos[a + 2];
+    const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    for (const o of [a, b, c]) { n[o] += nx; n[o + 1] += ny; n[o + 2] += nz; }
+  }
+  for (let i = 0; i < n.length; i += 3) {
+    const l = Math.hypot(n[i], n[i + 1], n[i + 2]) || 1;
+    n[i] /= l; n[i + 1] /= l; n[i + 2] /= l;
+  }
+  return n;
+}
+// Six times the signed volume: positive when the faces wind outwards.
+function meshSignedVolume(pos, idx) {
+  let s = 0;
+  for (let f = 0; f + 2 < idx.length; f += 3) {
+    const a = idx[f] * 3, b = idx[f + 1] * 3, c = idx[f + 2] * 3;
+    s += pos[a] * (pos[b + 1] * pos[c + 2] - pos[b + 2] * pos[c + 1])
+       - pos[a + 1] * (pos[b] * pos[c + 2] - pos[b + 2] * pos[c])
+       + pos[a + 2] * (pos[b] * pos[c + 1] - pos[b + 1] * pos[c]);
+  }
+  return s;
+}
+
+// A figure slot holds both a point set and a mesh; whichever has a count is
+// drawn. Slots are reused frame to frame so buffers are allocated once.
 function simFig(i) {
   while (simFigs.length <= i) {
     const vao = gl.createVertexArray(), pb = gl.createBuffer(), cb = gl.createBuffer();
@@ -2571,7 +2689,17 @@ function simFig(i) {
     gl.enableVertexAttribArray(1);
     gl.vertexAttribPointer(1, 3, gl.UNSIGNED_BYTE, true, 0, 0);
     gl.bindVertexArray(null);
-    simFigs.push({ vao, pb, cb, count: 0, radius: 0.02 });
+    const mvao = gl.createVertexArray(), mpb = gl.createBuffer(), mnb = gl.createBuffer(), mib = gl.createBuffer();
+    gl.bindVertexArray(mvao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, mpb);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, mnb);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mib);
+    gl.bindVertexArray(null);
+    simFigs.push({ vao, pb, cb, count: 0, radius: 0.02, mvao, mpb, mnb, mib, mcount: 0, colour: [0.7, 0.7, 0.7] });
   }
   return simFigs[i];
 }
@@ -2583,9 +2711,61 @@ function simUploadFig(i, xyz, rgb, radius) {
   gl.bufferData(gl.ARRAY_BUFFER, rgb, gl.DYNAMIC_DRAW);
   f.count = xyz.length / 3;
   f.radius = radius;
+  f.mcount = 0;
 }
-function simClearFigsFrom(i) { for (; i < simFigs.length; i++) simFigs[i].count = 0; }
-function simRebuildCapsules() {
+// `pos` in viewer coordinates (origin-shifted), `idx` triangles wound outwards.
+function simUploadFigMesh(i, pos, idx, colour) {
+  const f = simFig(i);
+  gl.bindBuffer(gl.ARRAY_BUFFER, f.mpb);
+  gl.bufferData(gl.ARRAY_BUFFER, pos, gl.DYNAMIC_DRAW);
+  gl.bindBuffer(gl.ARRAY_BUFFER, f.mnb);
+  gl.bufferData(gl.ARRAY_BUFFER, meshNormals(pos, idx), gl.DYNAMIC_DRAW);
+  gl.bindVertexArray(f.mvao);
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, f.mib);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.DYNAMIC_DRAW);
+  gl.bindVertexArray(null);
+  f.mcount = idx.length;
+  f.colour = colour;
+  f.count = 0;
+}
+function simClearFigsFrom(i) { for (; i < simFigs.length; i++) { simFigs[i].count = 0; simFigs[i].mcount = 0; } }
+
+// The walk: how far an actor has come along its path by t and how fast it is
+// going, from the solved frames when there are any, else from the keys. The
+// phase is a function of distance, not of wall-clock time, so scrubbing the
+// bar and playing through land the legs in the same place.
+function simActorGait(name, t) {
+  const fps = simFps();
+  let samples = null;
+  if (sim.ev && sim.frames.length > 1 && sim.frames[0].actors) {
+    samples = [];
+    for (const fr of sim.frames) { const p = fr.actors && fr.actors[name]; if (p) samples.push([fr.t, p[0], p[1]]); }
+  }
+  if (!samples || samples.length < 2) {
+    const a = simActors()[name];
+    samples = ((a && a.keys) || []).map(k => [k.t, k.pos[0], k.pos[1]]);
+  }
+  let dist = 0;
+  for (let i = 0; i + 1 < samples.length && samples[i][0] < t; i++) {
+    const a = samples[i], b = samples[i + 1], span = b[0] - a[0];
+    const u = span > 1e-9 ? clamp((t - a[0]) / span, 0, 1) : 1;
+    dist += Math.hypot(b[1] - a[1], b[2] - a[2]) * u;
+  }
+  const eps = 1 / fps;
+  const p0 = simActorAt(name, t - eps), p1 = simActorAt(name, t + eps);
+  const speed = (p0 && p1) ? Math.hypot(p1[0] - p0[0], p1[1] - p0[1]) / (2 * eps) : 0;
+  return { dist, speed };
+}
+// Legs swing to ±25° at walking pace, one full cycle every 1.3 m; a figure
+// that is standing still stands still.
+function simWalkSwing(gait) {
+  const amp = 25 * Math.PI / 180 * clamp(gait.speed / 0.6, 0, 1);
+  return amp * Math.sin(2 * Math.PI * gait.dist / 1.3);
+}
+
+// Place the page's own figures where the current frame puts the actors.
+// Lifted 2 cm so the soles do not fight the floor's splats for depth.
+function simRebuildCast() {
   if (!gl || sim.parentFigures) return;
   const fr = simFrame();
   let i = 0, ai = 0;
@@ -2596,78 +2776,144 @@ function simRebuildCapsules() {
       const at = (fr.actors && fr.actors[name]) || simActorAt(name, sim.t);
       if (!at) continue;
       const h = +a.height_m || SUBJECT_H;
-      const tpl = simBodyTemplate(h);
-      const n = tpl.xyz.length / 3;
-      const xyz = new Float32Array(n * 3), rgb = new Uint8Array(n * 3);
+      const mesh = simFigureMesh(h, simWalkSwing(simActorGait(name, sim.t)));
+      const src = mesh.vertices, n = src.length / 3, pos = new Float32Array(n * 3);
       const ang = (+at[2] || 0) * Math.PI / 180;
-      const fx = Math.cos(ang), fy = Math.sin(ang), lx = -fy, ly = fx;
-      const ox = at[0] - ORIGIN[0], oy = at[1] - ORIGIN[1], oz = FLOOR_T - ORIGIN[2];
+      const fx = Math.cos(ang), fy = Math.sin(ang), lx = fy, ly = -fx;   // right-hand side, forward
+      const ox = at[0] - ORIGIN[0], oy = at[1] - ORIGIN[1], oz = FLOOR_T - ORIGIN[2] + 0.02;
       for (let j = 0; j < n; j++) {
-        const u = tpl.xyz[j * 3], v = tpl.xyz[j * 3 + 1], z = tpl.xyz[j * 3 + 2];
-        xyz[j * 3] = ox + u * lx + v * fx;
-        xyz[j * 3 + 1] = oy + u * ly + v * fy;
-        xyz[j * 3 + 2] = oz + z;
-        const light = j < tpl.head ? 1.12 : 0.92;
-        rgb[j * 3] = clamp(c[0] * light * 255, 0, 255);
-        rgb[j * 3 + 1] = clamp(c[1] * light * 255, 0, 255);
-        rgb[j * 3 + 2] = clamp(c[2] * light * 255, 0, 255);
+        const u = src[j * 3], v = src[j * 3 + 1], z = src[j * 3 + 2];
+        pos[j * 3] = ox + u * lx + v * fx;
+        pos[j * 3 + 1] = oy + u * ly + v * fy;
+        pos[j * 3 + 2] = oz + z;
       }
-      simUploadFig(i++, xyz, rgb, 0.013 * h / 1.75);
+      simUploadFigMesh(i++, pos, mesh.faces, c);
       const lbl = sim.labels.find(l => l.actor === name);
       if (lbl) { lbl.p[0] = ox; lbl.p[1] = oy; lbl.p[2] = oz + h + 0.12; }
     }
   }
   simClearFigsFrom(i);
 }
-// `locaish:figures`: point sets the studio sampled for this moment (SAM 3D
-// bodies, lifted set pieces). They replace the capsules until an empty list
-// hands the cast back to the page.
+// `locaish:figures`: what the studio has for this moment, one item per actor
+// or set piece: `{name, colour, mesh: {vertices, faces}}` for a figure mesh
+// (twin metres, flat xyz triples and flat index triples), or `{name, colour,
+// xyz, radius_m}` for a point set drawn as splats. An item with both draws
+// the mesh. An empty list hands the cast back to the page's own figures.
 function simSetFigures(list) {
   if (!gl) return;
   list = Array.isArray(list) ? list : [];
   sim.parentFigures = list.length > 0;
   let i = 0;
   for (const f of list) {
-    const src = f && f.xyz;
+    if (!f) continue;
+    let col = Array.isArray(f.colour) && f.colour.length >= 3 ? f.colour.slice(0, 3).map(Number) : [180, 180, 180];
+    if (Math.max(col[0], col[1], col[2]) > 1.0) col = col.map(v => v / 255);
+    col = col.map(v => clamp(v, 0, 1));
+    const lbl = f.name && sim.labels.find(l => l.actor === f.name);
+    const mesh = f.mesh && typeof f.mesh === "object" ? f.mesh : null;
+    // flat triples by contract; a (V, 3) / (F, 3) nesting is flattened
+    const flat = a => (a && a.length && Array.isArray(a[0])) ? a.flat() : a;
+    const mv = mesh && flat(mesh.vertices), mf = mesh && flat(mesh.faces);
+    if (mv && mf && mv.length >= 9 && mf.length >= 3) {
+      const n = Math.floor(mv.length / 3), pos = new Float32Array(n * 3);
+      let top = -Infinity, tx = 0, ty = 0;
+      for (let j = 0; j < n; j++) {
+        const x = mv[j * 3] - ORIGIN[0], y = mv[j * 3 + 1] - ORIGIN[1], z = mv[j * 3 + 2] - ORIGIN[2];
+        pos[j * 3] = x; pos[j * 3 + 1] = y; pos[j * 3 + 2] = z;
+        if (z > top) { top = z; tx = x; ty = y; }
+      }
+      const nf = Math.floor(mf.length / 3), idx = new Uint32Array(nf * 3);
+      let ok = 0;
+      for (let j = 0; j < nf; j++) {
+        const a = mf[j * 3] | 0, b = mf[j * 3 + 1] | 0, c = mf[j * 3 + 2] | 0;
+        if (a < 0 || b < 0 || c < 0 || a >= n || b >= n || c >= n) continue;
+        idx[ok * 3] = a; idx[ok * 3 + 1] = b; idx[ok * 3 + 2] = c; ok++;
+      }
+      const faces = idx.subarray(0, ok * 3);
+      // wound inwards: flip, so culling hides the far side and not the near
+      if (meshSignedVolume(pos, faces) < 0) {
+        for (let j = 0; j + 2 < faces.length; j += 3) { const t = faces[j + 1]; faces[j + 1] = faces[j + 2]; faces[j + 2] = t; }
+      }
+      simUploadFigMesh(i++, pos, faces, col);
+      if (lbl && ok) { lbl.p[0] = tx; lbl.p[1] = ty; lbl.p[2] = top + 0.12; }
+      continue;
+    }
+    const src = f.xyz;
     if (!src || !src.length) continue;
     const n = Math.floor(src.length / 3);
     const xyz = new Float32Array(n * 3), rgb = new Uint8Array(n * 3);
-    let col = Array.isArray(f.colour) && f.colour.length >= 3 ? f.colour.slice(0, 3) : [180, 180, 180];
-    if (Math.max(col[0], col[1], col[2]) <= 1.0) col = col.map(v => v * 255);
     let top = -Infinity, sx = 0, sy = 0;
     for (let j = 0; j < n; j++) {
       const x = src[j * 3] - ORIGIN[0], y = src[j * 3 + 1] - ORIGIN[1], z = src[j * 3 + 2] - ORIGIN[2];
       xyz[j * 3] = x; xyz[j * 3 + 1] = y; xyz[j * 3 + 2] = z;
-      rgb[j * 3] = clamp(col[0], 0, 255); rgb[j * 3 + 1] = clamp(col[1], 0, 255); rgb[j * 3 + 2] = clamp(col[2], 0, 255);
+      rgb[j * 3] = col[0] * 255; rgb[j * 3 + 1] = col[1] * 255; rgb[j * 3 + 2] = col[2] * 255;
       if (z > top) top = z;
       sx += x; sy += y;
     }
     simUploadFig(i++, xyz, rgb, Math.max(+f.radius_m || 0.015, 0.003));
-    const lbl = f.name && sim.labels.find(l => l.actor === f.name);
     if (lbl && n) { lbl.p[0] = sx / n; lbl.p[1] = sy / n; lbl.p[2] = top + 0.12; }
   }
   simClearFigsFrom(i);
-  if (!sim.parentFigures) simRebuildCapsules();
+  if (!sim.parentFigures) simRebuildCast();
   needsRedraw = true;
 }
 function drawSimFigures() {
   if (!sim.on || !simFigs.length) return;
-  gl.useProgram(progPoints.prog);
-  gl.uniformMatrix4fv(progPoints.u.uVP, false, viewProj);
+  let anyPts = false, anyMesh = false;
+  for (const f of simFigs) { if (f.count) anyPts = true; if (f.mcount) anyMesh = true; }
   const pxPerMetre = canvas.height / (2 * Math.tan(FOV / 2));
-  // capped low: a figure a hand's width from the eye should break into
-  // samples, not turn into one blue disc
-  gl.uniform1f(progPoints.u.uMaxSize, 26.0);
-  gl.uniform1i(progPoints.u.uColorMode, 0);
-  gl.uniform2f(progPoints.u.uZSpan, LO[2], HI[2]);
-  gl.depthMask(true);
-  for (const f of simFigs) {
-    if (!f.count) continue;
-    gl.uniform1f(progPoints.u.uPointScale, 2.0 * f.radius * pxPerMetre);
-    gl.bindVertexArray(f.vao);
-    gl.drawArrays(gl.POINTS, 0, f.count);
+  if (anyPts) {
+    gl.useProgram(progPoints.prog);
+    gl.uniformMatrix4fv(progPoints.u.uVP, false, viewProj);
+    // capped low: a figure a hand's width from the eye should break into
+    // samples, not turn into one blue disc
+    gl.uniform1f(progPoints.u.uMaxSize, 26.0);
+    gl.uniform1i(progPoints.u.uColorMode, 0);
+    gl.uniform2f(progPoints.u.uZSpan, LO[2], HI[2]);
+    gl.depthMask(true);
+    for (const f of simFigs) {
+      if (!f.count) continue;
+      gl.uniform1f(progPoints.u.uPointScale, 2.0 * f.radius * pxPerMetre);
+      gl.bindVertexArray(f.vao);
+      gl.drawArrays(gl.POINTS, 0, f.count);
+    }
+    gl.bindVertexArray(null);
   }
-  gl.bindVertexArray(null);
+  if (anyMesh) {
+    // Two passes. First the silhouette: the mesh again with its front faces
+    // culled and every vertex pushed out along its normal by 1.5 px worth of
+    // metres at its depth, dark; the body drawn over it leaves a thin rim.
+    // Then the body, flat-shaded, back faces culled, pulled a touch forward
+    // in depth so a sole on the floor beats the floor's own points.
+    gl.useProgram(progFig.prog);
+    gl.uniformMatrix4fv(progFig.u.uVP, false, viewProj);
+    gl.uniform3f(progFig.u.uLight, SIM_FIG_LIGHT[0], SIM_FIG_LIGHT[1], SIM_FIG_LIGHT[2]);
+    gl.depthMask(true);
+    gl.enable(gl.CULL_FACE);
+    gl.cullFace(gl.FRONT);
+    gl.uniform1i(progFig.u.uLit, 0);
+    gl.uniform1f(progFig.u.uPush, 1.5 / pxPerMetre);
+    for (const f of simFigs) {
+      if (!f.mcount) continue;
+      gl.uniform3f(progFig.u.uColour, f.colour[0] * 0.22, f.colour[1] * 0.22, f.colour[2] * 0.22);
+      gl.bindVertexArray(f.mvao);
+      gl.drawElements(gl.TRIANGLES, f.mcount, gl.UNSIGNED_INT, 0);
+    }
+    gl.cullFace(gl.BACK);
+    gl.uniform1i(progFig.u.uLit, 1);
+    gl.uniform1f(progFig.u.uPush, 0.0);
+    gl.enable(gl.POLYGON_OFFSET_FILL);
+    gl.polygonOffset(-1.0, -2.0);
+    for (const f of simFigs) {
+      if (!f.mcount) continue;
+      gl.uniform3f(progFig.u.uColour, f.colour[0], f.colour[1], f.colour[2]);
+      gl.bindVertexArray(f.mvao);
+      gl.drawElements(gl.TRIANGLES, f.mcount, gl.UNSIGNED_INT, 0);
+    }
+    gl.disable(gl.POLYGON_OFFSET_FILL);
+    gl.disable(gl.CULL_FACE);
+    gl.bindVertexArray(null);
+  }
 }
 function simRebuildLabels() {
   sim.labels = [];
@@ -3561,7 +3807,10 @@ function render() {
   cam.eye = camEye();
   // Near plane scales with the scene so a 3 m room does not waste depth
   // precision, but is floored so flying right up to a wall does not clip.
-  const near = Math.max(0.01, cam.dist * 0.002);
+  // Through the simulated lens it is a fixed 5 cm: close enough that an
+  // actor brushing the camera is whole, far enough that the depth buffer
+  // still separates a sole from the floor it stands on.
+  const near = sim.camView ? 0.05 : Math.max(0.01, cam.dist * 0.002);
   const far = Math.max(near * 100, cam.dist * 12 + RADIUS * 12);
   mat4Perspective(proj, FOV, w / Math.max(h, 1), near, far);
   mat4LookAt(view, cam.eye, cam.target, [0, 0, 1]);
@@ -3680,9 +3929,10 @@ function render() {
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
   }
 
-  // 2b'. the cast: the figures the studio sampled for this frame, or the
-  //      capsules the page samples itself, drawn as round splats like the
-  //      cloud so a body reads as a surface and not as a wire stick
+  // 2b'. the cast: the figure meshes the studio built for this frame, or
+  //      the articulated figures the page builds itself, flat-shaded and
+  //      depth-tested like the twin's own mesh; point sets, if the studio
+  //      sends those instead, as round splats like the cloud
   if (sim.on) drawSimFigures();
 
   // 2c. the structure over the field: the fitted shell as a translucent

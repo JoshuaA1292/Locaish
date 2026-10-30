@@ -121,3 +121,99 @@ def test_built_viewer_still_embeds_and_carries_the_simulator(clean, tmp_path):
     # the floor the simulator stands its actors on comes from the payload
     assert '"floor_z":' in html
     assert "[?&#]sim=1" in html
+
+
+# --- the cast as meshes -------------------------------------------------------
+#
+# Actors are flat-shaded figure meshes, the same meshes the studio renders into
+# its frames, so the twin and the frames agree on where a body is. The parent
+# may send one per figure; without one the page builds its own.
+
+
+def test_template_draws_figures_as_flat_shaded_meshes():
+    js = _script(_template())
+    # the page's own articulated figure: head, torso, limbs, posed by a walk swing
+    assert "function simFigureMesh(h, swing)" in js
+    for part in ("sphere(", "cyl(", "box("):
+        assert part in js, f"the figure builder has no {part}"
+    assert "function simWalkSwing" in js and "function simActorGait" in js
+    assert "25 * Math.PI / 180" in js, "the legs swing to 25 degrees"
+    # the shader: Lambert from a fixed light with 0.45 ambient, on the face normal
+    assert "const VS_FIG" in js and "const FS_FIG" in js
+    assert "0.45 + 0.55 * lam" in js
+    assert "cross(dFdx(vPos), dFdy(vPos))" in js
+    assert "progFig = program(VS_FIG, FS_FIG" in js
+    # back faces culled, feet biased off the floor, a silhouette pass
+    assert "gl.cullFace(gl.BACK)" in js and "gl.cullFace(gl.FRONT)" in js
+    assert "gl.polygonOffset(-1.0, -2.0)" in js
+    assert "FLOOR_T - ORIGIN[2] + 0.02" in js, "the page's figures stand 2 cm above the floor"
+    assert "gl.drawElements(gl.TRIANGLES, f.mcount, gl.UNSIGNED_INT, 0)" in js
+
+
+def test_template_accepts_a_mesh_in_the_figures_message():
+    js = _script(_template())
+    assert 'm.type === "locaish:figures"' in js
+    # `{name, colour, mesh: {vertices, faces}}` -- twin metres, flat triples
+    assert "f.mesh" in js and "mesh.vertices" in js and "mesh.faces" in js
+    assert "ORIGIN[0]" in js and "meshSignedVolume(pos, faces) < 0" in js, "an inward-wound mesh is flipped, not culled away"
+    # the point path survives for a figure without a mesh
+    assert "radius_m" in js and "gl.drawArrays(gl.POINTS, 0, f.count)" in js
+    # the label follows the highest vertex
+    assert "lbl.p[2] = top + 0.12" in js
+
+
+def test_template_keeps_a_near_actor_whole_through_the_lens():
+    js = _script(_template())
+    assert "sim.camView ? 0.05 : Math.max(0.01, cam.dist * 0.002)" in js
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_figure_mesh_is_closed_and_wound_outwards(tmp_path):
+    """Run the figure builder itself under node: a few hundred triangles, every
+    edge shared by exactly two faces, positive volume, standing on the floor."""
+    js = _script(_template())
+    start = js.index("function MeshBuilder()")
+    end = js.index("// Area-weighted vertex normals")
+    helpers = "\n".join(
+        line for line in js.splitlines()
+        if line.startswith(("function sub3(", "function len3(", "function norm3(", "function cross3("))
+    )
+    # cross3 spans lines in the template; pull it by brace matching
+    c0 = js.index("function cross3(")
+    c1 = js.index("}", js.index("];", c0)) + 1
+    helpers = "\n".join(l for l in helpers.splitlines() if not l.startswith("function cross3(")) + "\n" + js[c0:c1]
+    vol = js[js.index("function meshSignedVolume"):js.index("// A figure slot holds")]
+    prog = helpers + "\n" + js[start:end] + "\n" + vol + r"""
+function stats(swing) {
+  const m = simFigureMesh(1.75, swing);
+  const nv = m.vertices.length / 3, nf = m.faces.length / 3;
+  const edges = new Map();
+  for (let i = 0; i < m.faces.length; i += 3) {
+    const t = [m.faces[i], m.faces[i + 1], m.faces[i + 2]];
+    for (let k = 0; k < 3; k++) {
+      const a = t[k], b = t[(k + 1) % 3];
+      const key = a < b ? a + ":" + b : b + ":" + a;
+      edges.set(key, (edges.get(key) || 0) + (a < b ? 1 : -1));
+    }
+  }
+  let open = 0;
+  for (const v of edges.values()) if (v !== 0) open++;
+  let zmin = Infinity, zmax = -Infinity;
+  for (let i = 2; i < m.vertices.length; i += 3) { zmin = Math.min(zmin, m.vertices[i]); zmax = Math.max(zmax, m.vertices[i]); }
+  return { nv, nf, open, vol: meshSignedVolume(m.vertices, m.faces) / 6, zmin, zmax };
+}
+console.log(JSON.stringify({ standing: stats(0), striding: stats(0.4) }));
+"""
+    path = tmp_path / "figure.js"
+    path.write_text(prog, encoding="utf-8")
+    proc = subprocess.run(["node", str(path)], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    import json
+    both = json.loads(proc.stdout.strip().splitlines()[-1])
+    for pose, got in both.items():
+        assert 300 <= got["nf"] <= 1200, (pose, got)
+        assert got["open"] == 0, f"{pose}: {got['open']} edges are not shared by two opposite-wound faces"
+        assert 0.03 < got["vol"] < 0.2, (pose, got)   # a person is a few tens of litres
+        assert abs(got["zmin"]) < 0.02, (pose, got)   # a sole on the floor, standing or mid-stride
+    assert 1.74 < both["standing"]["zmax"] <= 1.76, both["standing"]
+    assert both["striding"]["zmax"] < both["standing"]["zmax"], "mid-stride the body drops"

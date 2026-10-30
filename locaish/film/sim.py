@@ -44,6 +44,7 @@ import numpy as np
 
 from . import equipment, moves, optics, space
 from .moves import _beat as _move_beat  # the per-position checks the move simulator applies
+from .rehearsal import LENS_CLEARANCE_M, actor_blocks, actor_too_close
 from .render import EYELINE_RATIO, SUBJECT_HEIGHT_M
 
 # ---------------------------------------------------------------------------
@@ -1489,6 +1490,18 @@ def _frame(ctx: _Ctx, t: float, prev: FrameSample | None, prev2: FrameSample | N
         fill = float(tl.actors[subject].height_m / framed_h)
 
     problems.extend(ctx.rig.frame_problems(ctx, cam, speed, accel, cut))
+
+    # The other actors as occluders: through the eyeline, or on the lens. The
+    # texts carry no numbers that change frame to frame, so a crossing merges
+    # into one segment on the strip.
+    others = {n: (x, y) for n, (x, y, _f) in actors.items() if n != subject}
+    if others:
+        if subj_obj is not None:
+            heights = {n: float(tl.actors[n].height_m) for n in others}
+            for name in actor_blocks(st.pos, subj_obj.eyeline, others, heights=heights, floor_z=ctx.floor_z):
+                problems.append(Problem(f"{name} crosses between the camera and the subject"))
+        for name in actor_too_close(st.pos, others):
+            problems.append(Problem(f"{name} is within {LENS_CLEARANCE_M:.1f} m of the lens and fills the frame", "warn"))
 
     focus = float(distance) if distance else float(np.linalg.norm(st.aim - st.pos))
     focus = max(focus, 0.05)

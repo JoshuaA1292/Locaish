@@ -192,3 +192,39 @@ def test_direct_route_needs_a_key_then_saves_the_operators_move(direct_url, monk
     req = urllib.request.Request(f"{url}/sim-file/cleanroom/{sid}/{look}")
     with urllib.request.urlopen(req, timeout=30) as resp:
         assert resp.status == 200 and resp.read()[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_watch_tiles_a_filmstrip_and_the_dp_judges_the_move(clean, tmp_path):
+    import io
+
+    from PIL import Image
+
+    twin = clean[0].twin
+    answers = _script(twin, look=False)[:5]                       # through evaluate
+    answers.append([ToolCall("w1", "watch", {})])
+    answers.append({"score": 6, "verdict": "adjust", "notes": "Ends too tight; stop on a medium close-up."})
+    answers.append([ToolCall("c7", "finish", {"notes": "Shortened the push."})])
+    answers = [ChatResult(text="", tool_calls=a, model="fake") if isinstance(a, list) else a for a in answers]
+    fake = FakeMetaClient(chat_answers=answers)
+    events = []
+    res = simagent.direct(twin, _timeline(twin), "push in on Maya", client=fake,
+                          actors=[castmod.Actor(name="Maya", height_m=1.68)], workdir=tmp_path / "w", on_event=events.append)
+    assert res.finished
+    tools = [t["tool"] for t in res.trace if t["kind"] == "call"]
+    assert "watch" in tools
+    watch = next(e for e in events if e["kind"] == "watch")
+    assert len(watch["frames"]) == simagent.FILMSTRIP_FRAMES
+    sheet = Image.open(io.BytesIO((tmp_path / "w" / "looks" / watch["file"]).read_bytes()))
+    assert sheet.width == 4 * 480 and sheet.height > 2 * 200
+    review = next(e for e in events if e["kind"] == "review" and e.get("scope") == "move")
+    assert review["score"] == 6 and review["verdict"] == "adjust"
+    assert any(e["kind"] == "chat_json" and e["images"] == 1 for e in fake.log)
+
+
+def test_review_move_video_sends_the_mp4_and_parses_the_verdict():
+    fake = FakeMetaClient(chat_answers=[{"description": "A slow push.", "score": 7, "verdict": "keep", "notes": "Fine."}])
+    out = simagent.review_move_video(b"\x00\x00\x00\x18ftypisom", client=fake, instruction="push in", timeline={"title": "t", "rig": {"kind": "dolly"}, "duration_s": 4.0})
+    assert out["score"] == 7 and out["verdict"] == "keep" and out["description"] == "A slow push."
+    msg = fake.log[-1]["messages"][0]["content"]
+    assert msg[0]["type"] == "video_url" and msg[0]["video_url"]["url"].startswith("data:video/mp4;base64,")
+    assert "DP watching" in msg[1]["text"]

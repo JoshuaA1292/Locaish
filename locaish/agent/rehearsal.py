@@ -51,6 +51,10 @@ from ..types import Twin
 # rooms; the engine shortens nothing -- it reports the beat where it fails.
 DEFAULT_DOLLY_M = 1.0
 MIN_CAMERA_SUBJECT_M = 1.2
+# How many scored rows placement looks through for one whose eyeline no other
+# actor stands in. The table's best row is still the best only if nobody is
+# standing in front of the lens.
+CANDIDATE_ROWS = 12
 
 _BREAKDOWN_SYSTEM = """You are a first assistant director and a DP breaking down a scene for a rehearsal inside a measured 3D twin of a real room.
 You answer with JSON only. You may place actors ONLY on the listed marks (by their names, M1, M2, ...), and you describe shots by what they are, never by coordinates: the measurement engine places the camera.
@@ -242,6 +246,77 @@ def _positions_through(beats: list[dict], marks: dict[str, tuple[float, float]])
     return out
 
 
+def _occluder_positions(where: dict[str, str], standing: dict[str, str], marks: dict[str, tuple[float, float]],
+                        exempt: set[str]) -> dict[str, tuple[float, float]]:
+    """Where every other actor is during the beat: at its start and after its
+    own move, as separate keys when the two differ."""
+    out: dict[str, tuple[float, float]] = {}
+    for name in set(where) | set(standing):
+        if name in exempt:
+            continue
+        spots = []
+        for src in (where, standing):
+            m = src.get(name)
+            if m in marks and marks[m] not in spots:
+                spots.append(marks[m])
+        for k, xy in enumerate(spots):
+            out[name if k == 0 else f"{name}@{k}"] = (float(xy[0]), float(xy[1]))
+    return out
+
+
+def _behind_on_line(cam_xy, subject_xy, others: dict[str, tuple[float, float]],
+                    radius_m: float = reh.OCCLUDER_RADIUS_M) -> list[str]:
+    """Others standing on the eyeline beyond the subject: not in the way, but
+    stacked straight behind them in the frame."""
+    cam = np.asarray(cam_xy, dtype=np.float64)[:2]
+    subj = np.asarray(subject_xy, dtype=np.float64)[:2]
+    axis = subj - cam
+    length = float(np.linalg.norm(axis))
+    if length <= 1e-9:
+        return []
+    axis /= length
+    out = []
+    for name, pos in others.items():
+        d = np.asarray(pos, dtype=np.float64)[:2] - cam
+        along = float(d @ axis)
+        across = abs(float(d[0] * axis[1] - d[1] * axis[0]))
+        if along > length - radius_m and across <= radius_m:
+            out.append(name)
+    return out
+
+
+def _clean_name(key: str) -> str:
+    return key.split("@", 1)[0]
+
+
+def _choose_row(rows: list[dict], shot: cov.Shot, subject_xy, others: dict[str, tuple[float, float]],
+                heights: dict[str, float] | None) -> tuple[dict, dict]:
+    """The best-scored row whose eyeline no other actor cuts and whose lens no
+    other actor crowds; among those, one with nobody stacked behind the subject.
+    Falls back to the best row, saying who is in the way."""
+    subj_h = float((heights or {}).get(shot.subject, 1.75))
+    subject_xyz = (float(subject_xy[0]), float(subject_xy[1]), reh.EYELINE_RATIO * subj_h)
+    hts = None if heights is None else {k: float(heights.get(_clean_name(k), 1.75)) for k in others}
+    judged = []
+    for k, st in enumerate(rows):
+        cam = (float(st["cam_x"]), float(st["cam_y"]), float(st["cam_z"]))
+        blocked = sorted({_clean_name(n) for n in reh.actor_blocks(cam, subject_xyz, others, heights=hts)})
+        close = sorted({_clean_name(n) for n in reh.actor_too_close(cam, others)})
+        behind = sorted({_clean_name(n) for n in _behind_on_line(cam, subject_xy, others)})
+        # A lens inside the subject's own body (the sweep's straight-up and
+        # straight-down rows) has no eyeline for anyone to cross; it is not a
+        # clear shot of them either, and never a replacement for one.
+        inside = math.dist(cam[:2], subject_xy[:2]) < reh.OCCLUDER_RADIUS_M
+        judged.append((k, st, blocked, close, behind, inside))
+    clean = [j for j in judged if not j[2] and not j[3] and not j[5]]
+    if clean:
+        k, st, _b, _c, behind, _i = min(clean, key=lambda j: (len(j[4]), j[0]))
+        return st, {"blocked_by": [], "too_close": [], "behind_subject": behind, "skipped_rows": k}
+    k, st, blocked, close, behind, _i = judged[0]
+    return st, {"blocked_by": blocked, "too_close": close, "behind_subject": behind, "skipped_rows": 0,
+                "occluded": True}
+
+
 def place_shots(
     beats: list[dict],
     marks: dict[str, tuple[float, float]],
@@ -249,9 +324,18 @@ def place_shots(
     source: cov.SetupSource,
     *,
     dolly_m: float = DEFAULT_DOLLY_M,
+    cast: dict[str, float] | None = None,
+    limit: int = CANDIDATE_ROWS,
     progress: Callable[[str], None] | None = None,
 ) -> tuple[list[reh.Beat], list[dict]]:
-    """Every shot request becomes a `ShotSpec` from a scored row, or a note."""
+    """Every shot request becomes a `ShotSpec` from a scored row, or a note.
+
+    The row is the best-scored one that no other actor present at the beat
+    stands in front of: the room is not the only occluder. When every
+    candidate is blocked the best row is taken and the placement says who is
+    in the way (`blocked_by`, `too_close`). `cast` gives heights, so a seated
+    or short actor the eyeline clears is not counted.
+    """
     positions = _positions_through(beats, marks)
     ctx = cov.PlanContext()
     out: list[reh.Beat] = []
@@ -282,14 +366,29 @@ def place_shots(
                     shot = cov.Shot(**{**shot.__dict__, "second_subject": None, "ots": False})
                 if progress:
                     progress(f"placing shot {shot_no}: {shot.size_name} of {shot.subject}")
-                rows, count, sql, relaxed = cov.find_setup(source, shot, char_marks, location=twin.name, context=ctx)
+                rows, count, sql, relaxed = cov.find_setup(source, shot, char_marks, location=twin.name,
+                                                           limit=limit, context=ctx)
                 if rows:
-                    st = rows[0]
+                    exempt = {shot.subject}
+                    if shot.second_subject:
+                        exempt.add(shot.second_subject)
+                    others = _occluder_positions(where, standing, marks, exempt)
+                    st, verdict = _choose_row(rows, shot, char_marks[shot.subject], others, cast)
                     ctx.learn(shot, st, char_marks)
                     spec = _spec_from_row(st, shot, char_marks[shot.subject], dolly_m)
-                    placements.append({"beat": i, "shot": shot_no, "placed": True, "setup": st,
-                                       "relaxed": relaxed, "candidates": count, "sql": sql,
-                                       "request": req})
+                    placement = {"beat": i, "shot": shot_no, "placed": True, "setup": st,
+                                 "relaxed": relaxed, "candidates": count, "sql": sql,
+                                 "request": req, "best_setup_id": rows[0].get("setup_id"), **verdict}
+                    if verdict.get("occluded"):
+                        who = " and ".join(verdict["blocked_by"] or verdict["too_close"])
+                        placement["why"] = (f"{who} stands between every candidate camera and {shot.subject} "
+                                            f"at beat {i}; the best row is used and the rehearsal will show it")
+                        if progress:
+                            progress(f"shot {shot_no}: {placement['why']}")
+                    elif verdict["skipped_rows"]:
+                        placement["why"] = (f"the top {verdict['skipped_rows']} row(s) had another actor in the "
+                                            f"eyeline or on the lens; row {verdict['skipped_rows'] + 1} is clear")
+                    placements.append(placement)
                 else:
                     placements.append({"beat": i, "shot": shot_no, "placed": False, "request": req,
                                        "why": "no setup in this room holds this shot with a clear sightline",
@@ -453,7 +552,7 @@ def run_rehearsal(
             marks, _ = _marks_catalogue(room, source)
             used = {b["to_mark"] for b in bd["beats"] if b.get("to_mark")}
             say(f"{len(bd['beats'])} beats on {len(used)} marks; placing the shots")
-            beats, placements = place_shots(bd["beats"], marks, room, source, progress=say)
+            beats, placements = place_shots(bd["beats"], marks, room, source, cast=cast or None, progress=say)
             if not cast:
                 cast = {b.actor: 1.75 for b in beats}
                 breakdown_notes.append("no heights were given; every actor is 1.75 m until cast")
@@ -482,19 +581,42 @@ def run_rehearsal(
     # Figures: the cast at their marks, and the pieces where they were moved to.
     figures_for = None
     by_name = {a.name: a for a in (actors or [])}
-    if by_name or piece_figures:
+    # Every scene draws its cast as bodies, named or not: a scene with no
+    # cast still has people in it, at the heights the breakdown gave them.
+    if True:
         from ..product import cast as castmod
+        from ..product import figures as figmod
 
         floor_z = float(room.structure.floor_z)
+        frames = rehearsal.frames
+        colour_order: dict[str, int] = {}
+
+        def speed_of(name: str, frame) -> float:
+            k = min(range(len(frames)), key=lambda i: abs(frames[i].t - frame.t)) if frames else 0
+            j = k + 1 if k + 1 < len(frames) else k - 1
+            if j < 0 or j == k:
+                return 0.0
+            a, b = frames[k].actors.get(name), frames[j].actors.get(name)
+            if not a or not b:
+                return 0.0
+            dt = abs(frames[j].t - frames[k].t) or 1.0
+            return float(math.hypot(b[0] - a[0], b[1] - a[1]) / dt)
 
         def figures_for(frame):
             figs = list(piece_figures)
             for name, (x, y, facing) in frame.actors.items():
                 a = by_name.get(name)
                 if a is None:
-                    h = scene.cast.get(name, 1.75)
-                    a = castmod.Actor(name=name, height_m=h, colour=castmod.PALETTE[len(figs) % len(castmod.PALETTE)])
-                figs.append(castmod.figure(a, (x, y), facing, floor_z, workdir=workdir.parent))
+                    idx = colour_order.setdefault(name, len(colour_order))
+                    a = castmod.Actor(name=name, height_m=float(scene.cast.get(name, 1.75)),
+                                      colour=castmod.PALETTE[idx % len(castmod.PALETTE)])
+                if getattr(a, "body_path", None):
+                    figs.append(castmod.figure(a, (x, y), facing, floor_z, workdir=workdir.parent))
+                    continue
+                v = speed_of(name, frame)
+                pose = "walking" if v > 0.15 else "standing"
+                figs.append(figmod.figure_for_actor(a, (x, y), facing, floor_z, pose=pose,
+                                                    phase=figmod.walk_phase(frame.t, v) if pose == "walking" else 0.0))
             return figs
 
     say("rendering the animatic")
@@ -529,6 +651,8 @@ def write_notes(rehearsal: reh.Rehearsal, sched: reh.Schedule | None, placements
     for p in placements:
         if not p.get("placed"):
             facts.append(f"shot {p.get('shot')} could not be placed: {p.get('why')}")
+        elif p.get("blocked_by") or p.get("too_close"):
+            facts.append(f"shot {p.get('shot')}: {p.get('why')}")
     facts += [f"problem: {p}" for p in rehearsal.problems]
     if sched is not None:
         facts += sched.sentences
