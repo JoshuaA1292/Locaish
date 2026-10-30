@@ -857,8 +857,8 @@ def _safe_name(name: str) -> str:
 
 
 _STAGE_GET = ("stage.js", "stage-status", "stage-plan", "cast", "headshot", "setpieces", "rehearsals",
-              "rehearsal", "rehearsal-events", "rehearsal-image",
-              "sims", "sim", "sim-events", "sim-file", "sim-frame", "sim-direct-events")
+              "rehearsal", "rehearsal-events", "rehearsal-image", "rehearsal-finish-events",
+              "sims", "sim", "sim-events", "sim-file", "sim-frame", "sim-direct-events", "sim-finish-events")
 _STAGE_POST = ("cast", "setpieces", "rehearse", "rehearsal", "sims", "sim")
 
 
@@ -1421,6 +1421,8 @@ class _Handler(BaseHTTPRequestHandler):
                         return self._json({"error": f"rehearsal is {run.state}", "detail": run.error}, 409)
                     return self._json(run.result)
                 name = parts[3]
+                if name == "finished":
+                    return self._json({"files": stage.finished_files(job, run)})
                 files = {"callsheet.txt": ("callsheet.txt", "text/plain; charset=utf-8"),
                          "blocking.svg": ("blocking.svg", "image/svg+xml"),
                          "rehearsal.json": ("rehearsal.json", "application/json"),
@@ -1466,6 +1468,15 @@ class _Handler(BaseHTTPRequestHandler):
                     done_item=run.done_item,
                     error_item=lambda: {"kind": "error", "text": run.error or "failed"},
                 )
+            if head in ("rehearsal-finish-events", "sim-finish-events") and len(parts) == 4:
+                run = stage.finish_run(job, "rehearsal" if head.startswith("rehearsal") else "sim", parts[2], parts[3])
+                if run is None:
+                    return self._json({"error": "no such finishing run"}, 404)
+                return self._stream(
+                    run.events, run.state,
+                    done_item=run.done_item,
+                    error_item=lambda: {"kind": "error", "text": run.error or "failed"},
+                )
         except KeyError as exc:
             return self._json({"error": str(exc).strip("'")}, 404)
         except ValueError as exc:
@@ -1492,6 +1503,8 @@ class _Handler(BaseHTTPRequestHandler):
             body = self._body()
             if head == "cast" and len(parts) == 2:
                 return self._json({"actor": stage.add_actor(job, body)})
+            if head == "cast" and len(parts) == 3:
+                return self._json({"actor": stage.update_actor(job, parts[2], body)})
             if head == "setpieces" and len(parts) == 3 and parts[2] == "lift":
                 return self._json({"piece": stage.lift_piece(job, body.get("label_id"), xyz=body.get("xyz"), label=body.get("label"))})
             if head == "setpieces" and len(parts) == 4 and parts[3] == "move":
@@ -1506,6 +1519,17 @@ class _Handler(BaseHTTPRequestHandler):
                 if run is None or run.state != "done":
                     return self._json({"error": "no finished rehearsal"}, 404)
                 return self._json(stage.finish(job, run, parts[4], body))
+            if head == "rehearsal" and len(parts) == 4 and parts[3] == "finish-all":
+                run = stage.run(job, parts[2])
+                if run is None:
+                    return self._json({"error": "no such rehearsal"}, 404)
+                frun = stage.start_finish_all(job, run, body)
+                return self._json({"run": frun.id, "events": f"/rehearsal-finish-events/{job.id}/{run.id}/{frun.id}",
+                                   "error": frun.error})
+            if head == "sim" and len(parts) == 4 and parts[3] == "finish":
+                frun = stage.start_sim_finish(job, parts[2], body)
+                return self._json({"run": frun.id, "events": f"/sim-finish-events/{job.id}/{parts[2]}/{frun.id}",
+                                   "error": frun.error})
             # the camera simulation
             if head == "sims" and len(parts) == 2:
                 return self._json(stage.create_sim(job, body))
@@ -2048,6 +2072,21 @@ PAGE = """<!doctype html>
   @media (max-width: 1000px) { .st_framerow { grid-template-columns: 1fr; } }
   .st_framerow img { width: 100%; border-radius: 10px; display: block; background: #0a0c0f; }
   .st_strip { display: flex; gap: 6px; overflow-x: auto; padding: 6px 0; }
+  .st_strip img.finished { border-color: #c9b8ff; opacity: .9; }
+  .st_strip img.finished.active { border-color: var(--accent); }
+  .st_finishbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 6px 0 8px; font-size: 13px; }
+  .st_finishbar .st_toggle { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
+  .st_finishbar .st_toggle button { background: transparent; border: 0; color: var(--dim); padding: 3px 11px; font-size: 12.5px; cursor: pointer; }
+  .st_finishbar .st_toggle button.on { background: var(--surface2); color: var(--ink); }
+  .st_finishbar .st_toggle button:disabled { opacity: .45; cursor: default; }
+  .st_finishbar label { color: var(--dim); font-size: 12.5px; display: inline-flex; align-items: center; gap: 5px; }
+  .st_finishbar .st_progress { color: var(--dim); font-size: 12.5px; }
+  .st_finishbar .st_progress.error { color: #ff8a8a; }
+  .st_frame_finished { position: relative; }
+  .st_frame_finished .st_stamp { position: absolute; top: 8px; left: 8px; font-size: 10.5px; letter-spacing: .05em; text-transform: uppercase; color: #c9b8ff; background: rgba(0,0,0,.55); border-radius: 999px; padding: 2px 8px; }
+  .st_words { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 6px; }
+  .st_words input { width: 100%; font-size: 12px; padding: 3px 6px; }
+  .st_hint { font-size: 12px; margin-top: 6px; }
   .st_strip img { height: 64px; border-radius: 6px; cursor: pointer; opacity: .7; border: 2px solid transparent; }
   .st_strip img.active { opacity: 1; border-color: var(--accent); }
   .st_shot { border-top: 1px solid var(--line); padding: 8px 0; font-size: 13px; }
@@ -2081,6 +2120,10 @@ PAGE = """<!doctype html>
   .sm_acts { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
   .sm_acts .primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
   .sm_video video { width: 100%; border-radius: 10px; display: block; margin-top: 10px; background: #000; }
+  .sm_video .sm_pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .sm_video .sm_pair.single { grid-template-columns: 1fr; }
+  .sm_video figure { margin: 0; }
+  .sm_video figcaption { color: var(--dim); font-size: 12px; margin-top: 4px; }
   .sm_howto { font-size: 12.5px; color: var(--dim); margin-top: 8px; }
   .sm_howto code { color: var(--ink); }
   #st_blocking svg { width: 100%; height: auto; }
@@ -2471,6 +2514,7 @@ PAGE = """<!doctype html>
         <div class="panelbox"><h4>Cast</h4>
           <div id="st_cast" class="st_list"></div>
           <div class="st_row"><input id="st_name" placeholder="name"><input id="st_height" type="number" step="0.01" min="1.2" max="2.2" placeholder="height, m"><button id="st_add" class="lensbtn">Add</button></div>
+          <div class="dim st_hint">Height is the measurement. Looks and wardrobe are what Muse Image dresses the stand-in in when the scene is finished.</div>
           <div class="dim" id="st_caststatus"></div>
         </div>
         <div class="panelbox"><h4>Set pieces</h4>
@@ -2494,6 +2538,7 @@ PAGE = """<!doctype html>
       </div>
       <div id="st_out" class="hidden">
         <div id="st_head" class="st_head2"></div>
+        <div id="st_finishbar" class="st_finishbar"></div>
         <div id="st_frame"></div>
         <div class="st_row"><button id="st_play" class="lensbtn">Play</button><input id="st_scrub" type="range" min="0" max="0" value="0" style="flex:1"></div>
         <div id="st_strip" class="st_strip"></div>
@@ -2525,6 +2570,8 @@ PAGE = """<!doctype html>
             <div class="sm_acts"><button id="sm_twin" class="primary">Open in the twin</button><button id="sm_render" class="lensbtn">Render the move</button></div>
             <div class="st_log" id="sm_log"></div>
             <div class="sm_video" id="sm_video"></div>
+            <div class="sm_acts" id="sm_finishacts"></div>
+            <div class="dim" id="sm_finishline"></div>
           </div>
           <div class="panelbox"><h4>Rig</h4><div class="sm_rig" id="sm_rig"></div>
             <h4 style="margin-top:14px">What does not work</h4><div id="sm_problems"></div>

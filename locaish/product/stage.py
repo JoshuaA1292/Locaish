@@ -13,8 +13,10 @@ and the tests. One `Stage` per studio process. It owns:
 - **the rehearsals** (`agent.rehearsal`): background runs with an event
   stream, like coverage plans, each leaving a directory of frames, a call
   sheet and a blocking diagram;
-- **finished frames** (`meta.finish`): one animatic frame at a time, on
-  request, stamped as a render;
+- **finished frames** (`meta.finish`): the whole animatic or every Nth frame
+  of a rendered move through Muse Image as a background run with an event
+  stream, each frame stamped as a render and kept beside the measured one;
+  one frame at a time on request as well;
 - **camera simulations** (`film.sim`): keyed camera moves on a rig, solved
   and evaluated against the measured room on every edit, each kept as a
   directory with its timeline, its evaluation, its rendered move and the
@@ -124,9 +126,35 @@ class SimDirect:
         return {"kind": "done", "run": self.id, **(self.result or {})}
 
 
+@dataclass
+class FinishRun:
+    """One Muse Image pass over a whole sequence: a rehearsal's animatic, or
+    every Nth frame of a rendered move and the video held from them."""
+
+    id: str
+    job_id: str
+    kind: str                          # "rehearsal" or "sim"
+    key: str                           # the rehearsal id or the sim id
+    workdir: Path                      # where the finished frames land
+    events: queue.Queue = field(default_factory=queue.Queue)
+    state: str = "queued"
+    error: str | None = None
+    result: dict | None = None
+    created_at: str = field(default_factory=lambda: time.strftime("%Y-%m-%dT%H:%M:%S"))
+
+    def emit(self, kind: str, text: str = "", **extra) -> None:
+        self.events.put({"kind": kind, "text": text, **extra})
+
+    def done_item(self) -> dict:
+        return {"kind": "done", "run": self.id, **(self.result or {})}
+
+
 _SIM_ID = re.compile(r"[A-Za-z0-9_-]{1,40}")
 _LOOK_NAME = re.compile(r"look_\d{2}_t[\d.]+\.png")
 _SIM_FRAME_NAME = re.compile(r"frame_\d{5}\.png")
+_SIM_FINISH_NAME = re.compile(r"finish_frame_\d{5}\.png")
+FINISH_WORKERS = 4
+SIM_FINISH_EVERY = 12
 SIM_CAPTION_PX = 40
 SIM_FIGURE_CAP = 3000
 
@@ -149,6 +177,7 @@ class Stage:
         self._dressed: dict[str, tuple[str, Any, Any]] = {}   # job id -> (pose fingerprint, twin, sweep)
         self.sim_renders: dict[str, SimRender] = {}           # "<job>/<sim>/<run>" -> render
         self.sim_directs: dict[str, SimDirect] = {}
+        self.finish_runs: dict[str, FinishRun] = {}           # "<job>/<kind>/<key>/<run>" -> finish
         self._sim_envs: dict[str, tuple[str, Any, Any]] = {}  # job id -> (pose fingerprint, floor maps, occupancy)
         self._sim_evals: dict[str, tuple[Any, Any]] = {}      # "<job>/<sim>" -> (Timeline, Evaluation) objects
 
@@ -187,8 +216,24 @@ class Stage:
         if height > 3.0:
             height = height / 100.0
         eye = body.get("eye_height_m")
-        actor = castmod.add_actor(job.workdir, name, height, eye_height_m=float(eye) if eye else None)
+        actor = castmod.add_actor(job.workdir, name, height, eye_height_m=float(eye) if eye else None,
+                                  wardrobe=str(body.get("wardrobe") or ""), description=str(body.get("description") or ""))
         return actor.to_json()
+
+    def update_actor(self, job, actor_id: str, body: dict) -> dict:
+        """Wardrobe, description, name or height changed on the page."""
+        from . import cast as castmod
+
+        fields: dict[str, Any] = {}
+        for k in ("wardrobe", "description", "name"):
+            if k in body and body[k] is not None:
+                fields[k] = str(body[k])
+        if body.get("height_m") is not None:
+            h = float(body["height_m"])
+            fields["height_m"] = h / 100.0 if h > 3.0 else h
+        if body.get("eye_height_m") is not None:
+            fields["eye_height_m"] = float(body["eye_height_m"])
+        return castmod.update_actor(job.workdir, actor_id, **fields).to_json()
 
     def remove_actor(self, job, actor_id: str) -> bool:
         from . import cast as castmod
@@ -655,7 +700,17 @@ class Stage:
 
     def sim(self, job, sim_id: str) -> dict:
         tl, ev = self._load_sim(job, sim_id)
-        return self._answer(tl, ev)
+        out = self._answer(tl, ev)
+        out["files"] = self._sim_files(job, sim_id)
+        return out
+
+    def _sim_files(self, job, sim_id: str) -> dict:
+        """Which of a move's products are on disk: the page shows what is there after a reload."""
+        d = self._sim_dir(job, sim_id)
+        rendered = len(list((d / "render").glob("frame_*.png"))) if (d / "render").is_dir() else 0
+        finished = len(list((d / "finish").glob("finish_frame_*.png"))) if (d / "finish").is_dir() else 0
+        return {"move_mp4": (d / "move.mp4").exists(), "move_finished_mp4": (d / "move_finished.mp4").exists(),
+                "rendered": rendered, "finished": finished}
 
     def save_sim(self, job, sim_id: str, body: dict) -> dict:
         """Every edit from the viewer lands here: save, solve, evaluate, answer."""
@@ -1008,6 +1063,16 @@ class Stage:
             if not f.exists():
                 raise KeyError("the move has not been rendered")
             return f.read_bytes(), "video/mp4"
+        if name == "move_finished.mp4":
+            f = d / "move_finished.mp4"
+            if not f.exists():
+                raise KeyError("the move has not been finished")
+            return f.read_bytes(), "video/mp4"
+        if _SIM_FINISH_NAME.fullmatch(name):
+            f = d / "finish" / name
+            if not f.exists():
+                raise KeyError("no such finished frame")
+            return f.read_bytes(), "image/png"
         if _SIM_FRAME_NAME.fullmatch(name):
             f = d / "render" / name
             if not f.exists():
@@ -1069,7 +1134,10 @@ class Stage:
 
     # -- finished frames -----------------------------------------------------------
 
+    # -- finishing: Muse Image over the measured frames --------------------------
+
     def finish(self, job, run: RehearsalRun, frame_name: str, body: dict) -> dict:
+        """One animatic frame, now, on the same instruction the sequence uses."""
         from ..meta import finish as finmod
         from . import cast as castmod
 
@@ -1079,31 +1147,232 @@ class Stage:
         src = run.workdir / "animatic" / Path(frame_name).name
         if not src.exists():
             raise KeyError("no such frame")
-        meta = {}
+        meta = next((m for n, _, m in self._animatic_frames(run, read=False) if n == src.name), {})
+        cast = castmod.load_cast(job.workdir)
+        heads = self._headshots(job, cast)
+        errors: list[str] = []
+        out = finmod.finish_sequence(
+            [(src.name, src.read_bytes(), meta)], client=client, cast=cast, headshots=heads,
+            out_dir=run.workdir / "finish", workers=1, force=True,
+            scene_light=str(body.get("light") or ""), mood=str(body.get("mood") or ""),
+            progress=lambda e: errors.append(e["text"]) if e.get("kind") == "error" else None,
+        )
+        if not out:
+            raise RuntimeError(errors[0] if errors else "Muse Image did not answer")
+        ff = out[0]
+        return {"file": ff.path.name, "prompt": ff.prompt, "model": ff.model, "note": ff.note,
+                "headshots": int(ff.meta.get("headshots") or 0)}
+
+    def finish_run(self, job, kind: str, key: str, run_id: str) -> FinishRun | None:
+        return self.finish_runs.get(f"{job.id}/{kind}/{key}/{run_id}")
+
+    def finished_files(self, job, run: RehearsalRun) -> list[str]:
+        """The finished frames a rehearsal already has on disk, in frame order."""
+        d = run.workdir / "finish"
+        return sorted(p.name for p in d.glob("finish_*.png")) if d.is_dir() else []
+
+    def _new_finish_run(self, job, kind: str, key: str, workdir: Path) -> FinishRun:
+        run = FinishRun(id=uuid.uuid4().hex[:8], job_id=job.id, kind=kind, key=key, workdir=workdir)
+        with self._lock:
+            self.finish_runs[f"{job.id}/{kind}/{key}/{run.id}"] = run
+        return run
+
+    @staticmethod
+    def _refuse(run: FinishRun, why: str) -> FinishRun:
+        """A run that cannot start says so once, on its own stream, and ends."""
+        run.state = "failed"
+        run.error = why
+        run.events.put({"kind": "error", "text": why})
+        run.events.put(None)
+        return run
+
+    @staticmethod
+    def _animatic_frames(run: RehearsalRun, *, read: bool = True) -> list[tuple[str, bytes, dict]]:
         try:
             info = json.loads((run.workdir / "animatic" / "animatic.json").read_text())
-            frames = info.get("frames") if isinstance(info, dict) else info
-            for fr in frames or []:
-                if str(fr.get("file") or fr.get("png") or fr.get("name") or "") == src.name:
-                    meta = fr
-                    break
-        except Exception:  # noqa: BLE001
-            meta = {}
-        focal = float(meta.get("focal_mm") or (meta.get("camera") or {}).get("focal_mm") or body.get("focal_mm") or 35.0)
-        names = list((meta.get("actors") or {}).keys()) if isinstance(meta.get("actors"), dict) else []
-        heads = []
-        for a in castmod.load_cast(job.workdir):
-            if (not names or a.name in names) and a.headshot and (job.workdir / a.headshot).exists():
-                heads.append((job.workdir / a.headshot).read_bytes())
-        out = finmod.finish_frame(
-            src.read_bytes(), client=client, focal_mm=focal, headshots=heads, actors=names or None,
-            description=str(body.get("description") or meta.get("caption") or ""),
-            wardrobe=body.get("wardrobe") or None, light=body.get("light") or None, mood=str(body.get("mood") or ""),
-        )
-        dest = run.workdir / "finish" / f"finish_{src.stem}.png"
-        out.save(dest)
-        return {"file": dest.name, "prompt": out.prompt, "model": out.model, "note": out.note,
-                "headshots": len(heads)}
+        except (OSError, ValueError):
+            return []
+        frames = info.get("frames") if isinstance(info, dict) else info
+        out = []
+        for fr in frames or []:
+            name = Path(str(fr.get("file") or fr.get("png") or fr.get("name") or "")).name
+            src = run.workdir / "animatic" / name
+            if name and src.exists():
+                out.append((name, src.read_bytes() if read else b"", fr))
+        return out
+
+    @staticmethod
+    def _headshots(job, cast) -> dict[str, bytes]:
+        heads: dict[str, bytes] = {}
+        for a in cast:
+            if a.headshot and (job.workdir / a.headshot).exists():
+                heads[a.name] = (job.workdir / a.headshot).read_bytes()
+        return heads
+
+    def _finish_progress(self, frun: FinishRun, url_base: str, counter: dict, e: dict) -> None:
+        """finish_sequence's progress, as the browser's events. A frame that
+        failed is a note, not an error: the run goes on and the measured
+        frame stands in for that one."""
+        kind = e.get("kind")
+        total = int(e.get("total") or 0)
+        if kind in ("done", "skip"):
+            counter["n"] += 1
+            frun.emit("frame", f"{counter['n']} of {total} finished", done=counter["n"], total=total,
+                      index=e.get("index"), name=e.get("name"), file=e.get("file"), url=f"{url_base}/{e.get('file')}",
+                      cached=kind == "skip")
+        elif kind == "error":
+            counter["failed"] += 1
+            frun.emit("note", str(e.get("text") or "a frame failed"), index=e.get("index"), name=e.get("name"))
+        elif kind == "start":
+            frun.emit("stage", str(e.get("text") or ""), index=e.get("index"), total=total)
+
+    def start_finish_all(self, job, run: RehearsalRun, body: dict | None) -> FinishRun:
+        """Every animatic frame of a rehearsal through Muse Image, in the background."""
+        body = body or {}
+        frun = self._new_finish_run(job, "rehearsal", run.id, run.workdir / "finish")
+        client = self._client()
+        if client is None:
+            return self._refuse(frun, "Muse Image needs the Meta Model API (META_API_KEY) to finish the scene")
+        if run.state != "done":
+            return self._refuse(frun, f"the rehearsal is {run.state}; finish it when it is done")
+        threading.Thread(target=self._finish_rehearsal, args=(job, run, frun, client, body), daemon=True).start()
+        return frun
+
+    def _finish_rehearsal(self, job, run: RehearsalRun, frun: FinishRun, client, body: dict) -> None:
+        from ..meta import finish as finmod
+        from . import cast as castmod
+
+        frun.state = "running"
+        t0 = time.time()
+        try:
+            frames = self._animatic_frames(run)
+            if not frames:
+                raise ValueError("the rehearsal has no animatic frames to finish")
+            cast = castmod.load_cast(job.workdir)
+            counter = {"n": 0, "failed": 0}
+            frun.emit("stage", f"Muse Image is finishing {len(frames)} frames", total=len(frames))
+            finished = finmod.finish_sequence(
+                frames, client=client, cast=cast, headshots=self._headshots(job, cast), out_dir=frun.workdir,
+                workers=int(body.get("workers") or FINISH_WORKERS), force=bool(body.get("force")),
+                scene_light=str(body.get("light") or ""), mood=str(body.get("mood") or ""),
+                progress=lambda e: self._finish_progress(frun, f"/rehearsal-image/{job.id}/{run.id}", counter, e),
+            )
+            files = [f.path.name for f in finished if f.path is not None]
+            frun.result = {
+                "files": files, "finished": len(files), "failed": counter["failed"],
+                "cached": sum(1 for f in finished if f.cached), "total": len(frames),
+                "seconds": round(time.time() - t0, 1),
+                "prompt": next((f.prompt for f in finished if f.prompt), ""),
+                "note": "renders, not measurements; the measured frames stand beside them",
+            }
+            frun.state = "done"
+            frun.events.put(frun.done_item())
+        except Exception as exc:  # noqa: BLE001 - the browser has to see why
+            frun.state = "failed"
+            frun.error = f"{type(exc).__name__}: {exc}"
+            frun.events.put({"kind": "error", "text": frun.error, "detail": traceback.format_exc()[-2000:]})
+        finally:
+            frun.events.put(None)
+
+    def start_sim_finish(self, job, sim_id: str, body: dict | None) -> FinishRun:
+        """Every Nth rendered frame of a move through Muse Image, then the held video."""
+        d = self._sim_dir(job, sim_id)
+        frun = self._new_finish_run(job, "sim", sim_id, d / "finish")
+        client = self._client()
+        if client is None:
+            return self._refuse(frun, "Muse Image needs the Meta Model API (META_API_KEY) to finish the move")
+        rendered = sorted((d / "render").glob("frame_*.png")) if (d / "render").is_dir() else []
+        if not rendered:
+            return self._refuse(frun, "render the move first: the finish works from the rendered frames")
+        threading.Thread(target=self._finish_sim, args=(job, sim_id, frun, client, body or {}, rendered), daemon=True).start()
+        return frun
+
+    def _finish_sim(self, job, sim_id: str, frun: FinishRun, client, body: dict, rendered: list[Path]) -> None:
+        from ..meta import finish as finmod
+        from . import cast as castmod
+
+        frun.state = "running"
+        t0 = time.time()
+        try:
+            tl, ev = self._load_sim(job, sim_id)
+            ev_frames = ev.get("frames") or []
+            every = max(1, int(body.get("every") or SIM_FINISH_EVERY))
+            chosen = rendered[::every]
+            if chosen[-1] != rendered[-1]:
+                chosen.append(rendered[-1])      # the move ends where it ends
+            # The render kept every k-th evaluation frame; map a rendered index
+            # back to the evaluation frame it was drawn from for its numbers.
+            ratio = len(ev_frames) / max(1, len(rendered))
+            frames = []
+            for pth in chosen:
+                i = int(pth.stem.split("_")[-1])
+                evf = ev_frames[min(len(ev_frames) - 1, int(round(i * ratio)))] if ev_frames else {}
+                meta = {
+                    "focal_mm": evf.get("focal_mm"),
+                    "actors": evf.get("actors") if isinstance(evf.get("actors"), dict) else None,
+                    "camera": {"pos": evf.get("cam"), "aim": evf.get("aim"), "focal_mm": evf.get("focal_mm")},
+                    "framing": {"size_name": evf.get("shot_name"), "subject": evf.get("subject") or next(iter(evf.get("actors") or {}), None)},
+                }
+                if meta["actors"] is None:
+                    meta.pop("actors")
+                frames.append((pth.name, pth.read_bytes(), meta))
+            cast = castmod.load_cast(job.workdir)
+            counter = {"n": 0, "failed": 0}
+            frun.emit("stage", f"Muse Image is finishing {len(frames)} of {len(rendered)} rendered frames (every {every}th)",
+                      total=len(frames))
+            finished = finmod.finish_sequence(
+                frames, client=client, cast=cast, headshots=self._headshots(job, cast), out_dir=frun.workdir,
+                workers=int(body.get("workers") or FINISH_WORKERS), force=bool(body.get("force")),
+                scene_light=str(body.get("light") or ""), mood=str(body.get("mood") or ""),
+                progress=lambda e: self._finish_progress(frun, f"/sim-file/{job.id}/{sim_id}", counter, e),
+            )
+            files = [f.path.name for f in finished if f.path is not None]
+            # The video: each finished frame held for the frames it stands for.
+            render_every = max(1, int(round(ratio)))
+            render_fps = _ev_fps(ev, tl) / render_every
+            mp4 = frun.workdir.parent / "move_finished.mp4"
+            note = ""
+            ffmpeg = shutil.which("ffmpeg")
+            if files and ffmpeg:
+                frun.emit("stage", "encoding move_finished.mp4")
+                if mp4.exists():
+                    mp4.unlink()
+                by_index = {int(Path(f).stem.split("_")[-1]): f for f in files}
+                order = sorted(by_index)
+                lines = []
+                for k, idx in enumerate(order):
+                    nxt = order[k + 1] if k + 1 < len(order) else len(rendered)
+                    hold = max(1, nxt - idx) / render_fps
+                    lines.append(f"file '{by_index[idx]}'\nduration {hold:.4f}")
+                lines.append(f"file '{by_index[order[-1]]}'")
+                (frun.workdir / "frames.txt").write_text("\n".join(lines) + "\n")
+                proc = subprocess.run(
+                    [ffmpeg, "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", "frames.txt",
+                     "-vf", "fps=24,scale=1280:-2:flags=lanczos,format=yuv420p",
+                     "-c:v", "libx264", "-crf", "20", str(mp4)],
+                    cwd=frun.workdir, capture_output=True, text=True, timeout=600,
+                )
+                if proc.returncode != 0 or not mp4.exists():
+                    note = f"ffmpeg failed ({(proc.stderr or '').strip()[-300:]}); the finished frames are in finish/"
+            elif not files:
+                note = "no frame finished, so no video"
+            else:
+                note = "ffmpeg is not on this studio's PATH, so no mp4: the finished frames are in finish/"
+            frun.result = {
+                "files": files, "finished": len(files), "failed": counter["failed"], "total": len(frames),
+                "cached": sum(1 for f in finished if f.cached), "every": every,
+                "mp4": f"/sim-file/{job.id}/{sim_id}/move_finished.mp4" if mp4.exists() else None,
+                "seconds": round(time.time() - t0, 1), "note": note, "ffmpeg": bool(ffmpeg),
+                "prompt": next((f.prompt for f in finished if f.prompt), ""),
+            }
+            frun.state = "done"
+            frun.events.put(frun.done_item())
+        except Exception as exc:  # noqa: BLE001 - the browser has to see why
+            frun.state = "failed"
+            frun.error = f"{type(exc).__name__}: {exc}"
+            frun.events.put({"kind": "error", "text": frun.error, "detail": traceback.format_exc()[-2000:]})
+        finally:
+            frun.events.put(None)
 
 
 def _ev_fps(ev: dict, tl: dict | None = None) -> float:

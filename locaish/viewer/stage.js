@@ -8,10 +8,16 @@
 
 let stJob = null, stStatus = {}, stCast = [], stPieces = [], stLabels = [], stRuns = [];
 let stCurrent = null, stFrames = [], stFrameIdx = 0, stPlaying = null, stBusy = false;
+// The finished frames of the open rehearsal (file names under finish/), which
+// of the two the big frame shows, and the finish-all run in flight.
+let stFinished = new Set(), stView = 'finished', stFinishRun = null, stFinishText = '';
+const AUTO_KEY = 'locaish.autofinish';
+function autoFinish() { try { return localStorage.getItem(AUTO_KEY) !== '0'; } catch (e) { return true; } }
 
 function initStage(id) {
   stJob = id;
   stCurrent = null; stFrames = []; stFrameIdx = 0; stopAnimatic();
+  stFinished = new Set(); stFinishRun = null; stFinishText = '';
   $('st_add').onclick = addActor;
   $('st_height').onkeydown = e => { if (e.key === 'Enter') addActor(); };
   $('st_lift').onclick = liftPiece;
@@ -50,10 +56,16 @@ function paintCast() {
     const img = a.headshot ? '<img class="st_head" src="/headshot/' + stJob + '/' + a.id + '" alt="">' : '<span class="st_head st_blank" style="background:' + col + '"></span>';
     return '<div class="st_actor" data-id="' + a.id + '">' + img
       + '<div class="st_actorbody"><b>' + esc(a.name) + '</b> <span class="dim">' + Number(a.height_m).toFixed(2) + ' m · eyes ' + Number(a.eye_height_m).toFixed(2) + ' m</span> ' + body
+      + '<div class="st_words"><input data-words="description" data-actor="' + a.id + '" placeholder="looks: 19, short brown hair, slim" value="' + esc(a.description || '') + '" title="how they look, for the finish">'
+      + '<input data-words="wardrobe" data-actor="' + a.id + '" placeholder="wardrobe: grey t-shirt, white trousers" value="' + esc(a.wardrobe || '') + '" title="what they wear, for the finish"></div>'
       + '<div class="st_acts"><label class="st_file">headshot<input type="file" accept="image/*" data-head="' + a.id + '"></label>'
       + '<button class="st_x" data-rm="' + a.id + '" title="remove">×</button></div></div></div>';
   }).join('');
   box.querySelectorAll('input[data-head]').forEach(inp => inp.onchange = () => uploadHeadshot(inp.dataset.head, inp.files[0]));
+  box.querySelectorAll('input[data-words]').forEach(inp => {
+    inp.onchange = () => saveWords(inp.dataset.actor, inp.dataset.words, inp.value);
+    inp.onkeydown = e => { if (e.key === 'Enter') inp.blur(); };
+  });
   box.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => fetch('/cast/' + stJob + '/' + b.dataset.rm, {method: 'DELETE'}).then(loadCast));
 }
 
@@ -66,6 +78,16 @@ function addActor() {
       $('st_name').value = ''; $('st_height').value = ''; $('st_caststatus').textContent = '';
       loadCast();
     });
+}
+
+function saveWords(aid, field, value) {
+  const body = {}; body[field] = value.trim();
+  fetch('/cast/' + stJob + '/' + aid, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)})
+    .then(r => r.json()).then(r => {
+      if (r.error) { $('st_caststatus').textContent = r.error; return; }
+      const a = stCast.find(x => x.id === aid); if (a) a[field] = r.actor[field];
+      $('st_caststatus').textContent = '';
+    }).catch(e => { $('st_caststatus').textContent = String(e); });
 }
 
 function uploadHeadshot(aid, file) {
@@ -201,15 +223,19 @@ function listenRehearsal(rid) {
     if (m.kind === 'stage') { stLog(m.text); caption('Rehearsing', m.text); }
     else if (m.kind === 'note') stLog(m.text, 'note');
     else if (m.kind === 'error') { settled = true; es.close(); rehearsalFail(m.text); }
-    else if (m.kind === 'done') { settled = true; es.close(); stBusy = false; $('st_run').disabled = false; stLog('done'); loadRuns(); openRun(rid); }
+    else if (m.kind === 'done') {
+      settled = true; es.close(); stBusy = false; $('st_run').disabled = false; stLog('done'); loadRuns();
+      openRun(rid).then(() => { if (stStatus.finish && stCast.length && autoFinish()) startFinishAll(false); });
+    }
   };
   es.onerror = () => { es.close(); if (!settled) setTimeout(() => { if (!settled) listenRehearsal(rid); }, 2000); };
 }
 
 function openRun(rid) {
-  fetch('/rehearsal/' + stJob + '/' + rid).then(r => r.json()).then(r => {
+  return fetch('/rehearsal/' + stJob + '/' + rid).then(r => r.json()).then(r => {
     if (r.error) { stLog(r.error, 'error'); return; }
     stCurrent = {id: rid, data: r};
+    if (stFinishRun && stFinishRun.rid !== rid) stFinishText = '';
     renderRun();
   });
 }
@@ -219,14 +245,19 @@ function renderRun() {
   $('st_out').classList.remove('hidden');
   const prov = r.provider === 'meta' ? ' · broken down by Muse Spark' : ' · typed scene';
   $('st_head').innerHTML = '<b>' + esc(sc.title || 'Rehearsal') + '</b><span>' + Math.round(reh.duration_s || 0) + ' s · ' + (reh.shots || []).length + ' setups · ' + (sc.beats || []).length + ' beats' + prov + '</span>';
-  // frames
-  fetch('/rehearsal/' + stJob + '/' + rid + '/animatic.json').then(x => x.json()).then(a => {
+  // frames: the finished ones first, so the strip shows them where they exist
+  Promise.all([
+    fetch('/rehearsal/' + stJob + '/' + rid + '/animatic.json').then(x => x.json()),
+    fetch('/rehearsal/' + stJob + '/' + rid + '/finished').then(x => x.json()).catch(() => ({files: []})),
+  ]).then(([a, fin]) => {
     stFrames = (a.frames || []).filter(f => f.file);
+    stFinished = new Set(fin.files || []);
     $('st_scrub').max = Math.max(0, stFrames.length - 1); $('st_scrub').value = 0;
-    $('st_strip').innerHTML = stFrames.map((f, i) => '<img data-i="' + i + '" src="/rehearsal-image/' + stJob + '/' + rid + '/' + encodeURIComponent(f.file) + '" loading="lazy" alt="">').join('');
+    $('st_strip').innerHTML = stFrames.map((f, i) => '<img data-i="' + i + '" src="' + frameSrc(f, rid) + '" class="' + (hasFinished(f) ? 'finished' : '') + '" loading="lazy" alt="">').join('');
     $('st_strip').querySelectorAll('img').forEach(im => im.onclick = () => { stopAnimatic(); showFrame(Number(im.dataset.i)); });
+    paintFinishBar();
     showFrame(0);
-  }).catch(() => { stFrames = []; $('st_strip').innerHTML = ''; });
+  }).catch(() => { stFrames = []; stFinished = new Set(); $('st_strip').innerHTML = ''; paintFinishBar(); });
   // shots
   $('st_shots').innerHTML = (reh.shots || []).map(s => {
     const st = s.setup || {};
@@ -258,10 +289,17 @@ function showFrame(i) {
   const cam = f.camera || {};
   const who = Object.keys(f.actors || {}).join(', ');
   const sun = f.sun ? (f.sun.direct_sun ? 'direct sun through window ' + (f.sun.windows_lit || []).map(w => w + 1).join(', ') : 'no direct sun') : '';
-  const finishBtn = stStatus.finish ? '<button class="lensbtn" id="st_finish">Finish this frame with Muse Image</button>' : '';
-  $('st_frame').innerHTML = '<div class="st_framerow"><div><img src="/rehearsal-image/' + stJob + '/' + rid + '/' + encodeURIComponent(f.file) + '" alt="frame"><div class="dim">measured frame · t ' + Number(f.t).toFixed(1) + ' s' + (f.clock ? ' · ' + f.clock : '') + (cam.focal_mm ? ' · ' + Math.round(cam.focal_mm) + ' mm · shot ' + cam.shot : '') + (who ? ' · ' + esc(who) : '') + (sun ? ' · ' + sun : '') + '</div></div>'
-    + '<div id="st_finished"></div></div><div class="st_acts"><button class="lensbtn" id="st_look">Look through it in the twin</button>' + finishBtn + '</div>';
+  const finishBtn = stStatus.finish ? '<button class="lensbtn" id="st_finish">' + (hasFinished(f) ? 'Finish this frame again' : 'Finish this frame with Muse Image') + '</button>' : '';
+  const showFin = hasFinished(f) && stView === 'finished';
+  const facts = 't ' + Number(f.t).toFixed(1) + ' s' + (f.clock ? ' · ' + f.clock : '') + (cam.focal_mm ? ' · ' + Math.round(cam.focal_mm) + ' mm · shot ' + cam.shot : '') + (who ? ' · ' + esc(who) : '') + (sun ? ' · ' + sun : '');
+  const big = showFin
+    ? '<div class="st_frame_finished"><img src="/rehearsal-image/' + stJob + '/' + rid + '/' + encodeURIComponent(finishedName(f)) + '" alt="finished frame"><span class="st_stamp">finished · Muse Image · a render</span></div><div class="dim">finished frame, the measured one underneath it · ' + facts + '</div>'
+    : '<img src="/rehearsal-image/' + stJob + '/' + rid + '/' + encodeURIComponent(f.file) + '" alt="frame"><div class="dim">measured frame · ' + facts + '</div>';
+  $('st_frame').innerHTML = '<div class="st_framerow"><div>' + big + '</div>'
+    + '<div id="st_finished">' + (showFin ? '<img src="/rehearsal-image/' + stJob + '/' + rid + '/' + encodeURIComponent(f.file) + '" alt="measured frame"><div class="dim">the measurement it was finished from</div>' : '') + '</div></div>'
+    + '<div class="st_acts"><button class="lensbtn" id="st_look">Look through it in the twin</button>' + finishBtn + '</div>';
   $('st_strip').querySelectorAll('img').forEach(im => im.classList.toggle('active', Number(im.dataset.i) === stFrameIdx));
+  paintToggle();
   $('st_look').onclick = () => {
     if (!cam.pos) return;
     lookAt({cam: cam.pos, subject: [cam.aim[0], cam.aim[1]], focal_mm: cam.focal_mm}, 'Rehearsal · shot ' + cam.shot + ' · ' + Math.round(cam.focal_mm) + ' mm');
@@ -270,15 +308,96 @@ function showFrame(i) {
   if (stStatus.finish) $('st_finish').onclick = () => finishFrame(f);
 }
 
+function finishedName(f) { return 'finish_' + f.file.replace(/\.[^.]+$/, '') + '.png'; }
+function hasFinished(f) { return stFinished.has(finishedName(f)); }
+function frameSrc(f, rid, bust) {
+  const name = hasFinished(f) ? finishedName(f) : f.file;
+  return '/rehearsal-image/' + stJob + '/' + rid + '/' + encodeURIComponent(name) + (bust ? '?t=' + Date.now() : '');
+}
+
 function finishFrame(f) {
   const rid = stCurrent.id;
-  $('st_finished').innerHTML = '<div class="dim">Muse Image is finishing the frame from the cast’s headshots…</div>';
+  $('st_finished').innerHTML = '<div class="dim">Muse Image is finishing the frame: the cast’s words and headshots, the measured geometry kept…</div>';
   fetch('/rehearsal/' + stJob + '/' + rid + '/finish/' + encodeURIComponent(f.file), {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({})})
     .then(r => r.json()).then(r => {
       if (r.error) { $('st_finished').innerHTML = '<div class="error">' + esc(r.error) + '</div>'; return; }
-      $('st_finished').innerHTML = '<img src="/rehearsal-image/' + stJob + '/' + rid + '/' + encodeURIComponent(r.file) + '?t=' + Date.now() + '" alt="finished"><div class="dim">' + esc(r.note) + ' · ' + esc(r.model) + (r.headshots ? ' · ' + r.headshots + ' headshot(s)' : '') + '</div>';
+      landFinished(r.file, rid);
     }).catch(e => { $('st_finished').innerHTML = '<div class="error">' + esc(String(e)) + '</div>'; });
 }
+
+// A finished frame arrived: the strip and, if it is the one on screen, the big frame swap to it.
+function landFinished(file, rid) {
+  if (!stCurrent || stCurrent.id !== rid) return;
+  stFinished.add(file);
+  const i = stFrames.findIndex(f => finishedName(f) === file);
+  if (i < 0) return;
+  const im = $('st_strip').querySelector('img[data-i="' + i + '"]');
+  if (im) { im.src = frameSrc(stFrames[i], rid, true); im.classList.add('finished'); }
+  if (i === stFrameIdx) { stView = 'finished'; showFrame(i); }
+  else paintToggle();
+}
+
+/* --- the whole scene through Muse Image ---------------------------------- */
+
+function paintFinishBar() {
+  const bar = $('st_finishbar');
+  if (!bar) return;
+  if (!stFrames.length) { bar.innerHTML = ''; return; }
+  const n = stFrames.filter(hasFinished).length;
+  const can = !!stStatus.finish;
+  bar.innerHTML = '<span class="st_toggle"><button data-view="measured">measured</button><button data-view="finished">finished</button></span>'
+    + '<span class="dim" id="st_fincount"></span>'
+    + (can ? '<button class="lensbtn" id="st_finishall">' + (n === stFrames.length && n ? 'Finish the whole scene again' : 'Finish the whole scene with Muse Image') + '</button>'
+      + '<label><input type="checkbox" id="st_autofin"' + (autoFinish() ? ' checked' : '') + '> finish automatically</label>'
+      : '<span class="dim">no Meta key on this studio: the measured frames stand</span>')
+    + '<span class="st_progress" id="st_finishline"></span>';
+  bar.querySelectorAll('[data-view]').forEach(b => b.onclick = () => { stView = b.dataset.view; showFrame(stFrameIdx); });
+  if (can) {
+    $('st_finishall').onclick = () => startFinishAll(n > 0);
+    $('st_autofin').onchange = () => { try { localStorage.setItem(AUTO_KEY, $('st_autofin').checked ? '1' : '0'); } catch (e) {} };
+  }
+  paintToggle();
+}
+
+function paintToggle() {
+  const bar = $('st_finishbar');
+  if (!bar || !stFrames.length) return;
+  const n = stFrames.filter(hasFinished).length;
+  const cur = stFrames[stFrameIdx];
+  const canFin = cur && hasFinished(cur);
+  bar.querySelectorAll('[data-view]').forEach(b => {
+    b.disabled = b.dataset.view === 'finished' && !canFin;
+    b.classList.toggle('on', (b.dataset.view === 'finished') === (canFin && stView === 'finished'));
+  });
+  const c = $('st_fincount'); if (c) c.textContent = n ? n + ' of ' + stFrames.length + ' finished' : (stCast.length ? '' : 'cast someone first: the finish needs people to put in the room');
+  const line = $('st_finishline'); if (line) { line.textContent = stFinishText; line.classList.toggle('error', /^(error|failed)/i.test(stFinishText)); }
+  const btn = $('st_finishall'); if (btn) btn.disabled = !!stFinishRun;
+}
+
+function setFinishText(t) { stFinishText = t; const line = $('st_finishline'); if (line) { line.textContent = t; line.classList.toggle('error', /^(error|failed)/i.test(t)); } }
+
+function startFinishAll(force) {
+  if (!stCurrent || stFinishRun) return;
+  const rid = stCurrent.id;
+  stFinishRun = {rid};
+  setFinishText('starting…'); paintToggle();
+  fetch('/rehearsal/' + stJob + '/' + rid + '/finish-all', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({force: !!force})})
+    .then(r => r.json()).then(r => {
+      if (!r.run) { finishAllEnd('error: ' + (r.error || 'could not start')); return; }
+      const es = new EventSource(r.events);
+      es.onmessage = e => {
+        const m = JSON.parse(e.data);
+        if (m.kind === 'stage') setFinishText(m.text);
+        else if (m.kind === 'frame') { setFinishText(m.text); if (m.file) landFinished(m.file, rid); }
+        else if (m.kind === 'note') setFinishText(m.text);
+        else if (m.kind === 'done') { es.close(); finishAllEnd((m.finished || 0) + ' of ' + (m.total || 0) + ' frames finished in ' + (m.seconds || 0) + ' s' + (m.failed ? ' · ' + m.failed + ' failed, measured frames stand in' : '')); }
+        else if (m.kind === 'error') { es.close(); finishAllEnd('error: ' + m.text); }
+      };
+      es.onerror = () => { es.close(); finishAllEnd('error: the finishing stream closed'); };
+    }).catch(e => finishAllEnd('error: ' + String(e)));
+}
+
+function finishAllEnd(text) { stFinishRun = null; setFinishText(text); paintFinishBar(); }
 
 function togglePlay() { if (stPlaying) stopAnimatic(); else { $('st_play').textContent = 'Pause'; stPlaying = setInterval(() => showFrame((stFrameIdx + 1) % Math.max(1, stFrames.length)), 1000); } }
 function stopAnimatic() { if (stPlaying) clearInterval(stPlaying); stPlaying = null; const b = $('st_play'); if (b) b.textContent = 'Play'; }
@@ -421,10 +540,11 @@ function openSim(id) {
 }
 
 function takeSim(r) {
-  smCur = r; smT = 0; smRun = null;
-  $('sm_video').innerHTML = ''; $('sm_log').innerHTML = '';
+  smCur = r; smT = 0; smRun = null; smFinishRun = null;
+  $('sm_video').innerHTML = ''; $('sm_log').innerHTML = ''; $('sm_finishline').textContent = '';
   $('sm_open').classList.remove('hidden');
   paintSim();
+  paintSimVideos();
   if (smMode) postViewer({type: 'locaish:sim', timeline: smCur.timeline, evaluation: smCur.evaluation});
   refreshSimFrame(0);
 }
@@ -551,7 +671,9 @@ function renderMove() {
         else if (m.kind === 'done') {
           es.close(); smRun = null; $('sm_render').disabled = false;
           smLog((m.frames || 0) + ' frames in ' + (m.seconds || 0) + ' s' + (m.note ? ' · ' + m.note : ''));
-          if (m.mp4) $('sm_video').innerHTML = '<video controls src="' + m.mp4 + '?v=' + Date.now() + '"></video><div class="st_links"><a href="' + m.mp4 + '" download="move.mp4">Download move.mp4</a></div>';
+          smCur.files = Object.assign({}, smCur.files || {}, {move_mp4: !!m.mp4, rendered: m.frames || 0, move_finished_mp4: false, finished: 0});
+          paintSimVideos();
+          if (stStatus.finish && stCast.length && autoFinish() && m.frames) finishMove();
           refreshSimFrame(smT);
         } else if (m.kind === 'error') { es.close(); smRun = null; $('sm_render').disabled = false; smLog(m.text, 'error'); }
       };
@@ -563,3 +685,54 @@ function smLog(text, cls) {
   const d = document.createElement('div'); d.textContent = text; if (cls) d.className = cls;
   $('sm_log').appendChild(d); $('sm_log').scrollTop = 1e9;
 }
+
+/* --- the move through Muse Image ------------------------------------------ */
+
+let smFinishRun = null;
+
+// The measured move and, when it exists, the finished one beside it.
+function paintSimVideos() {
+  const files = (smCur && smCur.files) || {};
+  const base = '/sim-file/' + smJob + '/' + smCur.timeline.id + '/';
+  const v = Date.now();
+  const parts = [];
+  if (files.move_mp4) parts.push('<figure><video controls src="' + base + 'move.mp4?v=' + v + '"></video><figcaption>measured move · <a href="' + base + 'move.mp4" download="move.mp4">download</a></figcaption></figure>');
+  if (files.move_finished_mp4) parts.push('<figure><video controls src="' + base + 'move_finished.mp4?v=' + v + '"></video><figcaption>finished with Muse Image · a render, not a measurement · <a href="' + base + 'move_finished.mp4" download="move_finished.mp4">download</a></figcaption></figure>');
+  $('sm_video').innerHTML = parts.length ? '<div class="sm_pair' + (parts.length === 1 ? ' single' : '') + '">' + parts.join('') + '</div>' : '';
+  const acts = $('sm_finishacts');
+  if (!acts) return;
+  if (files.rendered && stStatus.finish) {
+    acts.innerHTML = '<button class="lensbtn" id="sm_finish">' + (files.move_finished_mp4 ? 'Finish the move again' : 'Finish the move with Muse Image') + '</button>'
+      + '<span class="dim">every 12th rendered frame, held between</span>';
+    $('sm_finish').onclick = () => finishMove(!!files.move_finished_mp4);
+    $('sm_finish').disabled = !!smFinishRun;
+  } else if (files.rendered) {
+    acts.innerHTML = '<span class="dim">no Meta key on this studio: the measured move stands</span>';
+  } else acts.innerHTML = '';
+}
+
+function finishMove(force) {
+  if (!smCur || smFinishRun) return;
+  const id = smCur.timeline.id;
+  smFinishRun = {id};
+  const line = $('sm_finishline');
+  line.textContent = 'starting…';
+  const btn = $('sm_finish'); if (btn) btn.disabled = true;
+  fetch('/sim/' + smJob + '/' + id + '/finish', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({every: 12, force: !!force})})
+    .then(r => r.json()).then(r => {
+      if (!r.run) { finishMoveEnd('error: ' + (r.error || 'could not start')); return; }
+      const es = new EventSource(r.events);
+      es.onmessage = e => {
+        const m = JSON.parse(e.data);
+        if (m.kind === 'stage' || m.kind === 'frame' || m.kind === 'note') line.textContent = m.text;
+        else if (m.kind === 'done') {
+          es.close();
+          if (smCur && smCur.timeline.id === id) smCur.files = Object.assign({}, smCur.files || {}, {move_finished_mp4: !!m.mp4, finished: m.finished || 0});
+          finishMoveEnd((m.finished || 0) + ' of ' + (m.total || 0) + ' frames finished in ' + (m.seconds || 0) + ' s' + (m.note ? ' · ' + m.note : ''));
+        } else if (m.kind === 'error') { es.close(); finishMoveEnd('error: ' + m.text); }
+      };
+      es.onerror = () => { es.close(); finishMoveEnd('error: the finishing stream closed'); };
+    }).catch(e => finishMoveEnd('error: ' + String(e)));
+}
+
+function finishMoveEnd(text) { smFinishRun = null; $('sm_finishline').textContent = text; if (smCur) paintSimVideos(); }

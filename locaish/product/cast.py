@@ -113,11 +113,17 @@ class Actor:
     body_path: str | None = None
     source: str = "typed"
     created_at: str = field(default_factory=_now)
+    # What the finish needs and the measurement does not: how they look and
+    # what they wear, in words Muse Image keeps to. Free text, may be empty.
+    wardrobe: str = ""
+    description: str = ""
 
     def __post_init__(self) -> None:
         self.name = str(self.name).strip()
         if not self.name:
             raise ValueError("an actor needs a name")
+        self.wardrobe = " ".join(str(self.wardrobe or "").split())
+        self.description = " ".join(str(self.description or "").split())
         try:
             self.height_m = float(self.height_m)
         except (TypeError, ValueError):
@@ -214,6 +220,8 @@ def add_actor(
     *,
     eye_height_m: float | None = None,
     headshot: str | None = None,
+    wardrobe: str = "",
+    description: str = "",
 ) -> Actor:
     """Add a typed actor to the job's cast and persist it."""
     with _lock:
@@ -224,10 +232,35 @@ def add_actor(
             eye_height_m=eye_height_m,
             colour=next_colour(cast),
             headshot=headshot,
+            wardrobe=wardrobe,
+            description=description,
         )
         cast.append(actor)
         save_cast(workdir, cast)
     return actor
+
+
+UPDATABLE = ("wardrobe", "description", "name", "height_m", "eye_height_m")
+
+
+def update_actor(workdir: str | Path, actor_id: str, **fields: Any) -> Actor:
+    """Change an actor's words or numbers in place and persist; unknown fields
+    are ignored, bad values raise ValueError as the constructor would."""
+    with _lock:
+        cast = load_cast(workdir)
+        for i, a in enumerate(cast):
+            if a.id == actor_id:
+                d = a.to_json()
+                for k, v in fields.items():
+                    if k in UPDATABLE and v is not None:
+                        d[k] = v
+                if "height_m" in fields and fields["height_m"] is not None and "eye_height_m" not in fields:
+                    d["eye_height_m"] = None   # re-derive the eyeline from the new stature
+                new = Actor.from_json(d)
+                cast[i] = new
+                save_cast(workdir, cast)
+                return new
+    raise KeyError("no such actor")
 
 
 def remove_actor(workdir: str | Path, actor_id: str) -> bool:
@@ -584,6 +617,8 @@ def describe(cast: list[Actor], *, workdir: str | Path | None = None) -> list[di
             "colour": list(a.colour),
             "source": a.source,
             "headshot": a.headshot,
+            "wardrobe": a.wardrobe,
+            "description": a.description,
             "body": None,
         }
         path = resolve_body_path(a, workdir)
