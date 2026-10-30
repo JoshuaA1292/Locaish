@@ -373,7 +373,7 @@ def test_put_two_key_handheld_is_solved_and_evaluated(sim_url):
     STATE["marks"] = marks
 
 
-def test_figures_at_t_returns_the_cast_as_point_sets(sim_url):
+def test_figures_at_t_returns_the_cast_as_bodies(sim_url):
     url, studio, _ = sim_url
     sid = STATE["sim_id"]
     # Maya is cast at her real height; the figure uses it.
@@ -385,16 +385,19 @@ def test_figures_at_t_returns_the_cast_as_point_sets(sim_url):
     assert [f["name"] for f in figs] == ["Maya"]
     f = figs[0]
     assert len(f["colour"]) == 3 and all(0 <= c <= 255 for c in f["colour"])
-    assert len(f["xyz"]) % 3 == 0 and 3 * 50 <= len(f["xyz"]) <= 3 * 3000 and f["radius_m"] > 0
-    xyz = np.asarray(f["xyz"]).reshape(-1, 3)
+    # A body is a mesh: flat vertices and triangle indices in twin metres.
+    assert "mesh" in f and len(f["mesh"]["vertices"]) % 3 == 0 and len(f["mesh"]["faces"]) % 3 == 0
+    xyz = np.asarray(f["mesh"]["vertices"]).reshape(-1, 3)
+    faces = np.asarray(f["mesh"]["faces"]).reshape(-1, 3)
+    assert 200 <= len(xyz) <= 5000 and len(faces) >= 400 and faces.max() < len(xyz)
     floor_z = studio.floor_z_of(studio.jobs["cleanroom"])
     mark = STATE["marks"][0]
     assert abs(float(xyz[:, 0].mean()) - mark[0]) < 0.3 and abs(float(xyz[:, 1].mean()) - mark[1]) < 0.3
     assert floor_z - 0.05 <= xyz[:, 2].min() and xyz[:, 2].max() <= floor_z + 1.68 + 0.05, "feet on the floor, crown at her height"
-    assert all(round(v, 3) == v for v in f["xyz"][:30])
+    assert all(round(v, 3) == v for v in f["mesh"]["vertices"][:30])
     # At the end of the move she stands on the second mark.
     status, r = _json(f"{url}/sim/cleanroom/{sid}/figures?t=2.0")
-    xyz2 = np.asarray(r["figures"][0]["xyz"]).reshape(-1, 3)
+    xyz2 = np.asarray(r["figures"][0]["mesh"]["vertices"]).reshape(-1, 3)
     mark2 = STATE["marks"][1]
     assert abs(float(xyz2[:, 0].mean()) - mark2[0]) < 0.3 and abs(float(xyz2[:, 1].mean()) - mark2[1]) < 0.3
 

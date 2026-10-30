@@ -366,3 +366,43 @@ def test_sim_finish_after_a_render_makes_the_held_video(fin_url, monkeypatch):
     status, r = _json(f"{url}/sim/cleanroom/{sid}")
     assert r["files"]["finished"] == len(expect) and r["files"]["move_finished_mp4"] == bool(shutil.which("ffmpeg"))
     assert _json(f"{url}/sim-finish-events/cleanroom/{sid}/nope")[0] == 404
+
+
+
+def test_room_photographs_ride_as_references_and_the_prompt_says_what_they_fix(tmp_path):
+    from PIL import Image
+
+    from locaish.meta import FakeMetaClient
+    from locaish.meta import finish as F
+    from locaish.product import cast as castmod
+
+    def png(w, h, colour):
+        buf = io.BytesIO()
+        Image.new("RGB", (w, h), colour).save(buf, format="PNG")
+        return buf.getvalue()
+
+    fake = FakeMetaClient(image=png(64, 36, (80, 90, 100)))
+    frame = png(200, 100, (40, 40, 40))
+    room1, room2 = b"\xff\xd8\xff" + b"r1", b"\xff\xd8\xff" + b"r2"
+    cast = [castmod.Actor(name="Maya", height_m=1.68)]
+    meta = {"camera": {"pos": [0, -2, 1.5], "aim": [0, 0, 1.5], "focal_mm": 35}, "actors": {"Maya": [0, 0, 270]}}
+    seen = []
+
+    def room_refs(m):
+        seen.append(m)
+        return [room1, room2]
+
+    out = F.finish_sequence([("frame_0001.png", frame, meta)], client=fake, cast=cast, headshots={},
+                            out_dir=tmp_path, room_refs=room_refs, continuity=False)
+    assert seen and out and out[0].meta["room_photos"] == 2
+    assert fake.log[-1]["references"] == 3                      # the frame plus two photographs
+    assert "THIS EXACT ROOM" in out[0].prompt and "Image 2 and image 3 are" in out[0].prompt
+    # A reference source that fails leaves the frame finished without photographs.
+    fake2 = FakeMetaClient(image=png(64, 36, (80, 90, 100)))
+
+    def broken(m):
+        raise RuntimeError("no frames")
+
+    out2 = F.finish_sequence([("frame_0002.png", frame, meta)], client=fake2, cast=cast, headshots={},
+                             out_dir=tmp_path, room_refs=broken, continuity=False)
+    assert out2 and out2[0].meta["room_photos"] == 0 and "THIS EXACT ROOM" not in out2[0].prompt

@@ -817,7 +817,15 @@ class Stage:
                 h = float(((tl.get("actors") or {}).get(name) or {}).get("height_m") or 1.75)
                 actor = castmod.Actor(name=name, height_m=min(max(h, 1.2), 2.2),
                                       colour=castmod.next_colour(list(cast.values())))
-            figures.append(castmod.figure(actor, (x, y), facing, floor_z, workdir=job.workdir))
+            if getattr(actor, "body_path", None):
+                figures.append(castmod.figure(actor, (x, y), facing, floor_z, workdir=job.workdir))
+                continue
+            from . import figures as figmod
+
+            speed = _actor_speed_at(ev, name, t)
+            pose = "walking" if speed > 0.15 else "standing"
+            figures.append(figmod.figure_for_actor(actor, (x, y), facing, floor_z, pose=pose,
+                                                   phase=figmod.walk_phase(float(t), speed) if pose == "walking" else 0.0))
         pieces = spm.load_pieces(job.workdir)
         keyed = {str(p.get("id")): p.get("keys") or [] for p in tl.get("pieces") or [] if p.get("id")}
         drawn: list = []
@@ -862,17 +870,22 @@ class Stage:
                 im = None
         if im is None:
             cam = _sim_camera(frame, tl, width_px)
+            meshed = [f for f in figures if getattr(f, "mesh", None) is not None]
+            pointed = [f for f in figures if getattr(f, "mesh", None) is None]
+            exclude = spm.exclusion_mask(twin, drawn, moved_only=False) if drawn else None
             field = render.gaussian_field(twin)
             if field is not None:
-                figs = [f.as_gaussians() for f in figures if len(f.xyz)]
+                figs = [f.as_gaussians() for f in pointed if len(f.xyz)]
                 if figs:
                     field = render.merge_fields([field] + figs)
                 img = render._render_gaussians(field, cam)
             else:
-                extra = [(f.xyz, (f.rgb * 255.0 + 0.5).astype(np.uint8)) for f in figures if len(f.xyz)]
-                exclude = spm.exclusion_mask(twin, drawn, moved_only=False) if drawn else None
+                extra = [(f.xyz, (f.rgb * 255.0 + 0.5).astype(np.uint8)) for f in pointed if len(f.xyz)]
                 img = render._render_points(twin, cam, extra=extra, exclude=exclude)
-            im = Image.fromarray(img)
+            if meshed:
+                # Bodies: shaded triangles with a z-buffer against the measured room.
+                img = render.draw_figures(img, twin, cam, meshed, exclude=exclude)
+            im = Image.fromarray(np.asarray(img))
         # libx264 with yuv420p wants even dimensions.
         W, H = im.width + (im.width % 2), im.height + (im.height % 2)
         canvas = Image.new("RGB", (W, H + SIM_CAPTION_PX), (14, 16, 19))
@@ -1152,7 +1165,7 @@ class Stage:
         heads = self._headshots(job, cast)
         errors: list[str] = []
         out = finmod.finish_sequence(
-            [(src.name, src.read_bytes(), meta)], client=client, cast=cast, headshots=heads,
+            [(src.name, src.read_bytes(), meta)], client=client, cast=cast, headshots=heads, room_refs=self._room_refs(job),
             out_dir=run.workdir / "finish", workers=1, force=True,
             scene_light=str(body.get("light") or ""), mood=str(body.get("mood") or ""),
             progress=lambda e: errors.append(e["text"]) if e.get("kind") == "error" else None,
@@ -1200,6 +1213,60 @@ class Stage:
             if name and src.exists():
                 out.append((name, src.read_bytes() if read else b"", fr))
         return out
+
+    def _room_refs(self, job):
+        """A callable the finisher asks for photographs of the real room from
+        near a frame's camera: the scan's own frames, chosen for looking at
+        the aim point and for standing near the planned camera, downscaled.
+        None for a twin with no posed frames (a scan-file import)."""
+        frames = self.studio.frames_of(job)
+        if frames is None:
+            return None
+        tree = self.studio.tree_of(job)
+        cache: dict[tuple, list[bytes]] = {}
+
+        def encode(i: int) -> bytes:
+            import io
+
+            from PIL import Image
+
+            im = Image.open(frames.paths[i]).convert("RGB")
+            im.thumbnail((1280, 1280))
+            buf = io.BytesIO()
+            im.save(buf, format="JPEG", quality=85)
+            return buf.getvalue()
+
+        def pick(meta: dict) -> list[bytes]:
+            cam = meta.get("camera") or {}
+            pos = cam.get("pos") or meta.get("cam")
+            aim = cam.get("aim") or meta.get("aim")
+            if pos is None or aim is None:
+                return []
+            pos = np.asarray(pos, dtype=np.float64).reshape(3)
+            aim = np.asarray(aim, dtype=np.float64).reshape(3)
+            key = (tuple(np.round(pos, 1)), tuple(np.round(aim, 1)))
+            if key in cache:
+                return cache[key]
+            chosen: list[int] = []
+            try:
+                for v in frames.best_views(aim, tree, k=2):
+                    chosen.append(int(v["index"]))
+            except Exception:  # noqa: BLE001
+                pass
+            # The capture frame whose camera stood nearest the planned one and looked the same way.
+            want = aim - pos
+            want = want / max(float(np.linalg.norm(want)), 1e-9)
+            fwd = frames.extr[:, 2, :3] @ frames.R.T              # the camera's viewing axis, twin frame
+            fwd = fwd / np.maximum(np.linalg.norm(fwd, axis=1, keepdims=True), 1e-9)
+            score = np.linalg.norm(frames.centres_twin - pos, axis=1) + 1.5 * (1.0 - fwd @ want)
+            for i in np.argsort(score)[:2]:
+                if int(i) not in chosen:
+                    chosen.append(int(i))
+            out = [encode(i) for i in chosen[:2]]
+            cache[key] = out
+            return out
+
+        return pick
 
     @staticmethod
     def _headshots(job, cast) -> dict[str, bytes]:
@@ -1252,7 +1319,7 @@ class Stage:
             counter = {"n": 0, "failed": 0}
             frun.emit("stage", f"Muse Image is finishing {len(frames)} frames", total=len(frames))
             finished = finmod.finish_sequence(
-                frames, client=client, cast=cast, headshots=self._headshots(job, cast), out_dir=frun.workdir,
+                frames, client=client, cast=cast, headshots=self._headshots(job, cast), room_refs=self._room_refs(job), out_dir=frun.workdir,
                 workers=int(body.get("workers") or FINISH_WORKERS), force=bool(body.get("force")),
                 scene_light=str(body.get("light") or ""), mood=str(body.get("mood") or ""),
                 progress=lambda e: self._finish_progress(frun, f"/rehearsal-image/{job.id}/{run.id}", counter, e),
@@ -1321,7 +1388,7 @@ class Stage:
             frun.emit("stage", f"Muse Image is finishing {len(frames)} of {len(rendered)} rendered frames (every {every}th)",
                       total=len(frames))
             finished = finmod.finish_sequence(
-                frames, client=client, cast=cast, headshots=self._headshots(job, cast), out_dir=frun.workdir,
+                frames, client=client, cast=cast, headshots=self._headshots(job, cast), room_refs=self._room_refs(job), out_dir=frun.workdir,
                 workers=int(body.get("workers") or FINISH_WORKERS), force=bool(body.get("force")),
                 scene_light=str(body.get("light") or ""), mood=str(body.get("mood") or ""),
                 progress=lambda e: self._finish_progress(frun, f"/sim-file/{job.id}/{sim_id}", counter, e),
@@ -1388,14 +1455,38 @@ def _ev_fps(ev: dict, tl: dict | None = None) -> float:
 
 
 def _figure_json(fig) -> dict:
-    """A render.Figure as the viewer draws it: flat xyz, one colour, a radius."""
+    """A render.Figure as the viewer draws it: a body mesh when the figure has
+    one (flat vertices and triangle indices in twin metres), else flat xyz
+    points with one colour and a radius."""
+    rgb = np.asarray(fig.rgb, dtype=np.float32).reshape(-1, 3)
+    colour = [int(round(float(v) * 255)) for v in (rgb.mean(axis=0) if len(rgb) else np.array([0.5, 0.5, 0.5]))]
+    mesh = getattr(fig, "mesh", None)
+    if mesh is not None:
+        V, F = mesh
+        V = np.asarray(V, dtype=np.float64).reshape(-1, 3)
+        F = np.asarray(F, dtype=np.int64).reshape(-1, 3)
+        return {"name": fig.label or "", "colour": colour,
+                "mesh": {"vertices": [round(float(v), 3) for v in V.ravel()], "faces": [int(v) for v in F.ravel()]},
+                "points": int(len(V))}
     xyz = np.asarray(fig.xyz, dtype=np.float64).reshape(-1, 3)
     if len(xyz) > SIM_FIGURE_CAP:
         xyz = xyz[np.linspace(0, len(xyz) - 1, SIM_FIGURE_CAP).astype(np.int64)]
-    rgb = np.asarray(fig.rgb, dtype=np.float32).reshape(-1, 3)
-    colour = [int(round(float(v) * 255)) for v in (rgb.mean(axis=0) if len(rgb) else np.array([0.5, 0.5, 0.5]))]
     return {"name": fig.label or "", "colour": colour, "xyz": [round(float(v), 3) for v in xyz.ravel()],
             "radius_m": round(float(fig.radius_m), 4), "points": int(len(xyz))}
+
+
+def _actor_speed_at(ev: dict, name: str, t: float) -> float:
+    """An actor's walking speed at t from the evaluation's neighbouring frames."""
+    frames = (ev or {}).get("frames") or []
+    if len(frames) < 2:
+        return 0.0
+    k = min(range(len(frames)), key=lambda i: abs(float(frames[i].get("t", 0.0)) - float(t)))
+    j = k + 1 if k + 1 < len(frames) else k - 1
+    a, b = (frames[k].get("actors") or {}).get(name), (frames[j].get("actors") or {}).get(name)
+    if not a or not b:
+        return 0.0
+    dt = abs(float(frames[j].get("t", 0.0)) - float(frames[k].get("t", 0.0))) or 1.0
+    return float(np.hypot(float(b[0]) - float(a[0]), float(b[1]) - float(a[1])) / dt)
 
 
 def _rig_sentence(info) -> str:

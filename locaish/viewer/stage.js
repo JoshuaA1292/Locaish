@@ -27,7 +27,7 @@ function initStage(id) {
   $('st_scrub').oninput = () => showFrame(Number($('st_scrub').value));
   $('st_play').onclick = togglePlay;
   const d = $('d_shoot_date'); if (d && d.value) $('st_date').value = d.value;
-  fetch('/stage-status/' + id).then(r => r.json()).then(s => { stStatus = s || {}; paintStatus(); }).catch(() => {});
+  fetch('/stage-status/' + id).then(r => r.json()).then(s => { stStatus = s || {}; paintStatus(); if (typeof initDirect === 'function') initDirect(); }).catch(() => {});
   loadCast(); loadPieces(); loadRuns();
   if (typeof initSim === 'function') initSim(id);
 }

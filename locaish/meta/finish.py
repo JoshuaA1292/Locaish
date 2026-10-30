@@ -173,7 +173,7 @@ _SEQUENCE_INSTRUCTION = (
     "piece of furniture stay exactly where they are and the same size. Do not move, add "
     "or remove anything. The output is the SAME CROP as image 1: do not widen the shot, do "
     "not step back, do not show more of the room or more of anyone than image 1 shows; a "
-    "person cut off by a frame edge in image 1 stays cut off the same way. {count}{people}{nobody}"
+    "person cut off by a frame edge in image 1 stays cut off the same way. {room}{count}{people}{nobody}"
     "Make every surface a real material: the real walls, floor, furniture and fabrics "
     "with texture and grain, sharp and clean, not blurred. The light {light}{mood} "
     "{continuity}Natural film look, correct skin, correct hands. No text, no caption bar, "
@@ -187,6 +187,15 @@ _PERSON = (
 )
 
 _NOBODY = "There are no people in this frame; leave it empty of people. "
+
+_ROOM = (
+    "{images} {verb} photographs of THIS EXACT ROOM taken on site, from near this camera: "
+    "the output must show this real room and no other, with the same walls, floor, "
+    "ceiling, windows, furniture, bedding, objects, clutter, colours and materials as "
+    "those photographs, seen from image 1's camera and at image 1's crop. Image 1 only "
+    "fixes the geometry and where the people stand; the photographs fix what the room "
+    "looks like. "
+)
 
 _CONTINUITY = (
     "Image {n} is the previous finished frame of this scene: match its look, the room's "
@@ -334,6 +343,7 @@ def build_sequence_prompt(
     scene_light: str = "",
     mood: str = "",
     boxes: dict[str, tuple[float, float, float, float]] | None = None,
+    room_index: list[int] | None = None,
 ) -> str:
     """The instruction for one frame of a sequence. `meta` is the animatic or
     evaluation frame (focal_mm, actors, sun, framing); `cast` the Actor list;
@@ -364,8 +374,14 @@ def build_sequence_prompt(
     count = (f"There are EXACTLY {len(who)} {'person' if len(who) == 1 else 'people'} in this frame, "
              f"{' and '.join(who)}, and nobody else: no extra body, limb or foot anywhere. ") if who and not nobody else ""
     cont = _CONTINUITY.format(n=continuity_index) if continuity_index else ""
+    room = ""
+    if room_index:
+        nums = [f"image {n}" for n in room_index]
+        images = (nums[0] if len(nums) == 1 else ", ".join(nums[:-1]) + " and " + nums[-1]).capitalize()
+        room = _ROOM.format(images=images, verb="is a photograph" if len(nums) == 1 else "are")
+        room = room.replace("is a photograph photographs", "is a photograph")
     text = _SEQUENCE_INSTRUCTION.format(
-        shot=_shot_words(meta, boxes), count=count,
+        shot=_shot_words(meta, boxes), count=count, room=room,
         focal_mm=focal, people="".join(people), nobody=nobody, light=_light_words(meta, scene_light),
         mood=(" " + mood.strip().rstrip(".") + ".") if mood.strip() else "", continuity=cont,
     )
@@ -415,6 +431,7 @@ def finish_sequence(
     force: bool = False,
     stamp: bool = True,
     model: str | None = None,
+    room_refs: Callable[[dict[str, Any]], list[bytes]] | None = None,
 ) -> list[FinishedFrame]:
     """Finish every frame of a sequence; the finished frames, in order.
 
@@ -425,6 +442,11 @@ def finish_sequence(
     the measured frame stands in for it downstream. `progress` gets dicts
     with a `kind` of start, done, skip or error, the frame's index, name and
     file, and the total.
+
+    `room_refs(meta)` returns up to two photographs of the real room from
+    near this frame's camera (the scan's own frames): without them the model
+    has only the render's smear to go on and paints a room of its own; with
+    them the output is this room.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -464,16 +486,26 @@ def finish_sequence(
                 if shot and len(refs) < 9:
                     refs.append(shot)
                     index[a.name] = len(refs)
+            room_index: list[int] = []
+            if room_refs is not None:
+                try:
+                    for shot in list(room_refs(meta) or [])[:2]:
+                        if shot and len(refs) < 9:
+                            refs.append(shot)
+                            room_index.append(len(refs))
+                except Exception as exc:  # noqa: BLE001 - no room photos is a worse frame, not a failed one
+                    say(kind="note", index=i, name=name, text=f"{name}: no room photographs ({exc})")
             cont_index = None
             if continuity and prev is not None and len(refs) < 10:
                 refs.append(prev.raw or prev.png)
                 cont_index = len(refs)
             prompt = build_sequence_prompt(meta=meta, cast=cast, headshot_index=index, continuity_index=cont_index,
-                                           scene_light=scene_light, mood=mood, boxes=boxes)
+                                           scene_light=scene_light, mood=mood, boxes=boxes, room_index=room_index)
             raw = client.generate_image(prompt, references=refs, model=model)
             out = stamp_render(raw) if stamp else raw
             ff = FinishedFrame(png=out, prompt=prompt, model=model, references=len(refs) - 1, name=name, path=dest,
-                               raw=raw, meta={"headshots": len(index), "continuity": cont_index is not None})
+                               raw=raw, meta={"headshots": len(index), "continuity": cont_index is not None,
+                                              "room_photos": len(room_index)})
             ff.save(dest)
             say(kind="done", index=i, name=name, file=dest.name, text=f"finished {name}")
             return ff

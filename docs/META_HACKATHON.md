@@ -93,7 +93,7 @@ ephemeris, or a catalogue; the models planned and judged, the geometry answered.
 
 ## Status, 24 October (before the window opens)
 
-Built on branch `meta-hackathon`, 547 tests green (27 Oct), nothing run against a live
+Built on branch `meta-hackathon`, 564 tests green (29 Oct); the Meta layer runs live, nothing run against a live
 Meta key or a deployed Modal endpoint yet:
 
 | Piece | Where | State |
@@ -113,6 +113,10 @@ Meta key or a deployed Modal endpoint yet:
 | Simulate mode in the viewer: timeline bar, keys, drag, frustum, rails, figures, camera-view playback | `locaish/viewer/template.html` | done, screenshot-verified (SwiftShader) |
 | Simulator routes: evaluate on edit, figures, frame at playhead, video render (ffmpeg), hand-off files | `locaish/product/stage.py`, `serve.py`, `viewer/stage.js` | done, 9 route tests |
 | The operator: Muse Wonder on the engine's tools, Muse Spark reading frames, directing route with events | `locaish/agent/sim.py` | done against a scripted model, 4 tests |
+| Articulated bodies: parametric mesh, standing/walking/sitting, z-buffered against the measured room; the same in the viewer | `locaish/product/figures.py`, `film/render.py`, `viewer/template.html` | done, 29 Oct |
+| Actors as obstacles in placement, the rehearsal and the simulator | `agent/rehearsal.py`, `film/rehearsal.py`, `film/sim.py` | done, 29 Oct |
+| Photoreal finishing of whole sequences with the scan's own photographs of the view, cast looks and continuity; finished video | `locaish/meta/finish.py`, `product/stage.py`, `viewer/stage.js` | done, verified live 29 Oct: the real room, consistent people |
+| Operator watches its move (filmstrip) and a rendered move is reviewed as video | `locaish/agent/sim.py` | done, verified live |
 | Studio stage: routes, page, animatic scrubber, finish button | `locaish/product/stage.py`, `locaish/viewer/stage.js`, `serve.py` | done, screenshot-verified on a real room |
 
 **Next, in order:** get a META_API_KEY and run the vision, breakdown and

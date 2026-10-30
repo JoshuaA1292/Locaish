@@ -2093,6 +2093,10 @@ PAGE = """<!doctype html>
   .st_shot:first-child { border-top: 0; }
   .st_links { display: flex; gap: 18px; margin-top: 10px; font-size: 12.5px; }
   .st_links a { color: var(--mute); }
+  .moretools { margin-top: 44px; border-top: 1px solid var(--line); padding-top: 12px; }
+  .moretools > summary { cursor: pointer; color: var(--dim); font-size: 13.5px; list-style: none; padding: 6px 0; }
+  .moretools > summary::before { content: '\25B8  '; color: var(--mute); }
+  .moretools[open] > summary::before { content: '\25BE  '; }
   .sm_direct { margin-bottom: 12px; }
   .sm_direct input { flex: 1; min-width: 260px; }
   .sm_looks { display: flex; gap: 8px; overflow-x: auto; margin-top: 8px; }
@@ -2436,78 +2440,10 @@ PAGE = """<!doctype html>
     </div>
     <div id="heroactions"></div>
 
-    <section id="pkg">
-      <div class="sechead">
-        <div class="sub"><h2>Location package</h2>
-          <p>The page a scout hands in: dimensions, what fits, and the sun through every window on the shoot date. Fill in what the scan cannot know, then send one link.</p></div>
-      </div>
-      <div class="pkgrow">
-        <div class="panelbox">
-          <div class="two">
-            <div class="field"><label>Location name</label><input id="d_display_name" placeholder="The Fairfax kitchen"></div>
-            <div class="field"><label>Shoot date</label><input id="d_shoot_date" type="date"></div>
-          </div>
-          <div class="field"><label>Address</label><input id="d_address" placeholder="street, city"></div>
-          <div class="three">
-            <div class="field"><label>Compass heading of +X (°)</label><input id="d_heading_deg" type="number" min="0" max="359" step="1" placeholder="e.g. 212"></div>
-            <div class="field"><label>Latitude</label><input id="d_latitude" type="number" step="0.000001"></div>
-            <div class="field"><label>Longitude</label><input id="d_longitude" type="number" step="0.000001"></div>
-          </div>
-          <div class="two">
-            <div class="field"><label>Contact</label><input id="d_contact" placeholder="owner / manager, phone"></div>
-            <div class="field"><label>Fee</label><input id="d_fee" placeholder="$ / day"></div>
-          </div>
-          <div class="two">
-            <div class="field"><label>Power</label><input id="d_power" placeholder="2 × 20 A, tie-in possible"></div>
-            <div class="field"><label>Parking &amp; load-in</label><input id="d_parking" placeholder="driveway for 2 trucks, 30 m push"></div>
-          </div>
-          <div class="two">
-            <div class="field"><label>Access</label><input id="d_access" placeholder="ground floor, double doors"></div>
-            <div class="field"><label>Restrictions</label><input id="d_restrictions" placeholder="no shoots after 22:00"></div>
-          </div>
-          <div class="field"><label>Notes</label><textarea id="d_notes" rows="2"></textarea></div>
-          <div class="acts">
-            <button id="d_save">Save details</button>
-            <a id="pkgopen" class="primary" href="#" target="_blank">Open the package</a>
-            <button id="pkgshare">Share link</button>
-            <span class="st" id="d_status"></span>
-          </div>
-          <div class="sharebox hidden" id="sharebox"></div>
-        </div>
-        <div class="sunprev">
-          <img id="sunimg" alt="floor plan with the sun's patch">
-          <div class="hours" id="hours"></div>
-        </div>
-      </div>
-    </section>
-
-    <section id="contents">
-      <div class="sechead">
-        <div class="sub"><h2>What is in the room</h2>
-          <p>Named from the capture's own frames by the vision model, then confirmed or corrected by you. Click <b>Label</b> in the twin, click the thing, pick the photograph, type what it is.</p></div>
-        <div style="display:flex;gap:8px;align-items:center"><button class="lensbtn" id="detectbtn">Name things with the vision model</button><button class="lensbtn" id="labelbtn">Label an object</button></div>
-      </div>
-      <div class="panelbox">
-        <div id="chips" class="labelchips"><span class="dim">nothing named yet</span></div>
-        <div id="labelpick" class="hidden">
-          <div class="dim" id="lpmeta"></div>
-          <div class="crops" id="crops"></div>
-          <div class="lprow">
-            <input id="lpname" list="lpnames" placeholder="what is it? e.g. fridge, radiator, piano" autocomplete="off">
-            <datalist id="lpnames"><option value="sofa"><option value="armchair"><option value="dining table"><option value="coffee table"><option value="bed"><option value="desk"><option value="bookshelf"><option value="cabinet"><option value="kitchen island"><option value="counter"><option value="sink"><option value="fridge"><option value="oven"><option value="radiator"><option value="fireplace"><option value="column"><option value="beam"><option value="window"><option value="door"><option value="curtain"><option value="pendant lamp"><option value="floor lamp"><option value="ceiling fan"><option value="plant"><option value="mirror"><option value="artwork"><option value="television"><option value="piano"><option value="electrical panel"><option value="socket"></datalist>
-            <select id="lpkind"><option value="furniture">furniture</option><option value="appliance">appliance</option><option value="fixture">fixture</option><option value="window">window</option><option value="door">door</option><option value="lighting">lighting</option><option value="plant">plant</option><option value="artwork">artwork</option><option value="equipment">equipment</option><option value="structure">structure</option><option value="other" selected>other</option></select>
-            <button id="lpsave" class="primary">Save label</button>
-            <button id="lpcancel">Cancel</button>
-          </div>
-        </div>
-        <div class="dim" id="lstatus"></div>
-      </div>
-    </section>
-
     <section id="stage">
       <div class="sechead">
-        <div class="sub"><h2>Rehearse the scene in this room</h2>
-          <p>Cast it at real heights, move the furniture and watch the shot table change, then play the scene: actors walk the measured floor, lines take their time, the camera rides a dolly that fits, the sun is where the ephemeris puts it. The shoot day falls out.</p></div>
+        <div class="sub"><h2>The scene in this room</h2>
+          <p>Real people at real heights, the furniture where you put it, every angle checked against the measured room and rendered as a photograph. Cast it, dress it, paste the scene, and look through every setup.</p></div>
       </div>
       <div class="dim" id="st_status"></div>
       <div class="st_grid">
@@ -2583,7 +2519,73 @@ PAGE = """<!doctype html>
         </div>
       </div>
     </section>
-
+    <section id="contents">
+      <div class="sechead">
+        <div class="sub"><h2>What is in the room</h2>
+          <p>Named from the capture's own frames by the vision model, then confirmed or corrected by you. Click <b>Label</b> in the twin, click the thing, pick the photograph, type what it is.</p></div>
+        <div style="display:flex;gap:8px;align-items:center"><button class="lensbtn" id="detectbtn">Name things with the vision model</button><button class="lensbtn" id="labelbtn">Label an object</button></div>
+      </div>
+      <div class="panelbox">
+        <div id="chips" class="labelchips"><span class="dim">nothing named yet</span></div>
+        <div id="labelpick" class="hidden">
+          <div class="dim" id="lpmeta"></div>
+          <div class="crops" id="crops"></div>
+          <div class="lprow">
+            <input id="lpname" list="lpnames" placeholder="what is it? e.g. fridge, radiator, piano" autocomplete="off">
+            <datalist id="lpnames"><option value="sofa"><option value="armchair"><option value="dining table"><option value="coffee table"><option value="bed"><option value="desk"><option value="bookshelf"><option value="cabinet"><option value="kitchen island"><option value="counter"><option value="sink"><option value="fridge"><option value="oven"><option value="radiator"><option value="fireplace"><option value="column"><option value="beam"><option value="window"><option value="door"><option value="curtain"><option value="pendant lamp"><option value="floor lamp"><option value="ceiling fan"><option value="plant"><option value="mirror"><option value="artwork"><option value="television"><option value="piano"><option value="electrical panel"><option value="socket"></datalist>
+            <select id="lpkind"><option value="furniture">furniture</option><option value="appliance">appliance</option><option value="fixture">fixture</option><option value="window">window</option><option value="door">door</option><option value="lighting">lighting</option><option value="plant">plant</option><option value="artwork">artwork</option><option value="equipment">equipment</option><option value="structure">structure</option><option value="other" selected>other</option></select>
+            <button id="lpsave" class="primary">Save label</button>
+            <button id="lpcancel">Cancel</button>
+          </div>
+        </div>
+        <div class="dim" id="lstatus"></div>
+      </div>
+    </section>
+    <details id="more" class="moretools"><summary>Scouting tools: the location package, the coverage planner and the scout chat</summary>
+    <section id="pkg">
+      <div class="sechead">
+        <div class="sub"><h2>Location package</h2>
+          <p>The page a scout hands in: dimensions, what fits, and the sun through every window on the shoot date. Fill in what the scan cannot know, then send one link.</p></div>
+      </div>
+      <div class="pkgrow">
+        <div class="panelbox">
+          <div class="two">
+            <div class="field"><label>Location name</label><input id="d_display_name" placeholder="The Fairfax kitchen"></div>
+            <div class="field"><label>Shoot date</label><input id="d_shoot_date" type="date"></div>
+          </div>
+          <div class="field"><label>Address</label><input id="d_address" placeholder="street, city"></div>
+          <div class="three">
+            <div class="field"><label>Compass heading of +X (°)</label><input id="d_heading_deg" type="number" min="0" max="359" step="1" placeholder="e.g. 212"></div>
+            <div class="field"><label>Latitude</label><input id="d_latitude" type="number" step="0.000001"></div>
+            <div class="field"><label>Longitude</label><input id="d_longitude" type="number" step="0.000001"></div>
+          </div>
+          <div class="two">
+            <div class="field"><label>Contact</label><input id="d_contact" placeholder="owner / manager, phone"></div>
+            <div class="field"><label>Fee</label><input id="d_fee" placeholder="$ / day"></div>
+          </div>
+          <div class="two">
+            <div class="field"><label>Power</label><input id="d_power" placeholder="2 × 20 A, tie-in possible"></div>
+            <div class="field"><label>Parking &amp; load-in</label><input id="d_parking" placeholder="driveway for 2 trucks, 30 m push"></div>
+          </div>
+          <div class="two">
+            <div class="field"><label>Access</label><input id="d_access" placeholder="ground floor, double doors"></div>
+            <div class="field"><label>Restrictions</label><input id="d_restrictions" placeholder="no shoots after 22:00"></div>
+          </div>
+          <div class="field"><label>Notes</label><textarea id="d_notes" rows="2"></textarea></div>
+          <div class="acts">
+            <button id="d_save">Save details</button>
+            <a id="pkgopen" class="primary" href="#" target="_blank">Open the package</a>
+            <button id="pkgshare">Share link</button>
+            <span class="st" id="d_status"></span>
+          </div>
+          <div class="sharebox hidden" id="sharebox"></div>
+        </div>
+        <div class="sunprev">
+          <img id="sunimg" alt="floor plan with the sun's patch">
+          <div class="hours" id="hours"></div>
+        </div>
+      </div>
+    </section>
     <section id="coverage">
       <div class="sechead">
         <div class="sub"><h2>Describe the scene</h2>
@@ -2609,7 +2611,6 @@ PAGE = """<!doctype html>
         <details id="trace"><summary>How it decided</summary><div id="tracebody"></div></details>
       </div>
     </section>
-
     <section id="chat">
       <div id="thread"></div>
       <div id="askrow">
@@ -2617,6 +2618,7 @@ PAGE = """<!doctype html>
         <button id="send">Ask</button>
       </div>
     </section>
+    </details>
   </div>
 </main>
 <script>
