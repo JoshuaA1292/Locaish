@@ -433,8 +433,9 @@ class Stage:
         if lifted.gaussians is None:
             raise RuntimeError("SAM 3D Objects returned no splat")
         fp = piece.footprint
+        # fit_to_box takes the box's centre; the footprint records its base.
         M = sam3d.fit_to_box(lifted.gaussians, (fp.width_m, fp.depth_m, fp.height_m),
-                             (fp.cx, fp.cy, fp.z_base), fp.yaw_deg)
+                             (fp.cx, fp.cy, fp.z_base + fp.height_m / 2.0), fp.yaw_deg)
         npz = job.workdir / "setpieces" / f"{piece.id}_lift.npz"
         sam3d.to_field_npz(lifted, npz, transform=M)
         spm.attach_gaussians(piece, job.workdir, npz)
@@ -1892,6 +1893,7 @@ class Stage:
             f = d / "world.html"
             if not f.exists():
                 raise KeyError("the world has not been built")
+            _refresh_world_html(d)
             return f.read_bytes(), "text/html; charset=utf-8"
         if name == "world.twin":
             f = d / "world.twin"
@@ -1919,6 +1921,39 @@ class Stage:
                 raise KeyError("no such view")
             return f.read_bytes(), "image/png"
         raise KeyError("not found")
+
+
+def _refresh_world_html(d: Path) -> None:
+    """A world page is the viewer template with the world inlined, so a world
+    built before the template moved on keeps the old chrome forever unless
+    someone notices. On the first request after the template changed the same
+    world is wrapped in the current template, once: from its twin file where
+    one was saved, else by carrying the inlined payload across."""
+    from ..viewer import build as buildmod
+
+    f = d / "world.html"
+    try:
+        if f.stat().st_mtime >= buildmod._TEMPLATE_PATH.stat().st_mtime:
+            return
+    except OSError:
+        return
+    try:
+        twin_file = d / "world.twin"
+        if twin_file.exists():
+            from ..types import Twin
+
+            buildmod.render_html(Twin.load(twin_file), f, max_points=600_000)
+            return
+        old = f.read_text(encoding="utf-8")
+        m = re.search(r"^const PAYLOAD = (.*);$", old, re.M)
+        if not m:
+            return
+        t = re.search(r"<title>(.*?) \u2014 Locaish twin</title>", old)
+        template = buildmod._TEMPLATE_PATH.read_text(encoding="utf-8")
+        html = template.replace(buildmod._TITLE_TOKEN, t.group(1) if t else "world").replace(buildmod._PAYLOAD_TOKEN, m.group(1))
+        f.write_text(html, encoding="utf-8")
+    except Exception:  # noqa: BLE001 - the old page is better than none
+        f.touch()
 
 
 def _count(v) -> int:
