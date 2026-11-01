@@ -30,6 +30,7 @@ function initStage(id) {
   fetch('/stage-status/' + id).then(r => r.json()).then(s => { stStatus = s || {}; paintStatus(); if (typeof initDirect === 'function') initDirect(); }).catch(() => {});
   loadCast(); loadPieces(); loadRuns();
   if (typeof initSim === 'function') initSim(id);
+  if (typeof initWorld === 'function') initWorld(id);
 }
 
 function paintStatus() {
@@ -39,6 +40,7 @@ function paintStatus() {
   bits.push(stStatus.finish ? 'Muse Image finishes frames' : '');
   $('st_status').textContent = bits.filter(Boolean).join(' · ');
   $('st_run').textContent = stStatus.breakdown ? 'Rehearse the scene' : 'Rehearse the typed scene';
+  const wh = $('wd_hint'); if (wh) wh.textContent = stStatus.finish ? 'Muse Image finishes every view from the scan\u2019s own photographs, about a cent a view; the splat is trained on the finished views.' : 'No Meta key on this studio: a world needs Muse Image to finish its views (set META_API_KEY).';
 }
 
 /* --- cast --------------------------------------------------------------- */
@@ -736,3 +738,161 @@ function finishMove(force) {
 }
 
 function finishMoveEnd(text) { smFinishRun = null; $('sm_finishline').textContent = text; if (smCur) paintSimVideos(); }
+
+/* --- the world: the room as it will be on the day ---------------------------
+ *
+ * A shoot date, an hour and a dressing note go to POST /world/<job>; the run
+ * streams its stages and its counted steps; when it is done the page shows
+ * the world's own viewer in a frame the size of the hero's, with a toggle
+ * back to the scan, and the finished views in a strip. Everything shown here
+ * is labelled a render: the measured room is the frame beside it.
+ */
+
+let wdJob = null, wdRun = null, wdCurrent = null, wdWorlds = [], wdMode = 'world';
+
+function initWorld(id) {
+  wdJob = id; wdRun = null; wdCurrent = null; wdWorlds = []; wdMode = 'world';
+  const d = $('d_shoot_date');
+  $('wd_date').value = (d && d.value) || new Date().toISOString().slice(0, 10);
+  if (d) d.addEventListener('change', () => { if (d.value) $('wd_date').value = d.value; });
+  $('wd_hour').oninput = paintWorldHour; paintWorldHour();
+  $('wd_build').onclick = buildWorld;
+  $('wd_build').disabled = false;
+  $('wd_dressing').onkeydown = e => { if (e.key === 'Enter') buildWorld(); };
+  $('wd_scanned').onclick = () => setWorldMode('scan');
+  $('wd_asis').onclick = () => setWorldMode('world');
+  $('wd_out').classList.add('hidden'); $('wd_log').innerHTML = ''; $('wd_progress').innerHTML = ''; $('wd_strip').innerHTML = '';
+  $('wd_frame').removeAttribute('src');
+  loadWorlds();
+}
+
+function wdClock(h) {
+  const m = Math.round(Number(h || 0) * 60);
+  return String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
+}
+function paintWorldHour() { $('wd_hourout').textContent = wdClock($('wd_hour').value); }
+function wdLog(text, cls) {
+  const d = document.createElement('div'); d.textContent = text; if (cls) d.className = cls;
+  $('wd_log').appendChild(d); $('wd_log').scrollTop = 1e9;
+}
+function wdProgress(text, frac, cls) {
+  const box = $('wd_progress');
+  box.className = 'wd_progress' + (cls ? ' ' + cls : '');
+  box.innerHTML = '<span>' + esc(text || '') + '</span>'
+    + (frac == null ? '' : '<div class="wd_meter"><i style="width:' + Math.round(100 * Math.min(1, Math.max(0, frac))) + '%"></i></div>');
+}
+
+function loadWorlds() {
+  fetch('/worlds/' + wdJob).then(r => r.json()).then(r => {
+    wdWorlds = (r.worlds || []).filter(w => w.state === 'done');
+    paintWorldList();
+    // Coming back to a room shows its latest world without a click.
+    if (!wdCurrent && !wdRun && wdWorlds.length) openWorld(wdWorlds[wdWorlds.length - 1]);
+  }).catch(() => {});
+}
+
+function paintWorldList() {
+  const box = $('wd_prev');
+  if (!wdWorlds.length) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+  box.classList.remove('hidden');
+  box.innerHTML = '<span class="dim">worlds built:</span> ' + wdWorlds.map(w =>
+    '<a href="#" data-world="' + w.world_id + '"' + (wdCurrent && wdCurrent.world_id === w.world_id ? ' class="active"' : '') + '>'
+    + esc((w.date || '') + ' ' + wdClock(w.hour)) + (w.dressing ? ' · ' + esc(w.dressing.length > 40 ? w.dressing.slice(0, 40) + '…' : w.dressing) : '')
+    + ' · ' + (w.finished || 0) + ' of ' + (w.views || 0) + ' views</a>').join('');
+  box.querySelectorAll('[data-world]').forEach(a => a.onclick = e => {
+    e.preventDefault(); openWorld(wdWorlds.find(w => w.world_id === a.dataset.world));
+  });
+}
+
+function buildWorld() {
+  if (wdRun) return;
+  const body = {date: $('wd_date').value || null, hour: Number($('wd_hour').value), dressing: $('wd_dressing').value.trim()};
+  wdRun = {}; $('wd_build').disabled = true; $('wd_log').innerHTML = '';
+  wdProgress('starting…', 0);
+  fetch('/world/' + wdJob, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)})
+    .then(r => r.json()).then(r => {
+      if (!r.run) { worldFail(r.error || 'could not start'); return; }
+      wdRun = {id: r.run, events: r.events};
+      listenWorld(r.events);
+    }).catch(e => worldFail(String(e)));
+}
+
+function worldFail(text) {
+  wdRun = null; $('wd_build').disabled = false;
+  wdProgress(text, null, 'error'); wdLog(text, 'error');
+}
+
+function listenWorld(url) {
+  const es = new EventSource(url);
+  let settled = false;
+  es.onmessage = ev => {
+    const m = JSON.parse(ev.data);
+    if (m.kind === 'stage') { wdLog(m.text); wdProgress(m.text); }
+    else if (m.kind === 'progress') {
+      const frac = m.total ? m.done / m.total : null;
+      wdProgress((m.what ? m.what + ': ' : '') + (m.text || (m.done + ' of ' + m.total)), frac);
+      if (m.url && /finish_view_/.test(m.url)) wdThumb(m.url, m.name || m.file || '');
+    }
+    else if (m.kind === 'note') wdLog(m.text, 'note');
+    else if (m.kind === 'error') { settled = true; es.close(); worldFail('error: ' + m.text); }
+    else if (m.kind === 'done') {
+      settled = true; es.close(); wdRun = null; $('wd_build').disabled = false;
+      wdProgress('built in ' + (m.seconds || 0) + ' s: ' + (m.finished || 0) + ' of ' + (m.views || 0) + ' views finished, splat trained on them', 1);
+      wdLog('done');
+      openWorld(m);
+      loadWorlds();
+    }
+  };
+  // A dropped stream is not a dead run: the server replays the terminal event.
+  es.onerror = () => { es.close(); if (!settled) setTimeout(() => { if (!settled) listenWorld(url); }, 2000); };
+}
+
+function worldHtml(w) { return w.world_html || ('/world-file/' + wdJob + '/' + w.world_id + '/world.html'); }
+
+function openWorld(w) {
+  if (!w) return;
+  wdCurrent = w; wdMode = 'world';
+  $('wd_out').classList.remove('hidden');
+  const light = w.light;
+  const sun = light ? (light.windows_lit && light.windows_lit.length
+      ? 'direct sun through window ' + light.windows_lit.map(i => i + 1).join(', ')
+      : (light.elevation_deg > 0 ? 'no direct sun through a window' : 'sun below the horizon'))
+    : 'no georeference: the light as described';
+  $('wd_meta').textContent = (w.date || '') + ' at ' + wdClock(w.hour) + ' solar · ' + sun
+    + (w.dressing ? ' · ' + w.dressing : '') + ' · ' + (w.finished || 0) + ' of ' + (w.views || 0) + ' views finished';
+  paintWorldFrame();
+  paintWorldList();
+  const strip = $('wd_strip');
+  strip.innerHTML = '';
+  const n = Math.min(Number(w.views || 0), 200);
+  for (let i = 0; i < n; i++) {
+    const name = 'finish_view_' + String(i).padStart(4, '0') + '.png';
+    wdThumb('/world-file/' + wdJob + '/' + w.world_id + '/' + name, name);
+  }
+}
+
+function wdThumb(url, name) {
+  const strip = $('wd_strip');
+  if (strip.querySelector('img[data-url="' + url + '"]')) return;
+  const img = document.createElement('img');
+  img.loading = 'lazy'; img.alt = 'finished view: a render'; img.title = (name || '') + ' · render';
+  img.dataset.url = url; img.src = url;
+  img.onerror = () => img.remove();             // a view the model failed on has no finished file
+  img.onclick = () => window.open(url, '_blank');
+  strip.appendChild(img);
+}
+
+function paintWorldFrame() {
+  const w = wdCurrent; if (!w) return;
+  const page = wdMode === 'scan' ? '/view/' + wdJob : worldHtml(w);
+  const src = page + '?embed=1';
+  const f = $('wd_frame');
+  if (f.getAttribute('src') !== src) f.src = src;
+  $('wd_full').href = page;
+  $('wd_scanned').classList.toggle('on', wdMode === 'scan');
+  $('wd_asis').classList.toggle('on', wdMode !== 'scan');
+  $('wd_tag').classList.toggle('hidden', wdMode === 'scan');
+  $('wd_tag').textContent = wdMode === 'scan' ? '' : 'render';
+}
+
+function setWorldMode(m) { wdMode = m; paintWorldFrame(); }

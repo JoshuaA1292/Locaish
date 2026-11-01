@@ -875,6 +875,11 @@ def twin_to_payload(twin: Twin, *, max_points: int = 900_000) -> dict[str, Any]:
         "qa": twin.qa.to_dict(),
         "georeference": None if twin.georeference is None else twin.georeference.to_dict(),
         "provenance": twin.provenance,
+        # A world page: `provenance["world"]` = {date, hour, clock, dressing,
+        # views, built_at} is written by the world stage on the derived twin
+        # whose splat was trained on the finished views. The page opens such
+        # a twin first person, labelled a render; null for every other twin.
+        "world": (twin.provenance or {}).get("world"),
         "summary": twin.summary(),
         "plane_tints": PLANE_TINTS,
     }

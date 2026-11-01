@@ -858,8 +858,9 @@ def _safe_name(name: str) -> str:
 
 _STAGE_GET = ("stage.js", "stage-status", "stage-plan", "cast", "headshot", "setpieces", "rehearsals",
               "rehearsal", "rehearsal-events", "rehearsal-image", "rehearsal-finish-events",
-              "sims", "sim", "sim-events", "sim-file", "sim-frame", "sim-direct-events", "sim-finish-events")
-_STAGE_POST = ("cast", "setpieces", "rehearse", "rehearsal", "sims", "sim")
+              "sims", "sim", "sim-events", "sim-file", "sim-frame", "sim-direct-events", "sim-finish-events",
+              "worlds", "world-events", "world-file")
+_STAGE_POST = ("cast", "setpieces", "rehearse", "rehearsal", "sims", "sim", "world")
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -1477,6 +1478,23 @@ class _Handler(BaseHTTPRequestHandler):
                     done_item=run.done_item,
                     error_item=lambda: {"kind": "error", "text": run.error or "failed"},
                 )
+            # the world: the room as it will be on the day
+            if head == "worlds" and len(parts) == 2:
+                return self._json({"worlds": stage.worlds(job)})
+            if head == "world-events" and len(parts) == 3:
+                run = stage.world(job, parts[2])
+                if run is None:
+                    return self._json({"error": "no such world"}, 404)
+                return self._stream(
+                    run.events, run.state,
+                    done_item=run.done_item,
+                    error_item=lambda: {"kind": "error", "text": run.error or "failed"},
+                )
+            if head == "world-file" and len(parts) == 4:
+                data, ctype = stage.world_file(job, parts[2], parts[3])
+                download = parts[3] if parts[3] == "world.twin" else None
+                cache = "private, max-age=300" if parts[3].endswith(".png") else None
+                return self._bytes(data, ctype, download=download, cache=cache)
         except KeyError as exc:
             return self._json({"error": str(exc).strip("'")}, 404)
         except ValueError as exc:
@@ -1543,6 +1561,10 @@ class _Handler(BaseHTTPRequestHandler):
             if head == "sim" and len(parts) == 4 and parts[3] == "direct":
                 run = stage.start_direct(job, parts[2], body)
                 return self._json({"run": run.id, "events": f"/sim-direct-events/{job.id}/{parts[2]}/{run.id}"})
+            # the world
+            if head == "world" and len(parts) == 2:
+                run = stage.start_world(job, body)
+                return self._json({"run": run.id, "events": f"/world-events/{job.id}/{run.id}", "error": run.error})
         except KeyError as exc:
             return self._json({"error": str(exc).strip("'")}, 404)
         except ValueError as exc:
@@ -2093,6 +2115,29 @@ PAGE = """<!doctype html>
   .st_shot:first-child { border-top: 0; }
   .st_links { display: flex; gap: 18px; margin-top: 10px; font-size: 12.5px; }
   .st_links a { color: var(--mute); }
+  /* the world: the room as it will be on the day, first under the hero */
+  .wd_controls label input[type=range] { width: 150px; vertical-align: middle; margin-left: 6px; accent-color: var(--accent); }
+  .wd_controls #wd_hourout { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; margin-left: 6px; }
+  .wd_controls .wd_solar { font-size: 11px; margin-left: 4px; }
+  .wd_controls .wd_dressing { flex: 1; min-width: 240px; }
+  .wd_controls .primary { margin-left: auto; }
+  .wd_progress { color: var(--dim); font-size: 12.5px; margin-top: 8px; min-height: 1.4em; }
+  .wd_progress.error { color: #ff8a8a; }
+  .wd_meter { height: 4px; background: var(--surface2); border-radius: 2px; overflow: hidden; margin-top: 6px; }
+  .wd_meter i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+  .wd_prev { margin-top: 8px; font-size: 12.5px; }
+  .wd_prev a { color: var(--mute); margin-right: 12px; }
+  .wd_prev a.active { color: var(--ink); }
+  .wd_bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 14px 0 8px; font-size: 13px; }
+  .wd_bar .st_toggle { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
+  .wd_bar .st_toggle button { background: transparent; border: 0; color: var(--dim); padding: 3px 11px; font-size: 12.5px; cursor: pointer; font: inherit; }
+  .wd_bar .st_toggle button.on { background: var(--surface2); color: var(--ink); }
+  .wd_bar #wd_tag.hidden { display: none; }
+  .wd_bar a { margin-left: auto; color: var(--mute); font-size: 12px; text-decoration: none; }
+  .wd_bar a:hover { color: var(--ink); }
+  #wd_wrap { height: min(68vh, 780px); min-height: 420px; background: #0a0c0f; border: 1px solid var(--line); border-radius: 16px; overflow: hidden; box-shadow: var(--shadow); }
+  #wd_wrap iframe { width: 100%; height: 100%; border: 0; display: block; }
+  .wd_strip img { height: 64px; opacity: .85; }
   .moretools { margin-top: 44px; border-top: 1px solid var(--line); padding-top: 12px; }
   .moretools > summary { cursor: pointer; color: var(--dim); font-size: 13.5px; list-style: none; padding: 6px 0; }
   .moretools > summary::before { content: '\25B8  '; color: var(--mute); }
@@ -2439,6 +2484,35 @@ PAGE = """<!doctype html>
       <div id="vfbar" class="hidden"></div>
     </div>
     <div id="heroactions"></div>
+
+    <section id="world">
+      <div class="sechead">
+        <div class="sub"><h2>Walk into it as it will be on the day</h2>
+          <p>Pick the shoot date and the hour. The measured room is rendered from sixty camera positions with the cast on their marks, each view finished photoreal from the scan's own photographs with the sun exactly where the ephemeris puts it, and a new splat is trained on those views at their known poses: a room you can walk through as it will be, beside the one you scanned.</p></div>
+      </div>
+      <div class="panelbox">
+        <div class="st_row wd_controls">
+          <label class="dim">shoot date <input id="wd_date" type="date"></label>
+          <label class="dim">hour <input id="wd_hour" type="range" min="6" max="20" step="0.5" value="15"><b id="wd_hourout">15:00</b><span class="wd_solar">solar</span></label>
+          <input id="wd_dressing" class="wd_dressing" placeholder="dressing: the table laid for dinner, candles lit, white lilies in the window">
+          <button id="wd_build" class="primary">Build the world</button>
+        </div>
+        <div class="dim st_hint" id="wd_hint"></div>
+        <div id="wd_progress" class="wd_progress"></div>
+        <div id="wd_log" class="st_log"></div>
+        <div id="wd_prev" class="hidden dim wd_prev"></div>
+      </div>
+      <div id="wd_out" class="hidden">
+        <div class="wd_bar">
+          <span class="st_toggle"><button id="wd_scanned" data-mode="scan">as scanned</button><button id="wd_asis" class="on" data-mode="world">as it will be</button></span>
+          <span class="st_tag" id="wd_tag">render</span>
+          <span class="dim" id="wd_meta"></span>
+          <a id="wd_full" href="#" target="_blank">Full screen</a>
+        </div>
+        <div id="wd_wrap"><iframe id="wd_frame" title="the room as it will be on the day"></iframe></div>
+        <div id="wd_strip" class="st_strip wd_strip"></div>
+      </div>
+    </section>
 
     <section id="stage">
       <div class="sechead">

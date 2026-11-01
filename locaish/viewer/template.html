@@ -158,6 +158,23 @@ label.slider .val { font-family: var(--mono); color: var(--ink); min-width: 34px
 }
 #legend.shifted { right: 356px; }
 #legend b { color: var(--ink-dim); font-weight: 500; }
+/* the finished world: a permanent label saying what this picture is. It is
+   the first line on the page -- top centre, the toolbar dropped beneath it --
+   because a render must never be mistaken for the measurement, and the
+   label must survive every mode the toolbar can put the page in. */
+#worldtag {
+  position: fixed; left: 50%; top: 12px; transform: translateX(-50%); z-index: 6;
+  background: rgba(19,21,23,0.92); border: 1px solid var(--line); border-radius: 3px;
+  padding: 7px 11px; font: 10.5px/1.4 var(--mono); color: var(--ink-dim); white-space: nowrap;
+  display: none; pointer-events: none;
+}
+#worldtag.on { display: block; }
+#worldtag b { color: var(--warn); font-weight: 600; letter-spacing: .08em; text-transform: uppercase; margin-right: 6px; }
+body.world #toolbar { top: 46px; }
+body:not(.world) .world-only { display: none; }
+body.world #simpanel { top: 92px; }
+button.tool:disabled { opacity: .35; cursor: not-allowed; }
+button.tool:disabled:hover { color: var(--ink-dim); background: transparent; }
 /* viewfinder: the sensor's rectangle, masked out of whatever shape the
    iframe happens to be, so the frame you see is the frame the lens gives */
 #letterbox { position: fixed; inset: 0; pointer-events: none; z-index: 3; display: none; }
@@ -179,7 +196,7 @@ label.slider .val { font-family: var(--mono); color: var(--ink); min-width: 34px
   #panel { width: auto; left: 12px; top: auto; height: 45%; }
   #legend { display: none; }
 }
-body.embed #toolbar > :not(#btn-splat):not(#btn-both):not(#btn-viewfinder):not(#btn-label):not(#btn-sim) { display: none !important; }
+body.embed #toolbar > :not(#btn-splat):not(#btn-both):not(#btn-viewfinder):not(#btn-label):not(#btn-sim):not(#btn-walk):not(#btn-vr) { display: none !important; }
 body.embed #toolbar { padding: 6px 8px; }
 
 /* simulate: the left panel edits the move, the bottom bar plays it. Same
@@ -296,6 +313,8 @@ body.sim #legend { display: none; }
   <button class="tool" id="btn-frame">Frame<span class="k">F</span></button>
   <button class="tool" id="btn-viewfinder" aria-pressed="false">Viewfinder<span class="k">V</span></button>
   <button class="tool" id="btn-sim" aria-pressed="false">Simulate<span class="k">6</span></button>
+  <button class="tool" id="btn-walk" aria-pressed="false">Walk<span class="k">7</span></button>
+  <button class="tool" id="btn-vr" aria-pressed="false" disabled>Enter VR</button>
   <button class="tool" id="btn-panel" aria-pressed="true">Panel<span class="k">H</span></button>
 </div>
 
@@ -438,8 +457,11 @@ body.sim #legend { display: none; }
   <b>F</b><span>frame geometry</span>
   <b>V [ ]</b><span>viewfinder · lens</span>
   <b>6</b><span>simulate a camera move</span>
+  <b class="world-only">7</b><span class="world-only">walk the finished room</span>
   <b>H</b><span>hide panel</span>
 </div>
+
+<div id="worldtag"></div>
 
 <div id="fallback"></div>
 
@@ -1350,6 +1372,9 @@ canvas.addEventListener("pointerdown", e => {
     const i = simKeyAt(e.clientX - rect.left, e.clientY - rect.top);
     if (i >= 0) { simSelect(simKeys()[i]); sim.drag = { key: simKeys()[i] }; dragging = "key"; return; }
   }
+  // Walking, a drag turns the head; under pointer lock the mouse already
+  // does, so a press is not a drag at all.
+  if (walk.on) { dragging = document.pointerLockElement === canvas ? null : "look"; return; }
   dragging = (e.button === 2 || e.button === 1 || e.shiftKey) ? "pan" : "orbit";
 });
 canvas.addEventListener("pointermove", e => {
@@ -1358,6 +1383,7 @@ canvas.addEventListener("pointermove", e => {
   lastX = e.clientX; lastY = e.clientY;
   moved += Math.abs(dx) + Math.abs(dy);
   if (dragging === "key") { if (moved >= 3) simDragMove(e); needsRedraw = true; return; }
+  if (dragging === "look") { walkLook(dx, dy); return; }
   if (dragging === "orbit") {
     cam.gYaw -= dx * 0.006;
     cam.gPitch = clamp(cam.gPitch + dy * 0.006, -1.53, 1.53);
@@ -1381,6 +1407,7 @@ function endDrag(e) {
     if (sim.on && simClick(e.clientX, e.clientY)) { /* handled */ }
     else if (measureMode) onMeasureClick(e.clientX, e.clientY);
     else if (labelMode) onLabelClick(e.clientX, e.clientY);
+    else if (dragging === "look") walkLock();
   }
   dragging = null;
 }
@@ -1388,6 +1415,7 @@ canvas.addEventListener("pointerup", endDrag);
 canvas.addEventListener("pointercancel", () => { dragging = null; });
 canvas.addEventListener("wheel", e => {
   e.preventDefault();
+  if (walk.on) return;             // a person has no zoom
   cam.gDist = clamp(cam.gDist * Math.exp(clamp(e.deltaY, -240, 240) * 0.0016), 0.05, RADIUS * 200);
   needsRedraw = true;
 }, { passive: false });
@@ -1423,19 +1451,22 @@ const PICK_PITCHES = 2.0;
 // over 4096 buckets, back to front (view-space z is negative in front, so
 // ascending z is farthest first); throttled, because the order only decays
 // as the camera moves, it does not break.
-function sortSplats() {
+function sortSplats(viewM, eye) {
   if (!splatCount) return;
-  const fx = view[2], fy = view[6], fz = view[10];
+  // The page's own camera unless told otherwise: a headset sorts from the
+  // head and draws from each eye, and passes the head's matrix in here.
+  viewM = viewM || view; eye = eye || cam.eye;
+  const fx = viewM[2], fy = viewM[6], fz = viewM[10];
   const moved =
     Math.abs(fx - splatLastDir[0]) + Math.abs(fy - splatLastDir[1]) +
       Math.abs(fz - splatLastDir[2]) > 0.002 ||
-    Math.hypot(cam.eye[0] - splatLastEye[0], cam.eye[1] - splatLastEye[1],
-      cam.eye[2] - splatLastEye[2]) > 0.05;
+    Math.hypot(eye[0] - splatLastEye[0], eye[1] - splatLastEye[1],
+      eye[2] - splatLastEye[2]) > 0.05;
   const nowT = performance.now();
   if (splatLastSort && (!moved || nowT - splatLastSort < 250)) return;
   splatLastSort = nowT;
   splatLastDir = [fx, fy, fz];
-  splatLastEye = cam.eye.slice();
+  splatLastEye = eye.slice();
   const X = splatSrc.xyz, n = splatCount, D = splatDepth;
   let mn = Infinity, mx = -Infinity;
   for (let i = 0, j = 0; i < n; i++, j += 3) {
@@ -1814,6 +1845,7 @@ function placeCamera(eye, target) {
 
 function enterViewfinder(msg) {
   msg = msg || {};
+  if (walk.on) walkSet(false);
   // A setup from the studio takes the viewfinder back from the simulation.
   if (sim.camView) { sim.camView = false; simBarSync(); simRebuildDyn(); }
   const fz = floorInternal();
@@ -2165,6 +2197,7 @@ function setSimMode(on, quiet) {
   document.body.classList.toggle("sim", on);
   $s("btn-sim").setAttribute("aria-pressed", String(on));
   if (on) {
+    if (walk.on) walkSet(false);
     if (measureMode) setMeasureMode(false);
     if (labelMode) setLabelMode(false);
     if (!sim.tl) sim.tl = simBlankTimeline();
@@ -3358,6 +3391,342 @@ function positionLabels() {
 }
 
 /* ------------------------------------------------------------------ *
+ * walk: first person inside the finished world
+ *
+ * A world page is this room at an hour on a date, a splat trained on sixty
+ * finished frames, and the way to judge it is to stand in it. Walking is
+ * a thin layer over the orbit camera: the eye and the heading live in
+ * `walk`, and every change is snapped into `cam` through placeCamera, so
+ * picking, the labels, the splat sort and the viewfinder keep reading the
+ * one camera they always did. Nothing here is a measurement -- it decides
+ * where a person could stand, from the returns the scan made.
+ * ------------------------------------------------------------------ */
+
+const WORLD = (P.world && typeof P.world === "object") ? P.world : null;
+const WALK_EYE_M = 1.6, WALK_CROUCH_M = 1.0, WALK_RISE_M = 2.0;
+const walk = { on: false, eye: [0, 0, 0], yaw: 0, pitch: 0, h: WALK_EYE_M, home: null };
+
+// The room's outline in page coordinates: the fitted footprint, or the
+// bounding box of what was scanned when there is none.
+function walkPoly() {
+  const fp = P.structure && P.structure.footprint;
+  if (fp && fp.length >= 3) return fp;
+  return [[LO[0], LO[1]], [HI[0], LO[1]], [HI[0], HI[1]], [LO[0], HI[1]]];
+}
+function pointInPoly(x, y, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const a = poly[i], b = poly[j];
+    if ((a[1] > y) !== (b[1] > y) && x < (b[0] - a[0]) * (y - a[1]) / ((b[1] - a[1]) || 1e-12) + a[0]) inside = !inside;
+  }
+  return inside;
+}
+function distToPoly(x, y, poly) {
+  let best = Infinity;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const a = poly[j], b = poly[i];
+    const ex = b[0] - a[0], ey = b[1] - a[1];
+    const l2 = ex * ex + ey * ey || 1e-12;
+    const u = clamp(((x - a[0]) * ex + (y - a[1]) * ey) / l2, 0, 1);
+    best = Math.min(best, Math.hypot(x - (a[0] + u * ex), y - (a[1] + u * ey)));
+  }
+  return best;
+}
+// How far a ray from (x, y) along (dx, dy) runs before it meets the outline.
+function rayToPoly(x, y, dx, dy, poly) {
+  let best = Infinity;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const a = poly[j], b = poly[i];
+    const ex = b[0] - a[0], ey = b[1] - a[1];
+    const den = dx * ey - dy * ex;
+    if (Math.abs(den) < 1e-12) continue;
+    const t = ((a[0] - x) * ey - (a[1] - y) * ex) / den;
+    const u = ((a[0] - x) * dy - (a[1] - y) * dx) / den;
+    if (t > 0 && u >= 0 && u <= 1) best = Math.min(best, t);
+  }
+  return isFinite(best) ? best : 0;
+}
+
+// Where a person can stand. The cloud is binned into 0.25 m cells between
+// knee and head height; a cell is free when it holds no more than an eighth
+// of what a typical surface cell holds (the 75th percentile over the room),
+// because a wall or a bed in a cell gives thousands of returns and the
+// floaters in open air give tens, and only a relative bar survives both a
+// sparse scan and a dense one. The spot is the free cell, with all eight
+// neighbours free, at least 0.45 m clear of the walls, nearest the
+// footprint's centroid. A rug does not count (below the knee), a lamp does
+// not either (above the head); a table, a chair or a bunk does.
+function walkGrid() {
+  const poly = walkPoly(), fz = floorInternal();
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const q of poly) { x0 = Math.min(x0, q[0]); y0 = Math.min(y0, q[1]); x1 = Math.max(x1, q[0]); y1 = Math.max(y1, q[1]); }
+  const CELL = 0.25;
+  const nx = Math.max(1, Math.ceil((x1 - x0) / CELL)), ny = Math.max(1, Math.ceil((y1 - y0) / CELL));
+  if (!ptsXYZ || ptsCount === 0 || nx * ny > 400000) return null;
+  const occ = new Uint32Array(nx * ny), inside = new Uint8Array(nx * ny), stand = new Uint8Array(nx * ny);
+  const zlo = fz + 0.2, zhi = fz + 1.9, X = ptsXYZ;
+  for (let j = 0; j + 2 < X.length; j += 3) {
+    const z = X[j + 2];
+    if (z < zlo || z > zhi) continue;
+    const ix = ((X[j] - x0) / CELL) | 0, iy = ((X[j + 1] - y0) / CELL) | 0;
+    if (ix < 0 || iy < 0 || ix >= nx || iy >= ny) continue;
+    occ[iy * nx + ix]++;
+  }
+  const vals = [];
+  for (let iy = 0; iy < ny; iy++) for (let ix = 0; ix < nx; ix++) {
+    const x = x0 + (ix + 0.5) * CELL, y = y0 + (iy + 0.5) * CELL;
+    if (!pointInPoly(x, y, poly)) continue;
+    inside[iy * nx + ix] = 1;
+    vals.push(occ[iy * nx + ix]);
+    if (distToPoly(x, y, poly) >= 0.45) stand[iy * nx + ix] = 1;
+  }
+  if (!vals.length) return null;
+  vals.sort((u, v) => u - v);
+  const p75 = vals[Math.min(vals.length - 1, Math.floor(vals.length * 0.75))];
+  const thr = Math.max(20, 0.12 * p75);
+  const free = new Uint8Array(nx * ny);
+  for (let i = 0; i < free.length; i++) free[i] = (inside[i] && occ[i] <= thr) ? 1 : 0;
+  return { x0, y0, nx, ny, CELL, occ, inside, stand, free, poly };
+}
+function walkStandSpot(g) {
+  const poly = walkPoly();
+  let cx = 0, cy = 0;
+  for (const q of poly) { cx += q[0]; cy += q[1]; }
+  cx /= poly.length; cy /= poly.length;
+  if (!g) return [cx, cy];
+  const { x0, y0, nx, ny, CELL, occ, stand, free } = g;
+  let best = null, bestD = Infinity, least = null, leastN = Infinity, leastD = Infinity;
+  for (let iy = 0; iy < ny; iy++) for (let ix = 0; ix < nx; ix++) {
+    if (!stand[iy * nx + ix]) continue;
+    const x = x0 + (ix + 0.5) * CELL, y = y0 + (iy + 0.5) * CELL;
+    let n = 0, clear = true;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const jx = ix + dx, jy = iy + dy;
+      if (jx < 0 || jy < 0 || jx >= nx || jy >= ny) continue;
+      n += occ[jy * nx + jx];
+      if (!free[jy * nx + jx]) clear = false;
+    }
+    const d = Math.hypot(x - cx, y - cy);
+    if (n < leastN || (n === leastN && d < leastD)) { leastN = n; leastD = d; least = [x, y]; }
+    if (clear && d < bestD) { bestD = d; best = [x, y]; }
+  }
+  return best || least || [cx, cy];
+}
+// Face the longest clear sightline: of 72 headings, the one whose ray runs
+// furthest through free cells before it meets furniture or the outline. In
+// a room that is down the open floor, never into the nearest bed. With no
+// cloud to march, the outline alone decides.
+function walkHeading(spot, g) {
+  const poly = walkPoly();
+  let best = 0, bestD = -1;
+  for (let k = 0; k < 72; k++) {
+    const a = k * Math.PI / 36, dx = Math.cos(a), dy = Math.sin(a);
+    let d;
+    if (g) {
+      d = 0;
+      while (d < 20) {
+        d += 0.05;
+        const ix = ((spot[0] + dx * d - g.x0) / g.CELL) | 0, iy = ((spot[1] + dy * d - g.y0) / g.CELL) | 0;
+        if (ix < 0 || iy < 0 || ix >= g.nx || iy >= g.ny || !g.free[iy * g.nx + ix]) break;
+      }
+    } else d = rayToPoly(spot[0], spot[1], dx, dy, poly);
+    if (d > bestD) { bestD = d; best = a; }
+  }
+  return best;
+}
+function walkSync() {
+  const cp = Math.cos(walk.pitch);
+  const f = [Math.cos(walk.yaw) * cp, Math.sin(walk.yaw) * cp, Math.sin(walk.pitch)];
+  placeCamera(walk.eye, [walk.eye[0] + f[0], walk.eye[1] + f[1], walk.eye[2] + f[2]]);
+}
+function walkReset() {
+  if (!walk.home) { const g = walkGrid(), sp = walkStandSpot(g); walk.home = { spot: sp, yaw: walkHeading(sp, g) }; }
+  walk.h = WALK_EYE_M;
+  walk.eye = [walk.home.spot[0], walk.home.spot[1], floorInternal() + walk.h];
+  walk.yaw = walk.home.yaw; walk.pitch = 0;
+  walkSync();
+}
+function walkHint() {
+  const vrBit = !WORLD ? "" : vr.supported ? " · V enter VR" : " · VR unavailable here";
+  return '<span class="hint">walk WASD · look drag · R reset' + vrBit + '</span>';
+}
+function walkSet(on) {
+  on = !!on;
+  if (on === walk.on) return;
+  walk.on = on;
+  if (on) {
+    if (vf.on) exitViewfinder();
+    if (HAS_SPLAT) viewMode = "splat";
+    walkReset();
+    setReadout(walkHint());
+  } else {
+    if (document.pointerLockElement === canvas && document.exitPointerLock) document.exitPointerLock();
+    keys.clear();
+    setReadout(sim.on ? SIM_HINT : DEFAULT_HINT);
+  }
+  syncToolbar();
+}
+// Mouse right turns right, mouse up looks up: the head, not an orbit.
+function walkLook(dx, dy) {
+  walk.yaw -= dx * 0.0032;
+  walk.pitch = clamp(walk.pitch - dy * 0.0032, -1.45, 1.45);
+  walkSync();
+}
+// A click takes the pointer, so looking around needs no button held; Esc
+// gives it back, as the browser insists.
+function walkLock() {
+  if (!walk.on || !canvas.requestPointerLock || document.pointerLockElement === canvas) return;
+  try { const r = canvas.requestPointerLock(); if (r && r.catch) r.catch(() => {}); } catch (_) {}
+}
+canvas.addEventListener("mousemove", e => {
+  if (walk.on && document.pointerLockElement === canvas) walkLook(e.movementX || 0, e.movementY || 0);
+});
+// WASD on the floor plane at a walking pace, shift to run; Q/E sink and rise
+// between a crouch and a reach; the arrows turn. z is always floor plus eye
+// height, so no key can leave the ground or pass through it.
+function walkStep(dt) {
+  if (!keys.size) return;
+  const sp = (keys.has("shift") ? 4.0 : 1.4) * dt;
+  const f = [Math.cos(walk.yaw), Math.sin(walk.yaw)], r = [f[1], -f[0]];
+  let mx = 0, my = 0, changed = false;
+  if (keys.has("w")) { mx += f[0]; my += f[1]; }
+  if (keys.has("s")) { mx -= f[0]; my -= f[1]; }
+  if (keys.has("d")) { mx += r[0]; my += r[1]; }
+  if (keys.has("a")) { mx -= r[0]; my -= r[1]; }
+  const l = Math.hypot(mx, my);
+  if (l > 0) {
+    walk.eye[0] = clamp(walk.eye[0] + mx / l * sp, LO[0] - 0.5, HI[0] + 0.5);
+    walk.eye[1] = clamp(walk.eye[1] + my / l * sp, LO[1] - 0.5, HI[1] + 0.5);
+    changed = true;
+  }
+  if (keys.has("e") !== keys.has("q")) {
+    walk.h = clamp(walk.h + (keys.has("e") ? 1 : -1) * 0.5 * dt, WALK_CROUCH_M, WALK_RISE_M);
+    changed = true;
+  }
+  if (keys.has("arrowleft")) { walk.yaw += 1.8 * dt; changed = true; }
+  if (keys.has("arrowright")) { walk.yaw -= 1.8 * dt; changed = true; }
+  if (keys.has("arrowup")) { walk.pitch = clamp(walk.pitch + 1.2 * dt, -1.45, 1.45); changed = true; }
+  if (keys.has("arrowdown")) { walk.pitch = clamp(walk.pitch - 1.2 * dt, -1.45, 1.45); changed = true; }
+  if (changed) { walk.eye[2] = floorInternal() + walk.h; walkSync(); }
+}
+function worldClock(w) {
+  if (w.clock) return String(w.clock);
+  if (isFinite(w.hour)) {
+    const h = Math.floor(+w.hour), m = Math.round((+w.hour - h) * 60);
+    return String(h).padStart(2, "0") + ":" + String(m).padStart(2, "0");
+  }
+  return "—";
+}
+
+/* ------------------------------------------------------------------ *
+ * VR: the same splats, stereo, through WebXR
+ *
+ * The splat program takes its view and projection as two separate
+ * uniforms, which is exactly what an XRView hands out, so a headset is just
+ * another pair of cameras: the field is sorted once per frame from the head
+ * and drawn once per eye into that eye's viewport of the session's
+ * framebuffer. The reference space is local-floor with its origin at the
+ * walker's feet and the walker's heading down -z, so the headset's own
+ * height is the eye height and the room turns as a room does.
+ * ------------------------------------------------------------------ */
+
+const vr = { supported: false, session: null, refSpace: null, layer: null,
+             w2x: mat4(), x2w: mat4(), view: mat4(), head: mat4(), eye: [0, 0, 0] };
+const VR_UNAVAILABLE = "WebXR immersive-vr is not available in this browser or on this device";
+
+function vrSync() {
+  const b = document.getElementById("btn-vr");
+  if (!WORLD) { b.style.display = "none"; return; }
+  const can = vr.supported && HAS_SPLAT;
+  b.disabled = !can;
+  b.title = !vr.supported ? VR_UNAVAILABLE
+          : !HAS_SPLAT ? "this world carries no splat to stand in"
+          : vr.session ? "take the headset off" : "stand in the finished room in a headset";
+  b.textContent = vr.session ? "Exit VR" : "Enter VR";
+  b.setAttribute("aria-pressed", String(!!vr.session));
+  if (walk.on) setReadout(walkHint());
+}
+function vrProbe() {
+  if (!WORLD) { vrSync(); return; }
+  if (!navigator.xr || !navigator.xr.isSessionSupported || typeof XRWebGLLayer === "undefined") { vrSync(); return; }
+  navigator.xr.isSessionSupported("immersive-vr")
+    .then(ok => { vr.supported = !!ok; vrSync(); })
+    .catch(() => vrSync());
+}
+// World -> XR-local. Rows of the rotation are XR's right, up and back
+// written in world (z-up) coordinates; column-major storage puts row r of
+// column c at m[c * 4 + r]. right x up = back, so the frame is proper.
+function vrBasis() {
+  const p0 = [walk.eye[0], walk.eye[1], floorInternal()];
+  const c = Math.cos(walk.yaw), s = Math.sin(walk.yaw);
+  const rx = [s, -c, 0], ry = [0, 0, 1], rz = [-c, -s, 0];
+  const m = vr.w2x;
+  m[0] = rx[0]; m[4] = rx[1]; m[8] = rx[2];
+  m[1] = ry[0]; m[5] = ry[1]; m[9] = ry[2];
+  m[2] = rz[0]; m[6] = rz[1]; m[10] = rz[2];
+  m[3] = 0; m[7] = 0; m[11] = 0; m[15] = 1;
+  m[12] = -(rx[0] * p0[0] + rx[1] * p0[1] + rx[2] * p0[2]);
+  m[13] = -(ry[0] * p0[0] + ry[1] * p0[1] + ry[2] * p0[2]);
+  m[14] = -(rz[0] * p0[0] + rz[1] * p0[1] + rz[2] * p0[2]);
+  mat4Invert(vr.x2w, m);
+}
+function enterVR() {
+  if (!WORLD || !vr.supported || !HAS_SPLAT || vr.session || !gl) return;
+  if (!walk.on) walkSet(true);
+  Promise.resolve(gl.makeXRCompatible ? gl.makeXRCompatible() : null)
+    .then(() => navigator.xr.requestSession("immersive-vr", { optionalFeatures: ["local-floor"] }))
+    .then(session => {
+      vr.session = session;
+      vr.layer = new XRWebGLLayer(session, gl);
+      session.updateRenderState({ baseLayer: vr.layer });
+      session.addEventListener("end", () => {
+        vr.session = null; vr.refSpace = null; vr.layer = null;
+        if (gl) gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        vrSync(); needsRedraw = true;
+      });
+      vrBasis();
+      // local-floor puts y = 0 on the real floor; without it, a local space
+      // with its origin dropped by the walker's eye height does the same.
+      return session.requestReferenceSpace("local-floor")
+        .catch(() => session.requestReferenceSpace("local").then(sp =>
+          sp.getOffsetReferenceSpace(new XRRigidTransform({ x: 0, y: -walk.h, z: 0 }))))
+        .then(sp => { vr.refSpace = sp; vrSync(); session.requestAnimationFrame(vrFrame); });
+    })
+    .catch(err => {
+      if (vr.session) { try { vr.session.end(); } catch (_) {} }
+      vr.session = null;
+      setReadout('<span class="hint">VR session refused: ' + String((err && err.message) || err) + '</span>');
+      vrSync();
+    });
+}
+function exitVR() { if (vr.session) { try { vr.session.end(); } catch (_) {} } }
+function vrFrame(t, frame) {
+  const session = vr.session;
+  if (!session || !vr.refSpace) return;
+  session.requestAnimationFrame(vrFrame);
+  const pose = frame.getViewerPose(vr.refSpace);
+  if (!pose) return;
+  const layer = session.renderState.baseLayer || vr.layer;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  // sort once, from the head, in world coordinates
+  mat4Mul(vr.head, pose.transform.inverse.matrix, vr.w2x);
+  const hp = pose.transform.position, X = vr.x2w;
+  vr.eye = [X[0] * hp.x + X[4] * hp.y + X[8] * hp.z + X[12],
+            X[1] * hp.x + X[5] * hp.y + X[9] * hp.z + X[13],
+            X[2] * hp.x + X[6] * hp.y + X[10] * hp.z + X[14]];
+  if (splatCount > 0) sortSplats(vr.head, vr.eye);
+  gl.enable(gl.BLEND);
+  for (const v of pose.views) {
+    const vp = layer.getViewport(v);
+    gl.viewport(vp.x, vp.y, vp.width, vp.height);
+    mat4Mul(vr.view, v.transform.inverse.matrix, vr.w2x);
+    drawSplats(vr.view, v.projectionMatrix, vp.width, vp.height, false);
+  }
+  gl.disable(gl.BLEND);
+}
+
+/* ------------------------------------------------------------------ *
  * toggles and keyboard
  * ------------------------------------------------------------------ */
 
@@ -3410,6 +3779,7 @@ function syncToolbar() {
   document.getElementById("panel").classList.toggle("collapsed", !show.panel);
   document.getElementById("legend").classList.toggle("shifted", show.panel);
   document.getElementById("btn-sim").setAttribute("aria-pressed", String(sim.on));
+  document.getElementById("btn-walk").setAttribute("aria-pressed", String(walk.on));
   document.getElementById("simbar").classList.toggle("shifted", show.panel && !vf.on);
   needsRedraw = true;
 }
@@ -3430,18 +3800,23 @@ document.getElementById("btn-label").onclick = () => setLabelMode(!labelMode);
 document.getElementById("btn-inside").onclick = () => enterInterior();
 document.getElementById("btn-frame").onclick = () => frameGeometry(false);
 document.getElementById("btn-viewfinder").onclick = () => { if (vf.on) exitViewfinder(); else enterViewfinder(); };
+document.getElementById("btn-walk").onclick = () => walkSet(!walk.on);
+document.getElementById("btn-vr").onclick = () => { if (vr.session) exitVR(); else enterVR(); };
+// A twin that is not a world keeps the page it had: no walk, no headset.
+if (!WORLD) { document.getElementById("btn-walk").style.display = "none"; document.getElementById("btn-vr").style.display = "none"; }
 
 addEventListener("keydown", e => {
   if (!e.key) return;
   if (e.target && /^(input|textarea|select)$/i.test(e.target.tagName)) return;
   const k = e.key.toLowerCase();
-  if (k === "5") { if (HAS_SPLAT) setViewMode("splat"); }
+  if (k === "7") { if (WORLD) walkSet(!walk.on); }
+  else if (k === "5") { if (HAS_SPLAT) setViewMode("splat"); }
   else if (k === "0") setViewMode("room");
   else if (k === "1") setViewMode("points");
   else if (k === "2") setViewMode("mesh");
   else if (k === "3") { if (EMBED) toggleStructure(); else setViewMode("both"); }
   else if (k === "4") toggle("room");
-  else if (k === "i") enterInterior();
+  else if (k === "i") { walkSet(false); enterInterior(); }
   else if (k === "g") toggle("grid");
   else if (k === "p") toggle("planes");
   else if (k === "o") toggle("openings");
@@ -3450,8 +3825,10 @@ addEventListener("keydown", e => {
   else if (k === "h") toggle("panel");
   else if (k === "m") setMeasureMode(!measureMode);
   else if (k === "l") setLabelMode(!labelMode);
-  else if (k === "r") resetCamera();
-  else if (k === "f") frameGeometry(false);
+  else if (k === "r") { if (walk.on) walkReset(); else resetCamera(); }
+  else if (k === "f") { walkSet(false); frameGeometry(false); }
+  // Walking a world, V is the headset; everywhere else it is the viewfinder.
+  else if (k === "v" && walk.on && vr.supported && HAS_SPLAT && !vf.on) { if (vr.session) exitVR(); else enterVR(); }
   else if (k === "v") { if (vf.on) exitViewfinder(); else enterViewfinder(); }
   else if (k === "[" && vf.on) stepLens(-1);
   else if (k === "]" && vf.on) stepLens(+1);
@@ -3465,6 +3842,7 @@ addEventListener("keydown", e => {
   else if (sim.on && k === ".") simStepFrame(+1);
   else if (sim.on && k === "home") { sim.playing = false; simBarSync(); simSetTime(0, { forcePost: true }); }
   else if (sim.on && k === "end") { sim.playing = false; simBarSync(); simSetTime(simDur(), { forcePost: true }); }
+  else if (walk.on && !sim.on && k.startsWith("arrow")) { keys.add(k); e.preventDefault(); return; }
   else if (sim.on && k.startsWith("arrow")) {
     if (sim.sel) simNudgeScreen(k, e.shiftKey);
     else if (k === "arrowleft") simStepFrame(-1);
@@ -3705,6 +4083,20 @@ function buildPanel() {
     body.appendChild(gb);
   }
 
+  // the world: what hour this picture is of, and what it was built from
+  if (WORLD) {
+    const wb = block("World");
+    wb.appendChild(kv([
+      ["What this is", "a render"],
+      ["Date", WORLD.date || "—"],
+      ["Clock", worldClock(WORLD)],
+      ["Dressing", WORLD.dressing || "as it is"],
+      ["Finished views", isFinite(WORLD.views) ? String(WORLD.views) : "—"],
+      ["Built", WORLD.built_at || "—"],
+    ]));
+    body.appendChild(wb);
+  }
+
   // provenance
   const prov = P.provenance || {};
   const pk = Object.keys(prov);
@@ -3755,9 +4147,13 @@ function step() {
   const dt = Math.min((now - lastFrame) / 1000, 0.1);
   lastFrame = now;
 
+  // In a headset the session's own frame loop draws; the page's does not.
+  if (vr.session) return;
+
   // fly controls act on the orbit target, so orbiting still works after
-  // walking somewhere
-  if (keys.size) {
+  // walking somewhere; the walker has its own feet
+  if (walk.on) walkStep(dt);
+  else if (keys.size) {
     const { fwd, right } = camBasis();
     const flat = norm3([fwd[0], fwd[1], 0]);
     const speed = (keys.has("shift") ? 9 : 3) * dt * Math.max(1, cam.dist / 6);
@@ -3797,6 +4193,27 @@ function step() {
   // operator's, so neither the readout nor the parent hear about it as one.
   if (vf.on) { rebuildFigures(); needsRedraw = false; if (!sim.camView) { vfReadout(); postVfState(false); } }
   render();
+}
+
+// The gaussian field, the view with no holes by construction: sorted back to
+// front and alpha-composited exactly as it was optimised. Takes the camera
+// explicitly so a headset can draw it per eye.
+function drawSplats(viewM, projM, vw, vh, sort) {
+  if (!splatCount) return;
+  if (sort !== false) sortSplats(viewM, cam.eye);
+  gl.useProgram(progSplat.prog);
+  gl.uniformMatrix4fv(progSplat.u.uViewM, false, viewM);
+  gl.uniformMatrix4fv(progSplat.u.uProjM, false, projM);
+  gl.uniform2f(progSplat.u.uViewport, vw, vh);
+  gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+  gl.depthMask(false);
+  gl.disable(gl.DEPTH_TEST);
+  gl.bindVertexArray(splatVAO);
+  gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, splatCount);
+  gl.bindVertexArray(null);
+  gl.enable(gl.DEPTH_TEST);
+  gl.depthMask(true);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 }
 
 function render() {
@@ -3912,22 +4329,7 @@ function render() {
 
   // 2b. the gaussian field, the view with no holes by construction: sorted
   //     back to front and alpha-composited exactly as it was optimised
-  if (viewMode === "splat" && splatCount > 0) {
-    sortSplats();
-    gl.useProgram(progSplat.prog);
-    gl.uniformMatrix4fv(progSplat.u.uViewM, false, view);
-    gl.uniformMatrix4fv(progSplat.u.uProjM, false, proj);
-    gl.uniform2f(progSplat.u.uViewport, w, h);
-    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-    gl.depthMask(false);
-    gl.disable(gl.DEPTH_TEST);
-    gl.bindVertexArray(splatVAO);
-    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, splatCount);
-    gl.bindVertexArray(null);
-    gl.enable(gl.DEPTH_TEST);
-    gl.depthMask(true);
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-  }
+  if (viewMode === "splat" && splatCount > 0) drawSplats(view, proj, w, h);
 
   // 2b'. the cast: the figure meshes the studio built for this frame, or
   //      the articulated figures the page builds itself, flat-shaded and
@@ -4008,9 +4410,23 @@ function render() {
 
 buildPanel();
 syncToolbar();
+// A world opens as a place: photoreal, first person, standing on the floor
+// where a person could stand, with a label saying what hour it is a picture
+// of -- and that it is a picture. The headset button lights if there is one.
+if (WORLD) {
+  const tag = document.getElementById("worldtag");
+  const b = document.createElement("b");
+  b.textContent = "a render:";
+  tag.appendChild(b);
+  tag.appendChild(document.createTextNode("the room as it will be at " + worldClock(WORLD) + " on " + (WORLD.date || "—")));
+  tag.classList.add("on");
+  document.body.classList.add("world");
+  walkSet(true);
+}
+vrProbe();
 // A gaussian field reads as fog from outside and as the room from within,
 // so a splat twin opens standing inside it, instantly.
-if (HAS_SPLAT) {
+if (!WORLD && HAS_SPLAT) {
   enterInterior();
   cam.target = cam.gTarget.slice();
   cam.dist = cam.gDist;

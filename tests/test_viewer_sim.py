@@ -217,3 +217,126 @@ console.log(JSON.stringify({ standing: stats(0), striding: stats(0.4) }));
         assert abs(got["zmin"]) < 0.02, (pose, got)   # a sole on the floor, standing or mid-stride
     assert 1.74 < both["standing"]["zmax"] <= 1.76, both["standing"]
     assert both["striding"]["zmax"] < both["standing"]["zmax"], "mid-stride the body drops"
+
+
+# --- the finished world: walk it, wear it ----------------------------------
+#
+# A world page (provenance["world"] set by the world stage) opens first person
+# inside the photoreal splat with a permanent label saying it is a render. As
+# with the simulator, what Python can hold the template to is the contract:
+# the mode, its keys, the HUD, the label, the headset path, and that the
+# payload carries the world through unchanged.
+
+
+def test_template_carries_the_walk_mode():
+    js = _script(_template())
+    t = _template()
+    assert 'id="btn-walk"' in t and 'Walk<span class="k">7</span>' in t
+    assert 'k === "7"' in js, "the 7 key toggles walking"
+    assert "const WORLD = (P.world" in js, "the mode keys off the payload's world"
+    assert "function walkSet(on)" in js and "function walkStep(dt)" in js and "function walkReset()" in js
+    # eye height 1.6 m, crouch to 1.0, rise to 2.0, z always floor plus height
+    assert "WALK_EYE_M = 1.6, WALK_CROUCH_M = 1.0, WALK_RISE_M = 2.0" in js
+    assert "walk.eye[2] = floorInternal() + walk.h" in js
+    # WASD walks, shift runs, Q/E sink and rise, arrows turn, R resets
+    assert 'keys.has("shift") ? 4.0 : 1.4' in js
+    for k in ('"w"', '"s"', '"a"', '"d"', '"e"', '"q"', '"arrowleft"', '"arrowright"', '"arrowup"', '"arrowdown"'):
+        assert f"keys.has({k})" in js, f"walking does not read {k}"
+    assert 'if (walk.on) walkReset(); else resetCamera();' in js
+    # look: drag, or pointer lock on a click
+    assert 'dragging = document.pointerLockElement === canvas ? null : "look"' in js
+    assert "canvas.requestPointerLock()" in js and "e.movementX" in js
+    # the HUD, in the readout's own language
+    assert "walk WASD · look drag · R reset" in js and "V enter VR" in js
+    # a world opens walking, in the splat; other twins open as they did
+    assert "if (WORLD) {" in js and "walkSet(true);" in js
+    assert "if (!WORLD && HAS_SPLAT) {" in js
+
+
+def test_template_stands_the_walker_where_a_person_could():
+    js = _script(_template())
+    # the stand spot is read off the cloud between knee and head height,
+    # 0.25 m cells, clear of the walls, nearest the footprint centroid
+    assert "function walkGrid()" in js and "function walkStandSpot(g)" in js
+    assert "const zlo = fz + 0.2, zhi = fz + 1.9" in js
+    assert "const CELL = 0.25" in js
+    assert "distToPoly(x, y, poly) >= 0.45" in js
+    # free is relative to the room's own surface density, so a sparse scan
+    # and a dense one both find their floor
+    assert "const thr = Math.max(20, 0.12 * p75)" in js
+    # and the heading marches the same grid: the longest clear sightline
+    assert "function walkHeading(spot, g)" in js and "!g.free[iy * g.nx + ix]" in js
+    assert "function rayToPoly" in js
+
+
+def test_template_labels_the_world_a_render():
+    t = _template()
+    assert 'id="worldtag"' in t
+    assert 'b.textContent = "a render:"' in t
+    assert '"the room as it will be at " + worldClock(WORLD) + " on " + (WORLD.date' in t
+    assert "function worldClock(w)" in t and "w.clock" in t
+    # and the side panel says so too
+    assert '["What this is", "a render"]' in t
+
+
+def test_template_enters_vr_through_the_splat_program():
+    js = _script(_template())
+    t = _template()
+    assert 'id="btn-vr"' in t and ">Enter VR</button>" in t
+    # the probe gates the button; unsupported ships it disabled with a reason
+    assert 'navigator.xr.isSessionSupported("immersive-vr")' in js
+    assert "b.disabled = !can" in js and "VR_UNAVAILABLE" in js
+    # the session: XR-compatible context, a WebGL layer, local-floor with a
+    # fallback, the origin at the walker's feet
+    assert "gl.makeXRCompatible()" in js
+    assert 'navigator.xr.requestSession("immersive-vr"' in js
+    assert "new XRWebGLLayer(session, gl)" in js
+    assert 'session.requestReferenceSpace("local-floor")' in js
+    assert 'session.requestReferenceSpace("local")' in js and "XRRigidTransform" in js
+    assert "function vrBasis()" in js and "const p0 = [walk.eye[0], walk.eye[1], floorInternal()]" in js
+    # per frame: one sort from the head, one draw per eye with the view's own
+    # matrices through the splat program
+    assert "frame.getViewerPose(vr.refSpace)" in js
+    assert "sortSplats(vr.head, vr.eye)" in js
+    assert "for (const v of pose.views)" in js and "layer.getViewport(v)" in js
+    assert "mat4Mul(vr.view, v.transform.inverse.matrix, vr.w2x)" in js
+    assert "drawSplats(vr.view, v.projectionMatrix, vp.width, vp.height, false)" in js
+    # the one splat draw path, shared with the page's own camera
+    assert "function drawSplats(viewM, projM, vw, vh, sort)" in js
+    assert 'if (viewMode === "splat" && splatCount > 0) drawSplats(view, proj, w, h);' in js
+    assert "function sortSplats(viewM, eye)" in js
+    # V is the headset only while walking a world with a splat
+    assert 'k === "v" && walk.on && vr.supported && HAS_SPLAT && !vf.on' in js
+
+
+def test_payload_carries_the_world(clean):
+    result, _fx = clean
+    twin = result.twin
+    before = dict(twin.provenance or {})
+    try:
+        payload = viewer_build.twin_to_payload(twin, max_points=5_000)
+        assert payload["world"] is None, "a twin without a world has a null world"
+        twin.provenance = dict(before)
+        twin.provenance["world"] = {
+            "date": "2026-11-14", "hour": 16.67, "clock": "16:40",
+            "dressing": "as it is", "views": 60, "built_at": "2026-11-01T10:00:00Z",
+        }
+        payload = viewer_build.twin_to_payload(twin, max_points=5_000)
+        assert payload["world"] == twin.provenance["world"]
+    finally:
+        twin.provenance = before
+
+
+def test_built_world_page_opens_walking(clean, tmp_path):
+    result, _fx = clean
+    twin = result.twin
+    before = dict(twin.provenance or {})
+    try:
+        twin.provenance = dict(before)
+        twin.provenance["world"] = {"date": "2026-11-14", "hour": 16.67, "clock": "16:40", "dressing": "as it is", "views": 60}
+        out = viewer_build.render_html(twin, tmp_path / "world.html", max_points=5_000)
+        html = out.read_text(encoding="utf-8")
+        assert '"world":{' in html and '"clock":"16:40"' in html and '"date":"2026-11-14"' in html
+        assert 'id="worldtag"' in html and 'id="btn-walk"' in html and 'id="btn-vr"' in html
+    finally:
+        twin.provenance = before
