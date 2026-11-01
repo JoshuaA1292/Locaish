@@ -575,6 +575,24 @@ def _actors_of(figures: list[render.Figure], actors: dict | None) -> dict[str, l
     return out
 
 
+def view_anchor(view: View, file: str) -> dict[str, Any]:
+    """A finished view as the viewer pins it in the room: where the camera
+    stood, what it looked at, its field in degrees both ways, the frame's
+    size, and the file next to the page that holds the picture."""
+    cam = view.camera()
+    return {
+        "name": view.name,
+        "file": str(file),
+        "cam": [round(float(v), 4) for v in view.cam],
+        "aim": [round(float(v), 4) for v in view.aim],
+        "focal_mm": float(view.focal_mm),
+        "fov_h_deg": round(math.degrees(2.0 * math.atan(cam.width_px / (2.0 * cam.fx))), 3),
+        "fov_v_deg": round(math.degrees(2.0 * math.atan(cam.height_px / (2.0 * cam.fy))), 3),
+        "width_px": int(cam.width_px),
+        "height_px": int(cam.height_px),
+    }
+
+
 def view_meta(view: View, *, actors: dict | None = None, light: dict | None = None,
               dressing: str = "") -> dict[str, Any]:
     return {
@@ -1203,6 +1221,9 @@ def build_world(
     t0 = time.time()
     meta["steps"] = int(steps)
     meta["method"] = method
+    # The finished pictures, pinned where they were taken: the viewer fades
+    # one in when the walker stands on its spot and looks its way.
+    meta["anchors"] = [view_anchor(v, f"finish_{v.name}.png") for v in views]
     wt = world_twin(twin, ply, world_meta=meta)
     from ..viewer.build import render_html
 
@@ -1318,6 +1339,7 @@ __all__ = [
     "render_view",
     "render_views",
     "view_meta",
+    "view_anchor",
     "world_to_camera",
     "write_colmap_model",
     "train_world",

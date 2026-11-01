@@ -40,7 +40,7 @@ function paintStatus() {
   bits.push(stStatus.finish ? 'Muse Image finishes frames' : '');
   $('st_status').textContent = bits.filter(Boolean).join(' · ');
   $('st_run').textContent = stStatus.breakdown ? 'Rehearse the scene' : 'Rehearse the typed scene';
-  const wh = $('wd_hint'); if (wh) wh.textContent = stStatus.finish ? 'Muse Image finishes every view from the scan\u2019s own photographs, about a cent a view; the splat is trained on the finished views.' : 'No Meta key on this studio: a world needs Muse Image to finish its views (set META_API_KEY).';
+  const wh = $('wd_hint'); if (wh) wh.textContent = stStatus.finish ? 'Muse Image finishes every view from the scan\u2019s own photographs, about a cent a view; they are painted onto the scan\u2019s own gaussians, so the walls stay where they were measured. Click a finished view to stand on it.' : 'No Meta key on this studio: a world needs Muse Image to finish its views (set META_API_KEY).';
 }
 
 /* --- cast --------------------------------------------------------------- */
@@ -837,7 +837,7 @@ function listenWorld(url) {
     else if (m.kind === 'error') { settled = true; es.close(); worldFail('error: ' + m.text); }
     else if (m.kind === 'done') {
       settled = true; es.close(); wdRun = null; $('wd_build').disabled = false;
-      wdProgress('built in ' + (m.seconds || 0) + ' s: ' + (m.finished || 0) + ' of ' + (m.views || 0) + ' views finished, splat trained on them', 1);
+      wdProgress('built in ' + (m.seconds || 0) + ' s: ' + (m.finished || 0) + ' of ' + (m.views || 0) + ' views finished, painted onto the scan\u2019s gaussians', 1);
       wdLog('done');
       openWorld(m);
       loadWorlds();
@@ -851,6 +851,7 @@ function worldHtml(w) { return w.world_html || ('/world-file/' + wdJob + '/' + w
 
 function openWorld(w) {
   if (!w) return;
+  if (!wdCurrent || wdCurrent.world_id !== w.world_id) wdPhoto = null;
   wdCurrent = w; wdMode = 'world';
   $('wd_out').classList.remove('hidden');
   const light = w.light;
@@ -878,14 +879,25 @@ function wdThumb(url, name) {
   img.loading = 'lazy'; img.alt = 'finished view: a render'; img.title = (name || '') + ' · render';
   img.dataset.url = url; img.src = url;
   img.onerror = () => img.remove();             // a view the model failed on has no finished file
-  img.onclick = () => window.open(url, '_blank');
+  // A click stands the walker on that photograph in the world frame; a
+  // double click opens the picture itself.
+  img.onclick = () => standOnPhoto(name);
+  img.ondblclick = () => window.open(url, '_blank');
   strip.appendChild(img);
+}
+
+let wdPhoto = null;                                    // the photograph the frame stands on
+function standOnPhoto(name) {
+  const m = /finish_(view_\d+)/.exec(name || '');
+  if (!m || !wdCurrent) return;
+  wdPhoto = m[1]; wdMode = 'world';
+  paintWorldFrame();
 }
 
 function paintWorldFrame() {
   const w = wdCurrent; if (!w) return;
   const page = wdMode === 'scan' ? '/view/' + wdJob : worldHtml(w);
-  const src = page + '?embed=1';
+  const src = page + '?embed=1' + (wdMode !== 'scan' && wdPhoto ? '&photo=' + encodeURIComponent(wdPhoto) : '');
   const f = $('wd_frame');
   if (f.getAttribute('src') !== src) f.src = src;
   $('wd_full').href = page;

@@ -181,6 +181,10 @@ button.tool:disabled { opacity: .35; cursor: not-allowed; }
 button.tool:disabled:hover { color: var(--ink-dim); background: transparent; }
 /* viewfinder: the sensor's rectangle, masked out of whatever shape the
    iframe happens to be, so the frame you see is the frame the lens gives */
+/* a finished photograph, pinned where it was taken: it fades in over the
+   splat as the walker reaches the spot and looks the way the camera did */
+#photo { position: fixed; pointer-events: none; z-index: 2; display: none; opacity: 0; object-fit: fill; }
+#photo.on { display: block; }
 #letterbox { position: fixed; inset: 0; pointer-events: none; z-index: 3; display: none; }
 #letterbox.on { display: block; }
 #letterbox .mask { position: absolute; background: rgba(0,0,0,0.78); }
@@ -429,6 +433,7 @@ body.sim #legend { display: none; }
   <div id="sb-note"></div>
 </div>
 
+<img id="photo" alt="">
 <div id="letterbox">
   <div class="mask" id="lb-t"></div><div class="mask" id="lb-b"></div>
   <div class="mask" id="lb-l"></div><div class="mask" id="lb-r"></div>
@@ -464,6 +469,7 @@ body.sim #legend { display: none; }
   <b>V [ ]</b><span>viewfinder · lens</span>
   <b>6</b><span>simulate a camera move</span>
   <b class="world-only">7</b><span class="world-only">walk the finished room</span>
+  <b class="world-only">N</b><span class="world-only">stand on the next photograph</span>
   <b>H</b><span>hide panel</span>
 </div>
 
@@ -3554,7 +3560,8 @@ function walkReset() {
 }
 function walkHint() {
   const vrBit = !WORLD ? "" : vr.supported ? " · V enter VR" : " · VR unavailable here";
-  return '<span class="hint">walk WASD · look drag · R reset' + vrBit + '</span>';
+  const photoBit = ANCHORS.length ? " · N next photograph (" + ANCHORS.length + ")" : "";
+  return '<span class="hint">walk WASD · look drag · R reset' + photoBit + vrBit + '</span>';
 }
 function walkSet(on) {
   on = !!on;
@@ -3568,6 +3575,7 @@ function walkSet(on) {
   } else {
     if (document.pointerLockElement === canvas && document.exitPointerLock) document.exitPointerLock();
     keys.clear();
+    photoOff();
     setReadout(sim.on ? SIM_HINT : DEFAULT_HINT);
   }
   syncToolbar();
@@ -3615,6 +3623,111 @@ function walkStep(dt) {
   if (keys.has("arrowdown")) { walk.pitch = clamp(walk.pitch - 1.2 * dt, -1.45, 1.45); changed = true; }
   if (changed) { walk.eye[2] = floorInternal() + walk.h; walkSync(); }
 }
+/* ------------------------------------------------------------------ *
+ * photographs pinned in the room
+ *
+ * The world was finished one picture at a time, each from a known camera.
+ * Between those cameras the baked field is what there is to see; on one
+ * of them the picture itself is better than anything the field can show,
+ * so it fades in as the walker reaches the spot and looks the way that
+ * camera did, and fades out as they leave. The field under it is drawn
+ * through the same lens, so the two agree where they meet. N stands the
+ * walker on the next one.
+ * ------------------------------------------------------------------ */
+const ANCHORS = (WORLD && Array.isArray(WORLD.anchors)) ? WORLD.anchors.map((a, i) => {
+  const cam = [a.cam[0] - ORIGIN[0], a.cam[1] - ORIGIN[1], a.cam[2] - ORIGIN[2]];
+  const f = [a.aim[0] - a.cam[0], a.aim[1] - a.cam[1], a.aim[2] - a.cam[2]];
+  const n = Math.hypot(f[0], f[1], f[2]) || 1;
+  return { i, name: String(a.name || ""), file: String(a.file || ""), cam,
+           fwd: [f[0] / n, f[1] / n, f[2] / n],
+           fovV: (+a.fov_v_deg || 36) * Math.PI / 180, fovH: (+a.fov_h_deg || 60) * Math.PI / 180,
+           w: +a.width_px || 960, h: +a.height_px || 540 };
+}) : [];
+const PHOTO_REACH_M = 0.55, PHOTO_TURN = 20 * Math.PI / 180;
+const photo = { at: null, alpha: 0, shown: false };
+
+function photoAlphaOf(a) {
+  const d = Math.hypot(walk.eye[0] - a.cam[0], walk.eye[1] - a.cam[1], walk.eye[2] - a.cam[2]);
+  if (d >= PHOTO_REACH_M) return 0;
+  const cp = Math.cos(walk.pitch);
+  const f = [Math.cos(walk.yaw) * cp, Math.sin(walk.yaw) * cp, Math.sin(walk.pitch)];
+  const dot = clamp(f[0] * a.fwd[0] + f[1] * a.fwd[1] + f[2] * a.fwd[2], -1, 1);
+  const ang = Math.acos(dot);
+  if (ang >= PHOTO_TURN) return 0;
+  const s = x => x * x * (3 - 2 * x);
+  return s(1 - d / PHOTO_REACH_M) * s(1 - ang / PHOTO_TURN);
+}
+function photoNearest() {
+  let best = null, bestA = 0;
+  for (const a of ANCHORS) { const al = photoAlphaOf(a); if (al > bestA) { bestA = al; best = a; } }
+  return { a: best, alpha: bestA };
+}
+// The canvas's fovy such that the picture, drawn as large as it fits,
+// shows exactly the camera's field (the letterbox's rule, for a photograph).
+function photoFov(a, w, h) {
+  const aspect = w / Math.max(h, 1);
+  if (aspect >= a.w / a.h) return a.fovV;
+  return 2 * Math.atan(Math.tan(a.fovH / 2) / aspect);
+}
+function photoLayout(a) {
+  const el = document.getElementById("photo");
+  const W = canvas.clientWidth, H = canvas.clientHeight;
+  let rw, rh;
+  if (W / Math.max(H, 1) >= a.w / a.h) { rh = H; rw = H * a.w / a.h; } else { rw = W; rh = W * a.h / a.w; }
+  el.style.left = ((W - rw) / 2) + "px"; el.style.top = ((H - rh) / 2) + "px";
+  el.style.width = rw + "px"; el.style.height = rh + "px";
+}
+function photoOff() {
+  const el = document.getElementById("photo");
+  el.classList.remove("on"); el.style.opacity = "0";
+  photo.at = null; photo.alpha = 0;
+  if (photo.shown) { photo.shown = false; if (walk.on) setReadout(walkHint()); }
+  if (!vf.on && FOV !== DEFAULT_FOV) { FOV = DEFAULT_FOV; needsRedraw = true; }
+}
+function photoSync() {
+  if (!ANCHORS.length || vf.on || vr.session) return;
+  const { a, alpha } = photoNearest();
+  const el = document.getElementById("photo");
+  if (!a) { if (photo.at || photo.alpha) photoOff(); return; }
+  if (photo.at !== a) { el.src = a.file; photo.at = a; }
+  photoLayout(a);
+  el.classList.add("on");
+  el.style.opacity = alpha.toFixed(3);
+  const fov = DEFAULT_FOV + (photoFov(a, canvas.clientWidth, canvas.clientHeight) - DEFAULT_FOV) * alpha;
+  if (Math.abs(fov - FOV) > 1e-4) { FOV = fov; needsRedraw = true; }
+  photo.alpha = alpha;
+  const on = alpha > 0.6;
+  if (on !== photo.shown) { photo.shown = on; setReadout(walkReadout()); }
+}
+// What the readout says while walking: the photograph underfoot, or the keys.
+function walkReadout() {
+  const a = photo.shown && photo.at;
+  return a
+    ? '<span class="hint"><b>' + a.name + '</b> · the picture Muse Image finished for this spot · step away to see the room · N next</span>'
+    : walkHint();
+}
+function photoStand(a) {
+  walk.eye = a.cam.slice();
+  walk.h = a.cam[2] - floorInternal();
+  walk.yaw = Math.atan2(a.fwd[1], a.fwd[0]);
+  walk.pitch = Math.asin(clamp(a.fwd[2], -1, 1));
+  walkSync();
+  photoSync();
+}
+function photoNext() {
+  if (!ANCHORS.length) return;
+  let i;
+  if (photo.at && photo.alpha > 0.5) i = (photo.at.i + 1) % ANCHORS.length;
+  else {
+    let best = Infinity; i = 0;
+    for (const a of ANCHORS) {
+      const d = Math.hypot(walk.eye[0] - a.cam[0], walk.eye[1] - a.cam[1]);
+      if (d < best) { best = d; i = a.i; }
+    }
+  }
+  photoStand(ANCHORS[i]);
+}
+
 function worldClock(w) {
   if (w.clock) return String(w.clock);
   if (isFinite(w.hour)) {
@@ -3650,7 +3763,7 @@ function vrSync() {
           : vr.session ? "take the headset off" : "stand in the finished room in a headset";
   b.textContent = vr.session ? "Exit VR" : "Enter VR";
   b.setAttribute("aria-pressed", String(!!vr.session));
-  if (walk.on) setReadout(walkHint());
+  if (walk.on) setReadout(walkReadout());
 }
 function vrProbe() {
   if (!WORLD) { vrSync(); return; }
@@ -3832,6 +3945,7 @@ addEventListener("keydown", e => {
   else if (k === "m") setMeasureMode(!measureMode);
   else if (k === "l") setLabelMode(!labelMode);
   else if (k === "r") { if (walk.on) walkReset(); else resetCamera(); }
+  else if (k === "n" && walk.on) photoNext();
   else if (k === "f") { walkSet(false); frameGeometry(false); }
   // Walking a world, V is the headset; everywhere else it is the viewfinder.
   else if (k === "v" && walk.on && vr.supported && HAS_SPLAT && !vf.on) { if (vr.session) exitVR(); else enterVR(); }
@@ -4158,7 +4272,7 @@ function step() {
 
   // fly controls act on the orbit target, so orbiting still works after
   // walking somewhere; the walker has its own feet
-  if (walk.on) walkStep(dt);
+  if (walk.on) { walkStep(dt); photoSync(); }
   else if (keys.size) {
     const { fwd, right } = camBasis();
     const flat = norm3([fwd[0], fwd[1], 0]);
@@ -4428,6 +4542,12 @@ if (WORLD) {
   tag.classList.add("on");
   document.body.classList.add("world");
   walkSet(true);
+  // `?photo=view_0012` (or `#photo=12`) opens standing on that photograph.
+  const want = new URLSearchParams(location.search).get("photo") || (location.hash.match(/photo=([^&]+)/) || [])[1];
+  if (want && ANCHORS.length) {
+    const a = ANCHORS.find(x => x.name === want) || ANCHORS[(+want | 0) % ANCHORS.length];
+    if (a) photoStand(a);
+  }
 }
 vrProbe();
 // A gaussian field reads as fog from outside and as the room from within,

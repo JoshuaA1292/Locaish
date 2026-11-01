@@ -58,6 +58,16 @@ room*:
   the real room, these people, this angle, consistent from frame to frame.
   The measured frame stays one toggle away and every finished frame is
   stamped a render. A move is cut to video both ways.
+- **Walk into the location as it will be on the day.** Pick a date and an
+  hour and say how the room will be dressed. Sixty views of the measured
+  room, chosen to cover every wall, are finished by Muse Image with the
+  sun through the real window at that hour, then painted onto the scan's
+  own gaussians: where the model and the measurement agree on the
+  structure the finished pixel is kept; where they disagree the scan keeps
+  its colour and takes only the light. The walls stay where they were
+  measured. Walk it in the browser (WASD) or in a headset (WebXR); stand
+  where a view was finished and the photograph itself fades in. This is
+  what a location scout would have brought back, before anyone drove there.
 
 Meta's models do every job that reads, names, judges, plans or paints: Muse
 Spark (`locaish/meta/vision.py`, the breakdown, the DP reviews of frames,
@@ -69,7 +79,8 @@ open-weight SAM 3D models on Modal (`locaish/meta/sam3d.py`,
 stays geometry; nothing a model says becomes a measurement except the
 stature anchor, through the fusion. The bodies are `locaish/product/figures.py`
 and `locaish/film/render.py`; the engine is `locaish/film/sim.py`; the
-rehearsal is `locaish/film/rehearsal.py`; the studio's stage is
+rehearsal is `locaish/film/rehearsal.py`; the world is
+`locaish/product/world.py`; the studio's stage is
 `locaish/product/stage.py`. Plan and status: [docs/META_HACKATHON.md](docs/META_HACKATHON.md).
 
 ```bash

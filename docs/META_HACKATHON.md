@@ -118,6 +118,37 @@ Meta key or a deployed Modal endpoint yet:
 | Photoreal finishing of whole sequences with the scan's own photographs of the view, cast looks and continuity; finished video | `locaish/meta/finish.py`, `product/stage.py`, `viewer/stage.js` | done, verified live 29 Oct: the real room, consistent people |
 | Operator watches its move (filmstrip) and a rendered move is reviewed as video | `locaish/agent/sim.py` | done, verified live |
 | Studio stage: routes, page, animatic scrubber, finish button | `locaish/product/stage.py`, `locaish/viewer/stage.js`, `serve.py` | done, screenshot-verified on a real room |
+| Directed scenes: beats carry pose, business, eyeline and composition; occluder-aware placement; light words for the hour; the scan's photographs in every finish | `agent/rehearsal.py`, `film/rehearsal.py`, `meta/finish.py`, `product/figures.py` | done 1 Nov, 620 tests |
+| The world: sixty views of the measured room chosen for coverage, finished by Muse Image for a date and hour (sun through the real window) and a dressing, then **baked onto the scan's own gaussians** | `locaish/product/world.py`, `video/splat.py` | done 1 Nov; bake 7 s, 3 min with relighting; see below |
+| Walk mode and WebXR in the viewer; photographs pinned where they were taken fade in underfoot; `?photo=view_0012` deep link; N steps to the next; the studio strip stands you on a click | `locaish/viewer/template.html`, `viewer/stage.js`, `product/stage.py` | done 1 Nov, screenshot-verified (SwiftShader) |
+| The studio in black and white: tokens, no gradients, the scene first on the page | `locaish/product/pages.py`, `serve.py`, `viewer/stage.js` | done 1 Nov |
+
+### 1 November: the world, and why it is baked rather than trained
+
+The first world trained a fresh splat (Brush, 6000 steps) on the sixty finished
+views. It was a smear: the finished views are sixty opinions about one room,
+and a trainer learns the disagreements as fog while throwing away the one thing
+the scan had, crisp geometry. The world now keeps every gaussian the scan
+trained exactly where it is and changes only its colour. For each finished
+view, every gaussian on the measured surface (depth within tolerance of the
+measured depth at that pixel) is compared with the render the finisher was
+shown: where the model and the measurement agree on the structure (local
+correlation of the two luminances) the finished pixel is painted, because it
+is the room's own detail relit and dressed; where they disagree (a bed the
+model moved, a wall it invented) the gaussian keeps the scan's colour and
+takes only the light, the finished view over the render at low frequency,
+which is where the sun patches and the hour's colour live. Views are weighted
+by that agreement and by nearness. The result walks like the scan and is lit
+like the hour. People are not baked: a figure painted into sixty views
+disagrees from view to view and averages into a ghost, so a world is the empty
+location by default and the viewer draws the cast as bodies on their marks.
+
+Between the cameras the baked field is what there is to see; on one of them
+the photograph itself is better than anything a field can show, so the viewer
+fades it in as the walker reaches the spot and looks the way the camera did,
+drawing the field through the same lens so the two agree where they meet. The
+world is honest about what it is: a label on every page, a render note in the
+provenance, and the scan one click away.
 
 **Next, in order:** get a META_API_KEY and run the vision, breakdown and
 finish paths live (fix wire shapes); deploy the Modal app and lift one sofa

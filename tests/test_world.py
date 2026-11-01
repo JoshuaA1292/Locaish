@@ -466,6 +466,15 @@ def test_build_world_bakes_when_the_twin_has_a_field(clean, tmp_path, monkeypatc
 
     wt = Twin.load(res.twin_path)
     assert wt.provenance["world"]["method"] == "bake"
+    # Every finished view is pinned where it was taken, for the page to fade in underfoot.
+    anchors = wt.provenance["world"]["anchors"]
+    assert [a["name"] for a in anchors] == [v.name for v in res.views]
+    a0 = anchors[0]
+    assert a0["file"] == f"finish_{res.views[0].name}.png" and (tmp_path / "w" / "finished" / a0["file"]).exists()
+    assert 20 < a0["fov_h_deg"] < 120 and 0 < a0["fov_v_deg"] < a0["fov_h_deg"]
+    assert a0["width_px"] == res.views[0].width_px and a0["height_px"] == res.views[0].height_px
+    html = res.html.read_text()
+    assert "WORLD.anchors" in html and "photoStand" in html, "the page knows how to stand on a photograph"
 
 
 def test_light_and_agreement_separate_the_hour_from_the_detail():
