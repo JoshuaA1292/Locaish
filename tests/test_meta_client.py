@@ -142,3 +142,27 @@ def test_configured_and_model_for(monkeypatch):
     with pytest.raises(mc.MetaError):
         monkeypatch.delenv("MODEL_API_KEY")
         mc.MetaClient()
+
+
+def test_sam_mask_payload_decodes_through_metas_parser():
+    """The protocol's own 5x5 example (meta-models/meta-sam, protocol/sam3.md)
+    decodes to a raster and lands in the frame at the box; needs the
+    meta-sam-parser package, otherwise the box stands in."""
+    import io
+
+    import numpy as np
+    import pytest
+    from PIL import Image
+
+    from locaish.meta.client import _sam_mask_png, parse_sam_text, sam_masks_decodable
+
+    if not sam_masks_decodable():
+        pytest.skip("meta-sam-parser is not installed")
+    png = _sam_mask_png("5,5,!!!!!(QO(0lu8?", 10, 20, 14, 24, 100, 80)
+    m = np.asarray(Image.open(io.BytesIO(png)))
+    assert m.shape == (80, 100) and m.dtype == np.uint8
+    inside = m[20:25, 10:15]
+    assert inside.max() == 255 and m.sum() == inside.sum(), "the mask lives inside its box and nowhere else"
+    text = "<7f>0<|box;x1=10;y1=20;x2=14;y2=24;w=100;h=80|><|mask;x=0;y=0;data=5,5,!!!!!(QO(0lu8?|>"
+    dets = parse_sam_text(text, default_label="cup")
+    assert len(dets) == 1 and dets[0].mask_png is not None, "a decodable mask rides with its box"

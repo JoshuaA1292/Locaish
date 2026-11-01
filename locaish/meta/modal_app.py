@@ -64,12 +64,11 @@ BODY_COMMIT = "b5c765a0d89d789985e186d396315e7590887b94"      # main, 19 Feb 202
 BODY_HF_REPO = "facebook/sam-3d-body-dinov3"                  # gated; model.ckpt, model_config.yaml, assets/mhr_model.pt
 BODY_GPU = "L4"                                               # 840M params + ViTDet-H + MoGe-2 fit in 24 GB
 
-# MoGe pinned to the commit sam-3d-objects' requirements.txt pins; sam-3d-body's
-# INSTALL.md says `pip install git+https://github.com/microsoft/MoGe.git`
-# unpinned, and MoGe's main has since moved to MoGe-3 (needs Triton). The
-# pinned commit still has `moge.model.v2`, which `tools/build_fov_estimator.py`
-# imports.
-MOGE_COMMIT = "a8c37341bc0325ca99b9d57981cc3bb2bd3e255b"
+# MoGe for sam-3d-body's FOV estimator, which imports `moge.model.v2`
+# (tools/build_fov_estimator.py). INSTALL.md installs MoGe unpinned; the
+# commit sam-3d-objects pins (a8c37341) predates model/v2 and failed the
+# warm-up on 1 Nov 2026, so this is MoGe's main of that day, which has it.
+MOGE_COMMIT = "74fbce054ebed49800de42d0ad0e83495065719a"
 DETECTRON2_COMMIT = "a1ce2f9"                                 # INSTALL.md step 4
 
 OBJECTS_ROOT = "/opt/sam-3d-objects"
@@ -284,7 +283,9 @@ if modal is not None:
 
     objects_image = (
         modal.Image.from_registry("nvidia/cuda:12.1.1-devel-ubuntu22.04", add_python="3.11")
-        .apt_install("git", "build-essential", "ninja-build", "libgl1", "libglib2.0-0", "libegl1",
+        # clang: Modal's python build reports clang++ as its shared-object
+        # linker (sysconfig LDSHARED), so every extension links with it.
+        .apt_install("git", "build-essential", "clang", "ninja-build", "libgl1", "libglib2.0-0", "libegl1",
                      "libgomp1", "libxrender1", "libxi6", "libxkbcommon0", "libsm6", "libxext6")
         .env({
             # notebook/inference.py line 5: os.environ["CUDA_HOME"] = os.environ["CONDA_PREFIX"]
@@ -292,8 +293,13 @@ if modal is not None:
             "CONDA_PREFIX": "/usr/local/cuda",
             "CUDA_HOME": "/usr/local/cuda",
             "LIDRA_SKIP_INIT": "true",                      # inference.py line 6
-            # doc/setup.md: the two package indexes (cu121 torch, NGC) and the Kaolin wheel index
-            "PIP_EXTRA_INDEX_URL": "https://pypi.ngc.nvidia.com https://download.pytorch.org/whl/cu121",
+            # doc/setup.md lists the cu121 torch index and NGC's; NGC's hostname
+            # does not resolve from Modal's image builder (1 Nov 2026) and
+            # nothing needed comes only from there, so it is left out. The
+            # CUDA base image ships a pip.conf that points at NGC too, hence
+            # PIP_CONFIG_FILE below.
+            "PIP_CONFIG_FILE": "/dev/null",
+            "PIP_EXTRA_INDEX_URL": "https://download.pytorch.org/whl/cu121",
             "PIP_FIND_LINKS": "https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.5.1_cu121.html",
             # PyTorch3D, gsplat and flash-attn compile CUDA kernels at install:
             # one architecture (L40S = Ada, sm_89) keeps that under an hour, and
@@ -306,16 +312,30 @@ if modal is not None:
         })
         .run_commands(
             f"git clone {OBJECTS_REPO} {OBJECTS_ROOT} && cd {OBJECTS_ROOT} && git checkout {OBJECTS_COMMIT}",
+            # requirements.txt lists nvidia-pyindex, a helper whose only job is
+            # to point pip at NGC; its build runs pip inside an isolated env
+            # that has none, and NGC is unreachable from here anyway.
+            f"cd {OBJECTS_ROOT} && sed -i '/^nvidia-pyindex/d' requirements*.txt",
         )
         .workdir(OBJECTS_ROOT)
         # requirements.txt pins torchaudio==2.5.1+cu121, which fixes torch at
         # 2.5.1+cu121; installing torch first lets the source builds below see it.
         .run_commands("pip install torch==2.5.1+cu121 torchvision==0.20.1+cu121 torchaudio==2.5.1+cu121")
         .run_commands("pip install -e '.[dev]'")                       # setup.md step: core + dev
-        .run_commands("pip install -e '.[p3d]'", gpu=OBJECTS_GPU)      # setup.md: PyTorch3D separately (source build)
-        .run_commands("pip install -e '.[inference]'", gpu=OBJECTS_GPU)  # setup.md: kaolin, gsplat, MoGe, flash-attn
+        # PyTorch3D, gsplat and flash-attn import torch in their setup.py, so
+        # they must see the torch installed above rather than pip's isolated
+        # build env (which has none): --no-build-isolation, with the build
+        # tools they expect installed first.
+        # The package itself is already installed (editable) by the [dev]
+        # step; the extras are just requirement files, installed directly so
+        # the project's own hatchling backend is not re-run without isolation.
+        .run_commands("pip install ninja packaging psutil wheel setuptools")
+        .run_commands("pip install -r requirements.p3d.txt --no-build-isolation", gpu=OBJECTS_GPU)        # setup.md: PyTorch3D (source build)
+        .run_commands("pip install -r requirements.inference.txt --no-build-isolation", gpu=OBJECTS_GPU)  # setup.md: kaolin, gsplat, MoGe, flash-attn
         .run_commands("python ./patching/hydra")                       # setup.md: the hydra 1.3.2 patch
         .pip_install("fastapi[standard]", "huggingface_hub[cli]<1.0", "trimesh")
+        # lightning 2.x still imports pkg_resources, which setuptools 80 removed.
+        .pip_install("setuptools<80")
         .run_function(_download_objects_checkpoints, secrets=[hf_secret], timeout=3 * 3600)
         .run_function(_warm_objects, secrets=[hf_secret], gpu=OBJECTS_GPU, timeout=3600)
     )
@@ -368,9 +388,10 @@ if modal is not None:
 
     body_image = (
         modal.Image.from_registry("nvidia/cuda:12.1.1-devel-ubuntu22.04", add_python="3.11")
-        .apt_install("git", "build-essential", "ninja-build", "libgl1", "libglib2.0-0", "libegl1",
+        .apt_install("git", "build-essential", "clang", "ninja-build", "libgl1", "libglib2.0-0", "libegl1",
                      "libgomp1", "libxrender1", "libxext6", "libsm6")
         .env({
+            "PIP_CONFIG_FILE": "/dev/null",                  # the base image's pip.conf points at NGC, which does not resolve here
             "CUDA_HOME": "/usr/local/cuda",
             "TORCH_CUDA_ARCH_LIST": "8.9",                   # L4 is Ada too (sm_89)
             "FORCE_CUDA": "1",
@@ -390,6 +411,7 @@ if modal is not None:
             gpu=BODY_GPU,
         )
         .pip_install(f"git+https://github.com/microsoft/MoGe.git@{MOGE_COMMIT}")     # step 5 (pinned, see MOGE_COMMIT)
+        .pip_install("setuptools<80")                                                 # pytorch-lightning imports pkg_resources
         .pip_install("fastapi[standard]", "trimesh")
         .run_function(_download_body_checkpoints, secrets=[hf_secret], timeout=3600)
         .run_function(_warm_body, gpu=BODY_GPU, timeout=3600)

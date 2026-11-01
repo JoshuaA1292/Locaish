@@ -484,47 +484,45 @@ def parse_sam_text(text: str, *, default_label: str = "") -> list[Detection]:
     return out
 
 
-def _coco_rle_counts(s: str) -> list[int]:
-    """pycocotools' string encoding of run lengths: 5-bit groups, LEB-style,
-    with every third count stored as a delta from the one two back."""
-    counts: list[int] = []
-    p, m = 0, 0
-    n = len(s)
-    while p < n:
-        x, k, more = 0, 0, 1
-        while more:
-            c = ord(s[p]) - 48
-            x |= (c & 0x1F) << (5 * k)
-            more = c & 0x20
-            p += 1
-            k += 1
-            if not more and (c & 0x10):
-                x |= -1 << (5 * k)
-        if m > 2:
-            x += counts[m - 2]
-        counts.append(x)
-        m += 1
-    return counts
+def _sam_mask_raster(h: int, w: int, payload: str):
+    """The mask's row-major (h, w) 0/1 array from its wire payload.
+
+    SAM 3.1's `data=H,W,<payload>` is base85 over a custom alphabet around
+    an arithmetic-coded body (meta-models/meta-sam, protocol/sam3.md); the
+    marker is the first character: `~` lossless, `!` one_bit. Meta ships
+    the decoder as `meta-sam-parser` on PyPI; without it the mask cannot be
+    read and the caller falls back to the box.
+    """
+    import numpy as np
+
+    try:
+        from meta_sam_parser import SegmentationMask, decode_mask_to_raster
+    except ImportError as e:  # the box stands in for the mask
+        raise RuntimeError("meta-sam-parser is not installed: pip install meta-sam-parser") from e
+    encoding = "lossless" if payload[:1] == "~" else "one_bit"
+    raster = decode_mask_to_raster(SegmentationMask(encoding=encoding, payload=payload, width=w, height=h))
+    flat = np.frombuffer(bytes(raster), dtype=np.uint8)
+    if len(flat) != h * w:
+        raise ValueError(f"mask raster has {len(flat)} bytes for {h}x{w}")
+    return (flat.reshape((h, w)) != 0).astype(np.uint8)
+
+
+def sam_masks_decodable() -> bool:
+    """Whether SAM 3.1 masks can be decoded in this process (meta-sam-parser)."""
+    try:
+        import meta_sam_parser  # noqa: F401
+    except ImportError:
+        return False
+    return True
 
 
 def _sam_mask_png(data: str, x1: int, y1: int, x2: int, y2: int, W: int, H: int, ox: int = 0, oy: int = 0) -> bytes:
     import numpy as np
     from PIL import Image
 
-    head, rle = data.split(",", 2)[:2], data.split(",", 2)[2]
+    head, payload = data.split(",", 2)[:2], data.split(",", 2)[2]
     h, w = int(head[0]), int(head[1])
-    counts = _coco_rle_counts(rle)
-    flat = np.zeros(h * w, dtype=np.uint8)
-    pos, val = 0, 0
-    for c in counts:
-        c = max(0, int(c))
-        if val:
-            flat[pos : pos + c] = 1
-        pos += c
-        val ^= 1
-        if pos >= h * w:
-            break
-    crop = flat.reshape((w, h)).T          # COCO lays the mask out column-major
+    crop = _sam_mask_raster(h, w, payload)
     full = np.zeros((H, W), dtype=np.uint8)
     X0, Y0 = x1 + ox, y1 + oy
     hh, ww = min(h, H - Y0), min(w, W - X0)
