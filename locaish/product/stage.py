@@ -1689,7 +1689,7 @@ class Stage:
                 "date": run.date, "hour": run.hour, "dressing": dressing,
                 "light": light, "actors": actors,
                 "seconds": round(time.time() - t0, 1),
-                "note": "a render, not a measurement: the finished views and the splat trained on them are what "
+                "note": "a render, not a measurement: the finished views and the field they are painted onto are what "
                         "Muse Image painted over the measured room; the scan beside it is the measurement",
             }
             (run.workdir / "world.json").write_text(json.dumps({

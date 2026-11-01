@@ -756,7 +756,7 @@ def write_colmap_model(twin: Twin, views: list[View], image_size: tuple[int, int
         "COLMAP text model for the world trainer, in the twin's frame (metres).\n"
         "Poses are exact: each image was rendered through this camera, not solved from it.\n"
         f"{len(views)} images, {len(cameras)} camera(s), {len(rows)} seed points from the measured cloud.\n"
-        "The images are finished renders, not photographs; the splat trained on them is a render.\n"
+        "The images are finished renders, not photographs; the world built from them is a render.\n"
     )
     return out_dir
 
