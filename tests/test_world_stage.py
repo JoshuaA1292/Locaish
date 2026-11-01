@@ -231,13 +231,14 @@ def test_world_builds_streams_lists_and_serves_its_files(world_url, monkeypatch)
 
     # What the stage handed the builder and the finisher.
     assert seen["build"]["steps"] == 500 and seen["build"]["n_views"] == 60 and seen["build"]["light"] is None
-    assert seen["build"]["figures"] == 2, "both actors stand in the room"
+    assert seen["build"]["figures"] == 0, "a world is the empty location by default; people are asked for"
+    assert seen["build"]["extra"]["method"] == "bake", "the scan's own gaussians are painted, not retrained"
     assert seen["build"]["exclude"] is None, "nothing moved, nothing excluded"
     wm = seen["build"]["extra"]["world_meta"]
     assert wm["date"] == "2026-11-14" and wm["hour"] == 15.0 and wm["dressing"] == "the table laid for dinner" and wm["built_at"]
-    assert set(seen["build"]["extra"]["actors"]) == {"Maya", "Theo"}
+    assert set(seen["build"]["extra"]["actors"]) == {"Maya", "Theo"}, "the marks are kept for the viewer to draw bodies on"
     fin = seen["finish"]
-    assert fin["n"] == 1 and fin["cast"] == ["Maya", "Theo"] and fin["workers"] == 4
+    assert fin["n"] == 1 and fin["cast"] == [] and fin["workers"] == 4, "nobody is painted into the location"
     # The scan's photographs go along when the twin has posed frames; the
     # synthetic room has none, and the finisher is told so with None.
     assert fin["room_refs"] is (studio.frames_of(studio.jobs["cleanroom"]) is not None)

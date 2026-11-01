@@ -17,10 +17,14 @@ frame does not get to break it.
 `finish_sequence` does it for a whole rehearsal or a rendered move: every
 frame gets the same instruction, each stand-in figure is named by its colour
 as the actor it stands for (with the actor's own words for how they look and
-what they wear, and their headshot when there is one), and from the second
-frame on the last finished frame rides along as a reference so the sequence
-does not change clothes or light between frames. The first frame goes alone;
-the rest run in order with up to `workers` in flight.
+what they wear, their headshot when there is one, and when the beat staged
+them, their pose, business, eyeline and an expression read off the line),
+and from the second frame on the first finished frame of the scene rides
+along as the ANCHOR every later frame is held to, with the nearest finished
+frame by camera as a second reference, so the scene does not change clothes,
+faces or light between setups. The light is said once for the scene, from
+the rehearsal's own sun and clock. The first frame goes alone; the rest run
+in order with up to `workers` in flight.
 
 `finish_world_views` does it for a set of views that must agree rather than
 follow: sixty cameras covering the room at one hour, finished UNSTAMPED and
@@ -194,6 +198,19 @@ _PERSON = (
     "distance from the camera, wearing {wardrobe}.{place} "
 )
 
+# A staged person: the beat said how they hold themselves, what their hands
+# are doing and where they look, and the line says what their face is doing.
+_PERSON_STAGED = (
+    "The {colour} figure is {name} ({about}){ref}, a real person exactly where the figure "
+    "is, the same height and the same distance from the camera, {facing}{posture}, "
+    "{expression}, wearing {wardrobe}.{place} "
+)
+
+_COMPOSITION = (
+    "Composition: {subject} sits on the {third} third of the frame, {look}, {room}; keep "
+    "that framing exactly, with the headroom image 1 has. "
+)
+
 _NOBODY = "There are no people in this frame; leave it empty of people. "
 
 _ROOM = (
@@ -206,8 +223,20 @@ _ROOM = (
 )
 
 _CONTINUITY = (
-    "Image {n} is the previous finished frame of this scene: match its look, the room's "
+    "Image {n} is the previous finished frame of this scene{near}: match its look, the room's "
     "materials and colours, the lighting, and each person's face, hair and wardrobe EXACTLY. "
+)
+
+_SCENE_ANCHOR = (
+    "Image {n} is the first photograph of this scene, from its own camera: match its materials, "
+    "light, faces, hair and wardrobe EXACTLY, so this frame and image {n} cut together as one "
+    "scene shot at one hour. "
+)
+
+_SCENE_ANCHOR_AND_PREVIOUS = (
+    "Image {n} is the previous finished frame of this scene and its first photograph: match its "
+    "materials, light, faces, hair and wardrobe EXACTLY, so this frame and image {n} cut together "
+    "as one scene shot at one hour. "
 )
 
 
@@ -279,6 +308,73 @@ def _facing_words(meta: dict[str, Any], name: str) -> str:
     return f"in profile, facing frame {side}, "
 
 
+def _staging_words(meta: dict[str, Any], name: str) -> tuple[str, str] | None:
+    """The posture and the expression for one actor, from the frame's own
+    staging and line: None when the beat staged nothing for them (the old
+    "standing exactly where the figure is" sentence then applies)."""
+    staged = (meta.get("staging") or {}).get(name) if isinstance(meta.get("staging"), dict) else None
+    if not isinstance(staged, dict) or not any(staged.get(k) for k in ("pose", "business", "eyeline")):
+        return None
+    pose = str(staged.get("pose") or "standing")
+    business = str(staged.get("business") or "").strip().rstrip(".")
+    eyeline = str(staged.get("eyeline") or "").strip()
+    bits = []
+    bits.append({"sitting": "SITTING down", "leaning": "LEANING with their weight on one side",
+                 "walking": "mid-stride, walking", "standing": "standing"}.get(pose, pose))
+    if business:
+        bits.append(business if business.lower().startswith(("with ", "hands", "arms", "leaning", "looking", "typing", "turning", "holding"))
+                    else business)
+    if eyeline:
+        low = eyeline.lower()
+        if low == "camera":
+            bits.append("looking straight into the lens")
+        elif low == "down":
+            bits.append("eyes down, not at the camera")
+        elif low in ("window", "door"):
+            bits.append(f"looking at the {low}, not at the camera")
+        else:
+            bits.append(f"looking at {eyeline if eyeline[:1].isupper() else 'the ' + eyeline}, not at the camera")
+    posture = ", ".join(bits)
+    return posture, _expression(meta, name, eyeline)
+
+
+def _expression(meta: dict[str, Any], name: str, eyeline: str) -> str:
+    """What the face is doing, read off the beat: the speaker speaks (asks,
+    raises their voice), someone whose eyeline is on the speaker listens,
+    someone looking elsewhere is turned away. Not a mood the model invents."""
+    speaker = meta.get("speaker")
+    line = str(meta.get("line") or "").strip()
+    if speaker == name and line:
+        if line.endswith("?"):
+            return "mid-sentence, asking a question, mouth slightly open"
+        if "!" in line:
+            return "mid-sentence, raising their voice"
+        return "mid-sentence, speaking, mouth slightly open"
+    if speaker and speaker != name:
+        if eyeline and eyeline.lower() in ("window", "door", "down"):
+            return "turned away from the person speaking, not meeting their eyes"
+        return f"listening to {speaker}, mouth closed"
+    if eyeline and eyeline.lower() in ("window", "door", "down"):
+        return "quiet, turned away"
+    return "a natural, unposed expression, mouth closed"
+
+
+def _composition_words(meta: dict[str, Any]) -> str:
+    comp = meta.get("composition")
+    if not isinstance(comp, dict) or not comp.get("subject"):
+        return ""
+    third = str(comp.get("third") or "centre")
+    if third == "centre":
+        return ""
+    subject = comp["subject"]
+    look = _facing_words(meta, subject).strip().rstrip(",")
+    if "profile" in look:
+        look = look.replace("in profile, ", "in profile ")
+    room = (f"with room in front of {subject} on the {'right' if third == 'left' else 'left'}"
+            if comp.get("look_room") else "with the other edge clear")
+    return _COMPOSITION.format(subject=subject, third=third, look=look.lower() if look.isupper() else look, room=room)
+
+
 def _shot_words(meta: dict[str, Any], boxes: dict[str, tuple[float, float, float, float]] | None) -> str:
     """The lead sentence: what size of shot this is and who is in the foreground."""
     framing = meta.get("framing") or {}
@@ -327,10 +423,27 @@ def _place_words(box: tuple[float, float, float, float] | None) -> str:
     return size + "; keep them exactly that size and place in the picture."
 
 
-def _light_words(meta: dict[str, Any], scene_light: str) -> str:
+def _light_words(meta: dict[str, Any], scene_light: str, light: dict[str, Any] | None = None) -> str:
+    """The light sentence: the director's own words if given, else the
+    scene's sun and clock (`light`, the same for every frame of a scene),
+    else this frame's own sun."""
     if scene_light.strip():
         return scene_light.strip().rstrip(".") + "."
-    return light_words_for(meta.get("sun"))
+    return light_words_for(light if light is not None else frame_light(meta))
+
+
+def frame_light(meta: dict[str, Any]) -> dict[str, Any] | None:
+    """The animatic frame's sun with its clock (to the minute: the hour a
+    scene plays at is one hour), as `light_words_for` reads it. None when
+    the frame carries no sun."""
+    sun = meta.get("sun")
+    if not isinstance(sun, dict):
+        return None
+    out = dict(sun)
+    clock = meta.get("clock")
+    if clock and "clock" not in out:
+        out["clock"] = str(clock)[:5]
+    return out
 
 
 def _compass(azimuth_deg: float) -> str:
@@ -392,19 +505,29 @@ def build_sequence_prompt(
     mood: str = "",
     boxes: dict[str, tuple[float, float, float, float]] | None = None,
     room_index: list[int] | None = None,
+    anchor_index: int | None = None,
+    light: dict[str, Any] | None = None,
 ) -> str:
     """The instruction for one frame of a sequence. `meta` is the animatic or
-    evaluation frame (focal_mm, actors, sun, framing); `cast` the Actor list;
-    `headshot_index` maps an actor's name to the 1-based image number of the
-    headshot in the references; `continuity_index` the image number of the
-    previous finished frame, when one rides along."""
+    evaluation frame (focal_mm, actors, sun, framing, staging, composition);
+    `cast` the Actor list; `headshot_index` maps an actor's name to the
+    1-based image number of the headshot in the references; `continuity_index`
+    the image number of the nearest finished frame, when one rides along;
+    `anchor_index` that of the scene's first finished frame, when it is a
+    different image (the same image is described once, as both); `light` the
+    scene's sun and clock, said the same for every frame."""
     cam = meta.get("camera") or {}
     focal = float(meta.get("focal_mm") or cam.get("focal_mm") or 35.0)
     count, people, nobody = _people_words(meta, cast, headshot_index, boxes)
-    cont = _CONTINUITY.format(n=continuity_index) if continuity_index else ""
+    if anchor_index and continuity_index and anchor_index == continuity_index:
+        cont = _SCENE_ANCHOR_AND_PREVIOUS.format(n=anchor_index)
+    else:
+        cont = _CONTINUITY.format(n=continuity_index, near=" from the camera nearest this one" if anchor_index else "") if continuity_index else ""
+        if anchor_index:
+            cont = _SCENE_ANCHOR.format(n=anchor_index) + cont
     text = _SEQUENCE_INSTRUCTION.format(
-        shot=_shot_words(meta, boxes), count=count, room=_room_words(room_index),
-        focal_mm=focal, people=people, nobody=nobody, light=_light_words(meta, scene_light),
+        shot=_shot_words(meta, boxes) + _composition_words(meta), count=count, room=_room_words(room_index),
+        focal_mm=focal, people=people, nobody=nobody, light=_light_words(meta, scene_light, light),
         mood=(" " + mood.strip().rstrip(".") + ".") if mood.strip() else "", continuity=cont,
     )
     return " ".join(text.split())
@@ -429,9 +552,16 @@ def _people_words(meta: dict[str, Any], cast: list[Any], headshot_index: dict[st
         about.append(f"{float(a.height_m):.2f} m tall")
         ref = f" (image {headshot_index[a.name]} is {a.name}'s headshot: the same face)" if a.name in headshot_index else ""
         wardrobe = (getattr(a, "wardrobe", "") or "").strip().rstrip(".") or "plain everyday clothes"
-        people.append(_PERSON.format(colour=colour_name(a.colour).upper(), name=a.name, about=", ".join(about),
-                                     ref=ref, wardrobe=wardrobe, place=_place_words((boxes or {}).get(a.name)),
-                                     facing=_facing_words(meta, a.name)))
+        staged = _staging_words(meta, a.name)
+        if staged is not None:
+            posture, expression = staged
+            people.append(_PERSON_STAGED.format(colour=colour_name(a.colour).upper(), name=a.name, about=", ".join(about),
+                                                ref=ref, wardrobe=wardrobe, place=_place_words((boxes or {}).get(a.name)),
+                                                facing=_facing_words(meta, a.name), posture=posture, expression=expression))
+        else:
+            people.append(_PERSON.format(colour=colour_name(a.colour).upper(), name=a.name, about=", ".join(about),
+                                         ref=ref, wardrobe=wardrobe, place=_place_words((boxes or {}).get(a.name)),
+                                         facing=_facing_words(meta, a.name)))
     nobody = _NOBODY if (names is not None and not names) or (not people and not cast) else ""
     if nobody:
         people = []
@@ -515,14 +645,32 @@ def finish_sequence(
     near this frame's camera (the scan's own frames): without them the model
     has only the render's smear to go on and paints a room of its own; with
     them the output is this room.
+
+    Continuity is the world finisher's: the first frame the model finishes
+    is the ANCHOR, and every later frame carries it ("the first photograph of
+    this scene: match its materials, light, faces, hair and wardrobe") and
+    its nearest already-finished frame by camera position and aim (the
+    previous frame of the same setup, usually). When the anchor is itself as
+    near as any (the camera has not moved since it), it rides once, as both.
+    References, in order: the frame, headshots, room photographs, then the
+    finished frames, within the API's ten; the finished frames are reserved
+    first, so a crowded cast never pushes the anchor out.
+
+    The light is said once for the scene: the first frame's sun and clock
+    (`frame_light`) go into every frame's prompt, so every setup is finished
+    at the same hour with the sun from the same azimuth; `scene_light` in
+    words overrides it.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     headshots = dict(headshots or {})
     model = model or model_for("image")
     total = len(frames)
+    pos = _view_positions(frames)
+    dirs = _view_dirs(frames, pos)
     lock = threading.Lock()
     done: dict[int, FinishedFrame] = {}
+    scene_sun = next((frame_light(m) for _n, _p, m in frames if frame_light(m)), None)
 
     def say(**ev) -> None:
         if progress is not None:
@@ -531,13 +679,14 @@ def finish_sequence(
             except Exception:  # noqa: BLE001 - a reporter must not stop the run
                 pass
 
-    def one(i: int, prev: FinishedFrame | None) -> FinishedFrame | None:
+    def one(i: int, anchor: FinishedFrame | None, anchor_i: int | None, finished: dict[int, FinishedFrame]) -> FinishedFrame | None:
         name, png, meta = frames[i]
         dest = out_dir / f"finish_{Path(name).name}"
         if dest.suffix.lower() != ".png":
             dest = dest.with_suffix(".png")
         if dest.exists() and not force:
-            ff = FinishedFrame(png=dest.read_bytes(), prompt="", model=model, name=name, path=dest, cached=True)
+            raw = dest.read_bytes()
+            ff = FinishedFrame(png=raw, raw=raw, prompt="", model=model, name=name, path=dest, cached=True)
             say(kind="skip", index=i, name=name, file=dest.name, text=f"{name}: already finished")
             return ff
         say(kind="start", index=i, name=name, file=dest.name, text=f"finishing {name}")
@@ -546,34 +695,54 @@ def finish_sequence(
             names = list(present.keys()) if isinstance(present, dict) else None
             refs: list[bytes] = [strip_caption(png)]
             boxes = figure_boxes(refs[0], cast)
+            # The finished frames this one is held to, decided first so their
+            # slots are reserved: the nearest finished frame by camera (ties to
+            # the most recent), and the anchor when it is a different frame
+            # and the camera has moved since it.
+            tail: list[tuple[str, FinishedFrame]] = []
+            if continuity and anchor is not None and anchor_i != i:
+                near = nearest_finished(i, finished, pos, dirs, k=1, prefer_recent=True)
+                j = near[0] if near else anchor_i
+                if j == anchor_i or _nearness(i, anchor_i, pos, dirs) <= _nearness(i, j, pos, dirs) + 1e-9:
+                    tail.append(("both", anchor))
+                else:
+                    tail.append(("anchor", anchor))
+                    tail.append(("neighbour", finished[j]))
+            budget = 10 - len(tail)
             index: dict[str, int] = {}
             for a in cast:
                 if names is not None and a.name not in names:
                     continue
                 shot = headshots.get(a.name) or headshots.get(getattr(a, "id", ""))
-                if shot and len(refs) < 9:
+                if shot and len(refs) < budget:
                     refs.append(shot)
                     index[a.name] = len(refs)
             room_index: list[int] = []
             if room_refs is not None:
                 try:
                     for shot in list(room_refs(meta) or [])[:2]:
-                        if shot and len(refs) < 9:
+                        if shot and len(refs) < budget:
                             refs.append(shot)
                             room_index.append(len(refs))
                 except Exception as exc:  # noqa: BLE001 - no room photos is a worse frame, not a failed one
                     say(kind="note", index=i, name=name, text=f"{name}: no room photographs ({exc})")
-            cont_index = None
-            if continuity and prev is not None and len(refs) < 10:
-                refs.append(prev.raw or prev.png)
-                cont_index = len(refs)
+            anchor_index = cont_index = None
+            for role, ff_ref in tail:
+                refs.append(ff_ref.raw or ff_ref.png)
+                if role == "both":
+                    anchor_index = cont_index = len(refs)
+                elif role == "anchor":
+                    anchor_index = len(refs)
+                else:
+                    cont_index = len(refs)
             prompt = build_sequence_prompt(meta=meta, cast=cast, headshot_index=index, continuity_index=cont_index,
-                                           scene_light=scene_light, mood=mood, boxes=boxes, room_index=room_index)
+                                           scene_light=scene_light, mood=mood, boxes=boxes, room_index=room_index,
+                                           anchor_index=anchor_index, light=scene_sun)
             raw = client.generate_image(prompt, references=refs, model=model)
             out = stamp_render(raw) if stamp else raw
             ff = FinishedFrame(png=out, prompt=prompt, model=model, references=len(refs) - 1, name=name, path=dest,
                                raw=raw, meta={"headshots": len(index), "continuity": cont_index is not None,
-                                              "room_photos": len(room_index)})
+                                              "anchor": anchor_index is not None, "room_photos": len(room_index)})
             ff.save(dest)
             say(kind="done", index=i, name=name, file=dest.name, text=f"finished {name}")
             return ff
@@ -583,33 +752,29 @@ def finish_sequence(
 
     if not frames:
         return []
-    # The first frame sets the look; it goes alone. Then chunks of `workers`
-    # run in parallel, each frame carrying the last finished frame before its
-    # chunk started, so the look is handed forward in order.
-    first = one(0, None)
-    if first is not None:
-        done[0] = first
+    # The anchor goes alone: the first frame the model finishes (a cached
+    # file counts: it is the look the scene already has). Then chunks of
+    # `workers` run in parallel, each frame carrying the anchor and its
+    # nearest finished frame from before its chunk started.
     workers = max(1, int(workers))
-    last: FinishedFrame | None = first
-    i = 1
+    anchor: FinishedFrame | None = None
+    anchor_i: int | None = None
+    i = 0
+    while i < total and anchor is None:
+        r = one(i, None, None, dict(done))
+        if r is not None:
+            done[i] = r
+            anchor, anchor_i = r, i
+        i += 1
     with ThreadPoolExecutor(max_workers=workers) as pool:
         while i < total:
             chunk = list(range(i, min(total, i + workers)))
-            prev = last if continuity else None
-            results = list(pool.map(lambda k: one(k, prev), chunk))
+            snapshot = dict(done)
+            results = list(pool.map(lambda k: one(k, anchor, anchor_i, snapshot), chunk))
             with lock:
                 for k, r in zip(chunk, results):
                     if r is not None:
                         done[k] = r
-            for k in reversed(chunk):
-                if done.get(k) is not None and not done[k].cached:
-                    last = done[k]
-                    break
-            else:
-                for k in reversed(chunk):
-                    if done.get(k) is not None:
-                        last = done[k]
-                        break
             i = chunk[-1] + 1
     return [done[k] for k in sorted(done)]
 
@@ -770,6 +935,19 @@ def _nearness(i: int, j: int, pos, dirs) -> float:
     return d
 
 
+def nearest_finished(i: int, finished: dict[int, Any], pos, dirs, *, k: int = 2, prefer_recent: bool = False) -> list[int]:
+    """The indices of the `k` finished views nearest view `i` by camera
+    position and aim (`_nearness`), nearest first. `prefer_recent` breaks
+    ties toward the most recently finished (the highest index), which for a
+    held camera is the previous frame. Views with no camera are never near."""
+    cands = [j for j in finished if j != i and pos[j] is not None]
+    if prefer_recent:
+        cands.sort(key=lambda j: (_nearness(i, j, pos, dirs), -j))
+    else:
+        cands.sort(key=lambda j: _nearness(i, j, pos, dirs))
+    return cands[:k]
+
+
 def world_order(views: list[tuple[str, bytes, dict[str, Any]]]) -> list[int]:
     """The order to finish a set of views in: view 0 first, then always the
     unfinished view whose camera stands nearest the one just finished. Views
@@ -855,11 +1033,6 @@ def finish_world_views(
         dest = out_dir / f"finish_{Path(name).name}"
         return dest if dest.suffix.lower() == ".png" else dest.with_suffix(".png")
 
-    def nearest_finished(i: int, finished: dict[int, FinishedFrame], k: int = 2) -> list[int]:
-        cands = [j for j in finished if j != i and pos[j] is not None]
-        cands.sort(key=lambda j: _nearness(i, j, pos, dirs))
-        return cands[:k]
-
     def one(i: int, anchor: FinishedFrame | None, anchor_i: int | None, finished: dict[int, FinishedFrame]) -> FinishedFrame | None:
         name, png, meta = views[i]
         dest = dest_of(name)
@@ -873,7 +1046,7 @@ def finish_world_views(
             size = _image_size(png)
             refs: list[bytes] = [png]
             boxes = figure_boxes(png, cast)
-            near = nearest_finished(i, finished)
+            near = nearest_finished(i, finished, pos, dirs, k=2)
             meta["neighbours"] = [views[j][0] for j in near]
             anchor_index = neighbour_index = None
             if anchor is not None and anchor_i != i:

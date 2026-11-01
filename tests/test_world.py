@@ -376,3 +376,124 @@ def test_brush_accepts_the_world_dataset(clean, tmp_path):
     assert build._splat_payload(wt, np.zeros(3)) is not None
     print(f"\nbrush: 12 views at 480 px, 300 steps, {len(g['xyz']):,} gaussians in {dt:.1f} s "
           f"(train {res.seconds['train']:.1f} s)")
+
+
+def test_gaussian_ply_round_trip(tmp_path):
+    import numpy as np
+
+    from locaish.video.splat import read_gaussian_ply, write_gaussian_ply
+
+    rng = np.random.default_rng(1)
+    n = 500
+    g = {"xyz": rng.normal(size=(n, 3)), "rgb01": rng.uniform(0.05, 0.95, (n, 3)), "opacity": rng.uniform(0.1, 0.9, n),
+         "scale": rng.uniform(0.01, 0.2, (n, 3)), "quat": rng.normal(size=(n, 4))}
+    g["quat"] /= np.linalg.norm(g["quat"], axis=1, keepdims=True)
+    path = write_gaussian_ply(tmp_path / "g.ply", g)
+    back = read_gaussian_ply(path)
+    assert np.allclose(back["xyz"], g["xyz"], atol=1e-5)
+    assert np.allclose(back["rgb01"], g["rgb01"], atol=2e-3)
+    assert np.allclose(back["opacity"], g["opacity"], atol=1e-4)
+    assert np.allclose(back["scale"], g["scale"], rtol=1e-4)
+    assert np.allclose(np.abs(np.sum(back["quat"] * g["quat"], axis=1)), 1.0, atol=1e-5)
+
+
+def test_bake_world_paints_seen_gaussians_and_keeps_the_rest(clean, tmp_path):
+    import copy
+
+    import numpy as np
+    from PIL import Image
+
+    from locaish.product import world as W
+    from locaish.video.splat import read_gaussian_ply, write_gaussian_ply
+
+    twin = copy.copy(clean[0].twin)
+    twin.provenance = dict(twin.provenance or {})
+    # A synthetic field: one gaussian per measured point, grey.
+    xyz = np.asarray(twin.points.measured().xyz, dtype=np.float64)
+    rng = np.random.default_rng(0)
+    pick = rng.choice(len(xyz), min(20000, len(xyz)), replace=False)
+    g = {"xyz": xyz[pick], "rgb01": np.full((len(pick), 3), 0.5), "opacity": np.full(len(pick), 0.9),
+         "scale": np.full((len(pick), 3), 0.02), "quat": np.tile([1.0, 0, 0, 0], (len(pick), 1))}
+    src = write_gaussian_ply(tmp_path / "src.ply", g)
+    twin.provenance["splat_ply"] = str(src)
+    twin.provenance.setdefault("steps", {}).setdefault("video", {})["scale"] = {"factor": 1.0}
+    twin.canonical_transform = np.eye(4)
+    views, _cov = W.select_views(twin, n=6, seed=0)
+    size = W.frame_size(views[0].width_px)
+    fins = []
+    for i, v in enumerate(views):
+        colour = (255, 0, 0) if i % 2 == 0 else (0, 0, 255)
+        p = tmp_path / f"finish_{v.name}.png"
+        Image.new("RGB", size, colour).save(p)
+        fins.append(p)
+    out = W.bake_world(twin, views, fins, tmp_path / "baked.ply")
+    b = read_gaussian_ply(out)
+    assert len(b["xyz"]) == len(pick) and np.allclose(b["xyz"], g["xyz"], atol=1e-5)
+    painted = ~np.all(np.isclose(b["rgb01"], 0.5, atol=2e-3), axis=1)
+    assert painted.mean() > 0.1, "a good part of the room is seen by six views"
+    # Seen gaussians are red, blue or a mix of the two; never green.
+    assert b["rgb01"][painted][:, 1].max() < 0.02
+    assert (~painted).sum() >= 0
+
+
+def test_build_world_bakes_when_the_twin_has_a_field(clean, tmp_path, monkeypatch):
+    import copy
+
+    import numpy as np
+
+    from locaish.product import world as W
+    from locaish.video.splat import write_gaussian_ply
+
+    twin = copy.copy(clean[0].twin)
+    twin.provenance = dict(twin.provenance or {})
+    xyz = np.asarray(twin.points.measured().xyz, dtype=np.float64)[:5000]
+    g = {"xyz": xyz, "rgb01": np.full((len(xyz), 3), 0.5), "opacity": np.full(len(xyz), 0.9),
+         "scale": np.full((len(xyz), 3), 0.02), "quat": np.tile([1.0, 0, 0, 0], (len(xyz), 1))}
+    twin.provenance["splat_ply"] = str(write_gaussian_ply(tmp_path / "src.ply", g))
+    twin.provenance.setdefault("steps", {}).setdefault("video", {})["scale"] = {"factor": 1.0}
+    twin.canonical_transform = np.eye(4)
+    called = {"train": 0}
+
+    def no_train(*a, **k):
+        called["train"] += 1
+        raise AssertionError("bake must not train")
+
+    monkeypatch.setattr(W, "train_world", no_train)
+    res = W.build_world(twin, tmp_path / "w", finish_fn=W.measured_finisher, n_views=5, steps=10,
+                        world_meta={"date": "2026-11-14", "hour": 16.67})
+    assert res.html.exists() and Path(res.ply).name == "world_baked.ply" and called["train"] == 0
+    from locaish.types import Twin
+
+    wt = Twin.load(res.twin_path)
+    assert wt.provenance["world"]["method"] == "bake"
+
+
+def test_light_and_agreement_separate_the_hour_from_the_detail():
+    """The finisher's answer is compared with what it was shown: a brighter,
+    warmer copy with the same edges agrees everywhere there is an edge and
+    carries its light as a smooth multiplier; a different picture agrees
+    nowhere."""
+    import numpy as np
+
+    from locaish.product.world import _light_and_agreement
+
+    rng = np.random.default_rng(1)
+    H, W = 120, 200
+    shown = np.full((H, W, 3), 0.4)
+    shown[:, 60:140] = 0.7                              # a bright panel: two vertical edges
+    shown[40:80, :] *= 0.6                              # a dark band: two horizontal edges
+    shown += rng.normal(0, 0.01, shown.shape)
+    warmer = np.clip(shown * np.array([1.5, 1.3, 1.0]), 0, 1)
+    light, agree = _light_and_agreement(shown, warmer)
+    assert light.shape == (H, W, 3) and agree.shape == (H, W)
+    # The light is the warm multiplier, smooth, and red leads blue.
+    assert abs(light[..., 0].mean() - 1.5) < 0.12 and light[..., 0].mean() > light[..., 2].mean()
+    # Along the edges the two pictures agree; on the flat panel there is nothing to agree on.
+    assert agree[:, 58:62].mean() > 0.7 and agree[:, 138:142].mean() > 0.7
+    assert agree[10:30, 90:110].mean() < 0.2
+    # A different picture (the edges elsewhere) agrees nowhere much.
+    other = np.full((H, W, 3), 0.5)
+    other[:, 20:40] = 0.9
+    other += rng.normal(0, 0.01, other.shape)
+    _light2, agree2 = _light_and_agreement(shown, other)
+    assert agree2.mean() < 0.15

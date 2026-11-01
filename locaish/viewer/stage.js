@@ -297,7 +297,7 @@ function showFrame(i) {
   const big = showFin
     ? '<div class="st_frame_finished"><img src="/rehearsal-image/' + stJob + '/' + rid + '/' + encodeURIComponent(finishedName(f)) + '" alt="finished frame"><span class="st_stamp">finished · Muse Image · a render</span></div><div class="dim">finished frame, the measured one underneath it · ' + facts + '</div>'
     : '<img src="/rehearsal-image/' + stJob + '/' + rid + '/' + encodeURIComponent(f.file) + '" alt="frame"><div class="dim">measured frame · ' + facts + '</div>';
-  $('st_frame').innerHTML = '<div class="st_framerow"><div>' + big + '</div>'
+  $('st_frame').innerHTML = '<div class="st_framerow' + (showFin ? ' has_fin' : '') + '"><div>' + big + '</div>'
     + '<div id="st_finished">' + (showFin ? '<img src="/rehearsal-image/' + stJob + '/' + rid + '/' + encodeURIComponent(f.file) + '" alt="measured frame"><div class="dim">the measurement it was finished from</div>' : '') + '</div></div>'
     + '<div class="st_acts"><button class="lensbtn" id="st_look">Look through it in the twin</button>' + finishBtn + '</div>';
   $('st_strip').querySelectorAll('img').forEach(im => im.classList.toggle('active', Number(im.dataset.i) === stFrameIdx));

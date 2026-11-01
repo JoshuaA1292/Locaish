@@ -769,6 +769,192 @@ def train_world(
     return Path(ply)
 
 
+def bake_world(
+    twin: Twin,
+    views: list[View],
+    finished: list[str | Path],
+    out_ply: str | Path,
+    *,
+    exclude: np.ndarray | None = None,
+    progress: ProgressFn | None = None,
+    keep_unseen: bool = True,
+    relight: bool = True,
+) -> Path:
+    """Paint the finished views onto the scan's own gaussians.
+
+    Training a fresh splat on sixty generated pictures threw away the one
+    thing the scan had, crisp geometry, and learned the views' disagreements
+    as fog. So the world keeps every gaussian the scan trained, exactly
+    where it is, and only its colour changes: for each finished view, every
+    gaussian that projects into the frame and sits on the measured surface
+    (its depth within a tolerance of the measured depth at that pixel) takes
+    the finished colour at that pixel; the colour written is the mean over
+    the views that saw it. Gaussians no view saw keep the scan's colour
+    (`keep_unseen`). Deterministic, no training, minutes not hours, and the
+    walls stay walls. What it cannot do is move geometry: a bed the finisher
+    made keeps its scanned shape under new colours.
+
+    With `relight` (the default) a view is not copied blindly: the finisher
+    was shown a render of the scan, and its answer is compared with that
+    render. Where the two agree on the structure (the same edges in the same
+    places) the finished pixel is the room's own detail, relit and dressed,
+    and is painted. Where they disagree the gaussian keeps the scan's colour
+    and takes only the light: the ratio of the finished view to the render
+    at low frequency, which is where the sun patches and the hour's colour
+    live. Views are weighted by that agreement and by nearness, so one
+    close, faithful view outvotes three far, invented ones, and the walls
+    stop averaging into fog.
+
+    The ply is written in the twin frame (identity transform, factor 1), so
+    `world_twin` can hand it straight to the viewer and the renderer.
+    """
+    from PIL import Image
+
+    from ..video.splat import read_gaussian_ply, write_gaussian_ply
+
+    src = (twin.provenance or {}).get("splat_ply")
+    if not src or not Path(src).exists():
+        raise RuntimeError("this twin has no gaussian field to bake onto")
+    steps = (twin.provenance or {}).get("steps", {})
+    factor = float(((steps.get("video") or {}).get("scale") or {}).get("factor") or 1.0)
+    g = read_gaussian_ply(src)
+    M = np.asarray(twin.canonical_transform, dtype=np.float64)
+    R, t = M[:3, :3], M[:3, 3]
+    xyz = (g["xyz"] * factor) @ R.T + t
+    scale = g["scale"] * factor
+    quat = _compose_quat(R, g["quat"])
+    n = len(xyz)
+    acc = np.zeros((n, 3), dtype=np.float64)
+    wsum = np.zeros(n, dtype=np.float64)
+    own = np.clip(np.asarray(g["rgb01"], dtype=np.float64), 0.0, 1.0)
+    tick = progress or (lambda *_: None)
+    for i, (view, fin) in enumerate(zip(views, finished)):
+        tick(f"baking {view.name}", i, len(views))
+        cam = view.camera()
+        try:
+            im = np.asarray(Image.open(fin).convert("RGB").resize((cam.width_px, cam.height_px), Image.BILINEAR),
+                            dtype=np.float64) / 255.0
+        except Exception:  # noqa: BLE001 - a missing finished view bakes nothing
+            continue
+        basis = np.stack([cam.right, cam.down, cam.fwd])
+        pc = (xyz - cam.pos) @ basis.T
+        z = pc[:, 2]
+        front = z > 0.05
+        u = np.full(n, -1.0)
+        v = np.full(n, -1.0)
+        u[front] = pc[front, 0] / z[front] * cam.fx + cam.width_px / 2.0
+        v[front] = pc[front, 1] / z[front] * cam.fy + cam.height_px / 2.0
+        inside = front & (u >= 0) & (u < cam.width_px - 1) & (v >= 0) & (v < cam.height_px - 1)
+        if not inside.any():
+            continue
+        depth = render.twin_depth_map(twin, cam, exclude=exclude)
+        ui = np.clip(np.round(u[inside]).astype(np.int64), 0, cam.width_px - 1)
+        vi = np.clip(np.round(v[inside]).astype(np.int64), 0, cam.height_px - 1)
+        d = depth[vi, ui]
+        zz = z[inside]
+        visible = ~np.isfinite(d) | (zz <= d + 0.06 + 0.04 * zz)
+        idx = np.flatnonzero(inside)[visible]
+        px, py, pz = ui[visible], vi[visible], zz[visible]
+        if relight:
+            # What the finisher was shown, and how its answer relates to it.
+            shown = np.asarray(render_view(twin, view, exclude=exclude), dtype=np.float64) / 255.0
+            light, agree = _light_and_agreement(shown, im)
+            # Where model and measurement agree on the structure, the model's
+            # pixel is the room's own detail, relit and dressed: paint it.
+            # Where they disagree (a bed the model moved, a wall it invented)
+            # the scan keeps its own colour and takes only the light.
+            a = agree[py, px][:, None]
+            relit = np.clip(own[idx] * light[py, px], 0.0, 1.0)
+            sample = a * im[py, px] + (1.0 - a) * relit
+            w = (0.25 + agree[py, px]) / (1.0 + pz)
+        else:
+            sample = im[py, px]
+            w = 1.0 / (1.0 + pz)
+        acc[idx] += sample * w[:, None]
+        wsum[idx] += w
+    seen = wsum > 0
+    rgb = g["rgb01"].copy()
+    rgb[seen] = acc[seen] / wsum[seen, None]
+    if not keep_unseen:
+        rgb[~seen] = 0.0
+    out = write_gaussian_ply(out_ply, {"xyz": xyz, "rgb01": rgb, "opacity": g["opacity"], "scale": scale, "quat": quat})
+    tick(f"baked {int(seen.sum()):,} of {n:,} gaussians", len(views), len(views))
+    return out
+
+
+def _light_and_agreement(shown: np.ndarray, fin: np.ndarray, *, radius: int | None = None):
+    """Two maps from a render and the finished view of the same camera.
+
+    `light` (H, W, 3): the finished view over the render, both low-passed,
+    clamped to [0, 4]: a per-pixel, per-channel multiplier that carries the
+    hour's light and colour and none of the detail.
+    `agree` (H, W) in [0, 1]: the local correlation of the two luminances in
+    a window, so an edge the model kept where it was scores one and a wall
+    it repainted into something else scores zero. Flat regions (no edge in
+    either) score zero: there is nothing there to agree on, so the light
+    carries them.
+    """
+    from scipy import ndimage
+
+    H, W = shown.shape[:2]
+    r = int(radius or max(8, W // 24))
+    lo_s = ndimage.uniform_filter(shown, size=(r, r, 1), mode="nearest")
+    lo_f = ndimage.uniform_filter(fin, size=(r, r, 1), mode="nearest")
+    light = np.clip(lo_f / np.maximum(lo_s, 0.04), 0.0, 4.0)
+    ls = shown @ np.array([0.299, 0.587, 0.114])
+    lf = fin @ np.array([0.299, 0.587, 0.114])
+    k = max(5, r // 2)
+    m_s = ndimage.uniform_filter(ls, k, mode="nearest")
+    m_f = ndimage.uniform_filter(lf, k, mode="nearest")
+    v_s = ndimage.uniform_filter(ls * ls, k, mode="nearest") - m_s * m_s
+    v_f = ndimage.uniform_filter(lf * lf, k, mode="nearest") - m_f * m_f
+    cov = ndimage.uniform_filter(ls * lf, k, mode="nearest") - m_s * m_f
+    eps = 1e-4
+    ncc = cov / np.sqrt(np.maximum(v_s, eps) * np.maximum(v_f, eps))
+    # Flat in either picture: no structure to agree on.
+    flat = (v_s < eps) | (v_f < eps)
+    agree = np.clip(ncc, 0.0, 1.0)
+    agree[flat] = 0.0
+    return light, agree
+
+
+def _compose_quat(R: np.ndarray, quat: np.ndarray) -> np.ndarray:
+    """wxyz quaternions rotated by the twin's canonical rotation R."""
+    from ..video.splat import _quat_to_rot
+
+    Rq = _quat_to_rot(np.asarray(quat, dtype=np.float64))
+    Rn = R[None] @ Rq
+    m00, m11, m22 = Rn[:, 0, 0], Rn[:, 1, 1], Rn[:, 2, 2]
+    tr = m00 + m11 + m22
+    q = np.zeros((len(Rn), 4))
+    a = tr > 0
+    s = np.sqrt(np.maximum(tr[a] + 1.0, 1e-12)) * 2
+    q[a, 0] = 0.25 * s
+    q[a, 1] = (Rn[a, 2, 1] - Rn[a, 1, 2]) / s
+    q[a, 2] = (Rn[a, 0, 2] - Rn[a, 2, 0]) / s
+    q[a, 3] = (Rn[a, 1, 0] - Rn[a, 0, 1]) / s
+    b = ~a
+    if b.any():
+        Rb = Rn[b]
+        i = np.argmax(np.stack([Rb[:, 0, 0], Rb[:, 1, 1], Rb[:, 2, 2]], axis=1), axis=1)
+        qb = np.zeros((len(Rb), 4))
+        for k in range(3):
+            sel = i == k
+            if not sel.any():
+                continue
+            Rk = Rb[sel]
+            j, l = (k + 1) % 3, (k + 2) % 3
+            sk = np.sqrt(np.maximum(1.0 + Rk[:, k, k] - Rk[:, j, j] - Rk[:, l, l], 1e-12)) * 2
+            qk = np.zeros((len(Rk), 4))
+            qk[:, 0] = (Rk[:, l, j] - Rk[:, j, l]) / sk
+            qk[:, 1 + k] = 0.25 * sk
+            qk[:, 1 + j] = (Rk[:, j, k] + Rk[:, k, j]) / sk
+            qk[:, 1 + l] = (Rk[:, l, k] + Rk[:, k, l]) / sk
+            qb[sel] = qk
+        q[b] = qb
+    return q / np.clip(np.linalg.norm(q, axis=1, keepdims=True), 1e-12, None)
+
+
 def world_twin(twin: Twin, ply_path: str | Path, *, world_meta: dict[str, Any]) -> Twin:
     """The twin that carries the world: the source twin's points, mesh and
     structure as they are, with the new splat as its view layer in the twin
@@ -916,6 +1102,7 @@ def build_world(
     exclude: np.ndarray | None = None,
     n_views: int = 60,
     steps: int = 6000,
+    method: str = "bake",
     light: dict | None = None,
     dressing: str = "",
     progress: ProgressFn | None = None,
@@ -997,14 +1184,25 @@ def build_world(
     model_dir = write_colmap_model(twin, views, size, workdir / "colmap" / "sparse" / "0")
     seconds["model"] = time.time() - t0
 
-    tick("training the world", 0, 0)
-    t0 = time.time()
-    ply = train_world(img_dir, model_dir, workdir / "splat", steps=steps, resolution=width_px, progress=progress)
-    seconds["train"] = time.time() - t0
+    has_field = bool((twin.provenance or {}).get("splat_ply")) and Path(str((twin.provenance or {}).get("splat_ply"))).exists()
+    if method == "bake" and has_field:
+        tick("painting the finished views onto the scan's gaussians", 0, 0)
+        t0 = time.time()
+        ply = bake_world(twin, views, finished, workdir / "splat" / "world_baked.ply", exclude=exclude, progress=progress)
+        seconds["bake"] = time.time() - t0
+    else:
+        if method == "bake":
+            notes.append("this twin has no gaussian field to bake onto, so the world was trained from the views instead")
+            method = "train"
+        tick("training the world", 0, 0)
+        t0 = time.time()
+        ply = train_world(img_dir, model_dir, workdir / "splat", steps=steps, resolution=width_px, progress=progress)
+        seconds["train"] = time.time() - t0
 
     tick("building the page", 0, 0)
     t0 = time.time()
     meta["steps"] = int(steps)
+    meta["method"] = method
     wt = world_twin(twin, ply, world_meta=meta)
     from ..viewer.build import render_html
 

@@ -1,7 +1,7 @@
 """The product's pages beyond the room: projects, pricing, capture, login.
 
-Each is a self-contained HTML string in the studio's visual language (dark,
-quiet, one accent), rendered server-side with the data inlined so the page
+Each is a self-contained HTML string in the studio's visual language (black,
+white, one hairline, no accent but the primary action), rendered server-side with the data inlined so the page
 works the moment it arrives. The project page is the one a head of
 production lives in during a bid; the capture page is the one a scout opens
 on a phone standing in the room; pricing is the one a founder sends.
@@ -13,65 +13,68 @@ import html
 import json
 from typing import Any
 
-MARK = ("<svg class='mark' viewBox='0 0 32 32' width='18' height='18' aria-hidden='true'>"
-        "<defs><linearGradient id='lgp' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='#6ea8fe'/>"
-        "<stop offset='1' stop-color='#a78bfa'/></linearGradient></defs>"
-        "<path d='M11 4H8a4 4 0 0 0-4 4v3M21 4h3a4 4 0 0 1 4 4v3M28 21v3a4 4 0 0 1-4 4h-3M11 28H8a4 4 0 0 1-4-4v-3' "
-        "fill='none' stroke='url(#lgp)' stroke-width='2.6' stroke-linecap='round'/>"
-        "<rect x='11' y='11' width='10' height='10' rx='2.6' transform='rotate(45 16 16)' fill='url(#lgp)'/></svg>")
+MARK = ("<svg class='mark' viewBox='0 0 16 16' width='14' height='14' aria-hidden='true'>"
+        "<rect x='1' y='1' width='14' height='14' rx='3.5' fill='none' stroke='currentColor' stroke-width='1.5'/>"
+        "<circle cx='8' cy='8' r='2.6' fill='currentColor'/></svg>")
 
+# The same system as the studio page: black, white, two greys, one hairline,
+# white for the one primary action, a warm tone only where a render is named.
 _SHELL_CSS = """
-:root { --bg:#0b0d10; --surface:#12151a; --surface2:#171b21; --line:#232830; --line2:#2c323b; --ink:#eef1f5;
-        --dim:#8a94a3; --mute:#5c6672; --accent:#5b9dff; --accent-ink:#081120; --ok:#4fcf87; --warn:#e2b96a; --bad:#e0707a;
-        --sun:#ffcf5a; --r:12px; --shadow:0 1px 0 rgba(255,255,255,.03) inset, 0 8px 30px rgba(0,0,0,.35); }
+:root { --bg:#000000; --surface:#0a0a0a; --surface2:#111111; --line:#1f1f1f; --line2:#2a2a2a; --ink:#ffffff;
+        --dim:#9a9a9a; --mute:#5a5a5a; --accent:#ffffff; --accent-ink:#000000; --ok:#ffffff; --warn:#9a9a9a; --bad:#ffffff;
+        --sun:#ffffff; --render:#d9a86c; --r:12px; --r2:8px; --r3:6px;
+        --sans:-apple-system, "Helvetica Neue", Inter, sans-serif; --mono:ui-monospace, "SF Mono", Menlo, monospace; }
 * { box-sizing:border-box; } html,body { height:100%; }
-body { margin:0; background:var(--bg); color:var(--ink); -webkit-font-smoothing:antialiased;
-       font:14.5px/1.55 "Inter", ui-sans-serif, -apple-system, "SF Pro Text", system-ui, sans-serif; }
+body { margin:0; background:var(--bg); color:var(--ink); -webkit-font-smoothing:antialiased; font:14px/1.5 var(--sans); }
 a { color:inherit; } .hidden { display:none !important; }
-main { max-width:1180px; margin:0 auto; padding:0 24px 96px; }
-#top { position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:18px; height:58px; margin:0 -24px 26px;
-       padding:0 24px; background:rgba(11,13,16,.85); backdrop-filter:blur(12px); border-bottom:1px solid var(--line); }
-#top .brand { font-weight:700; letter-spacing:-.02em; font-size:17px; text-decoration:none; display:inline-flex; align-items:center; gap:9px; }
-#top nav { display:flex; gap:18px; margin-left:8px; } #top nav a { color:var(--dim); text-decoration:none; font-size:13.5px; }
+main { max-width:1200px; margin:0 auto; padding:0 32px 120px; }
+#top { position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:20px; height:56px; margin:0 -32px 48px;
+       padding:0 32px; background:var(--bg); border-bottom:1px solid var(--line); }
+#top .brand { font-weight:600; font-size:15px; letter-spacing:-.01em; text-decoration:none; display:inline-flex; align-items:center; gap:8px; }
+#top nav { display:flex; gap:18px; margin-left:4px; } #top nav a { color:var(--dim); text-decoration:none; font-size:13px; }
 #top nav a:hover, #top nav a.on { color:var(--ink); }
-#top .right { margin-left:auto; display:flex; gap:8px; align-items:center; }
-h1 { font-size:30px; letter-spacing:-.03em; margin:0 0 6px; font-weight:700; }
-h2 { font-size:18px; font-weight:600; letter-spacing:-.01em; margin:0 0 10px; }
-p.lead { color:var(--dim); font-size:15.5px; margin:0 0 26px; max-width:640px; }
-.card { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:18px 20px; box-shadow:var(--shadow); }
-.btn { display:inline-block; background:var(--accent); color:var(--accent-ink); border:0; border-radius:10px; padding:9px 16px;
-       font:inherit; font-weight:600; cursor:pointer; text-decoration:none; font-size:14px; }
-.btn:hover { filter:brightness(1.08); } .btn:disabled { opacity:.5; cursor:default; }
-.btn.quiet { background:var(--surface2); color:var(--ink); border:1px solid var(--line); }
-.btn.quiet:hover { border-color:var(--line2); filter:none; }
-.btn.small { padding:5px 10px; font-size:12.5px; border-radius:8px; }
-input, textarea, select { width:100%; background:var(--bg); color:var(--ink); border:1px solid var(--line); border-radius:10px;
-       padding:9px 12px; font:inherit; outline:none; }
-input:focus, textarea:focus, select:focus { border-color:var(--accent); }
-label { display:block; color:var(--dim); font-size:12.5px; margin-bottom:4px; }
-.field { margin-bottom:12px; }
-.grid2 { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:14px; }
-.plans { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:14px; }
+#top .right { margin-left:auto; display:flex; gap:10px; align-items:center; }
+h1 { font-size:32px; letter-spacing:-.025em; margin:0 0 8px; font-weight:600; line-height:1.2; }
+h2 { font-size:13px; font-weight:500; letter-spacing:.08em; text-transform:uppercase; color:var(--dim); margin:0 0 16px; }
+p.lead { color:var(--dim); font-size:15px; margin:0 0 40px; max-width:640px; }
+.card { background:var(--surface); border:1px solid var(--line); border-radius:var(--r); padding:24px; min-width:0; overflow-wrap:anywhere; }
+.btn { display:inline-flex; align-items:center; justify-content:center; background:var(--ink); color:var(--bg); border:1px solid var(--ink); border-radius:var(--r2);
+       padding:8px 16px; font:inherit; font-weight:600; font-size:13px; cursor:pointer; text-decoration:none; white-space:nowrap; }
+.btn:hover { background:#e6e6e6; border-color:#e6e6e6; } .btn:disabled { opacity:.4; cursor:default; }
+.btn.quiet { background:transparent; color:var(--ink); border:1px solid var(--ink); font-weight:500; }
+.btn.quiet:hover { background:var(--surface2); }
+.btn.small { padding:5px 10px; font-size:12px; }
+input, textarea, select { width:100%; background:var(--bg); color:var(--ink); border:1px solid var(--line2); border-radius:var(--r2);
+       padding:8px 10px; font:inherit; font-size:13px; outline:none; }
+input:focus, textarea:focus, select:focus { border-color:var(--ink); }
+input::placeholder, textarea::placeholder { color:var(--mute); }
+input[type=checkbox] { accent-color:#fff; }
+label { display:block; color:var(--dim); font-size:12px; margin-bottom:4px; }
+.field { margin-bottom:14px; }
+.grid2 { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:16px; }
+.plans { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:16px; }
 @media (max-width:800px) { .grid2, .plans { grid-template-columns:minmax(0,1fr); } #top nav { display:none; } }
-.card { min-width:0; overflow-wrap:anywhere; }
-.pill { font-size:11.5px; color:var(--mute); border:1px solid var(--line); border-radius:999px; padding:3px 10px; white-space:nowrap; }
-.pill.on { color:var(--ok); border-color:rgba(79,207,135,.35); }
+.price { font:28px/1.2 var(--mono); font-weight:500; letter-spacing:-.02em; margin:0 0 12px; }
+.price .muted { font:13px/1.4 var(--sans); }
+.pill { font:11px/1.4 var(--mono); color:var(--dim); border:1px solid var(--line2); border-radius:var(--r3); padding:3px 8px; white-space:nowrap; }
+.pill.on { color:var(--ink); }
 table { border-collapse:collapse; width:100%; font-size:13.5px; }
-th { text-align:left; color:var(--mute); font-weight:500; font-size:11.5px; padding:8px 10px; border-bottom:1px solid var(--line); }
+th { text-align:left; color:var(--mute); font-weight:500; font-size:11px; letter-spacing:.06em; text-transform:uppercase; padding:8px 10px; border-bottom:1px solid var(--line); }
 td { padding:10px; border-bottom:1px solid var(--line); vertical-align:top; }
-td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
-.v { display:inline-block; width:22px; height:22px; line-height:22px; text-align:center; border-radius:6px; font-size:12px; font-weight:700; }
-.v.held { background:rgba(79,207,135,.18); color:var(--ok); } .v.relaxed { background:rgba(226,185,106,.18); color:var(--warn); }
-.v.missed { background:rgba(224,112,122,.18); color:var(--bad); }
-.note { color:var(--dim); font-size:13px; } .err { color:var(--bad); }
-.muted { color:var(--mute); font-size:12.5px; }
+tr:last-child td { border-bottom:0; }
+td.num, th.num { text-align:right; font-family:var(--mono); font-variant-numeric:tabular-nums; }
+.v { display:inline-block; width:22px; height:22px; line-height:20px; text-align:center; border-radius:var(--r3); font-size:12px; font-weight:600; border:1px solid var(--line2); }
+.v.held { background:var(--ink); color:var(--bg); border-color:var(--ink); } .v.relaxed { color:var(--ink); } .v.missed { color:var(--mute); }
+.note { color:var(--dim); font-size:13px; } .err { color:var(--ink); }
+.muted { color:var(--mute); font-size:12px; }
+ul.note, ol.note { line-height:1.7; }
 .rooms { display:grid; grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); gap:12px; }
-.room { display:block; text-decoration:none; background:var(--surface); border:1px solid var(--line); border-radius:12px; overflow:hidden; }
-.room img { width:100%; aspect-ratio:16/9; object-fit:cover; display:block; background:#0a0c0f; }
-.room .b { display:block; padding:9px 12px; } .room b { display:block; font-size:13.5px; } .room span { color:var(--dim); font-size:12px; }
-.room .b a { color:var(--accent); }
+.room { display:block; text-decoration:none; background:var(--bg); border:1px solid var(--line); border-radius:var(--r2); overflow:hidden; }
+.room img { width:100%; aspect-ratio:16/9; object-fit:cover; display:block; background:var(--bg); }
+.room .b { display:block; padding:10px 12px; } .room b { display:block; font-size:13.5px; font-weight:500; } .room span { color:var(--dim); font-size:12px; }
+.room .b a { color:var(--dim); } .room .b a:hover { color:var(--ink); }
 .toast { position:fixed; bottom:22px; left:50%; transform:translateX(-50%); background:var(--surface2); border:1px solid var(--line2);
-         border-radius:10px; padding:9px 14px; font-size:13px; box-shadow:var(--shadow); }
+         border-radius:var(--r2); padding:9px 14px; font-size:13px; }
 """
 
 
@@ -329,21 +332,21 @@ def pricing_page(*, stripe_scout: str = "", stripe_production: str = "", contact
 <div class="plans">
   <div class="card">
     <h2>Scout</h2>
-    <div style="font-size:30px;font-weight:700;letter-spacing:-.02em">$29<span class="muted" style="font-size:13px;font-weight:400"> / month</span></div>
+    <div class="price">$29<span class="muted"> / month</span></div>
     <p class="note">Free for your first six months, or $29 for a single package with no subscription. For freelance scouts and location managers: a better deliverable than the next scout's folder of JPEGs.</p>
     <ul class="note" style="padding-left:18px"><li>10 location packages a month</li><li>Sun on the shoot date, through every window</li><li>Share links the director opens on a phone</li><li>Your personal library</li></ul>
     {cta(stripe_scout, "Start free", "scout")}
   </div>
-  <div class="card" style="border-color:var(--accent)">
+  <div class="card" style="border-color:var(--ink)">
     <h2>Production</h2>
-    <div style="font-size:30px;font-weight:700;letter-spacing:-.02em">$249<span class="muted" style="font-size:13px;font-weight:400"> / job</span> <span class="muted" style="font-size:13px;font-weight:400">or $499 / month</span></div>
+    <div class="price">$249<span class="muted"> / job, or $499 / month</span></div>
     <p class="note">For production companies bidding jobs, billed to the job like the scout is: up to eight candidate rooms ranked against the shot list, packages and share links for 60 days. Unlimited jobs at $499 a month.</p>
     <ul class="note" style="padding-left:18px"><li>Projects: every candidate room ranked against the brief</li><li>Coverage planning with rendered frames</li><li>Company library and shot search</li><li>Team passcode, private deployment</li></ul>
     {cta(stripe_production, "Subscribe", "production")}
   </div>
   <div class="card">
     <h2>Capture service</h2>
-    <div style="font-size:30px;font-weight:700;letter-spacing:-.02em">$350<span class="muted" style="font-size:13px;font-weight:400"> / location</span></div>
+    <div class="price">$350<span class="muted"> / location</span></div>
     <p class="note">We send a trained scout with a LiDAR phone and deliver the package within 24 hours. The fastest way to find out whether this is worth it to you.</p>
     <ul class="note" style="padding-left:18px"><li>Los Angeles, New York, London</li><li>Package, twin, and coverage plan</li><li>$750 for a multi-room location</li></ul>
     <a class="btn quiet" href="#pilot" data-plan="capture">Book a capture</a>
@@ -409,10 +412,10 @@ def capture_page(*, showcase: bool = False) -> str:
     <p class="note">Tap to open the camera, film the walk, and the upload starts when you stop. Keep this page open; the report is ready in about fifteen minutes.</p>
     <label class="btn" style="display:block;text-align:center;padding:16px" for="cam">Open the camera</label>
     <input id="cam" type="file" accept="video/*" capture="environment" class="hidden">
-    <p class="note" style="margin-top:12px">Or <label for="pick" style="color:var(--accent);cursor:pointer;display:inline">choose a file</label> already on this phone (video, or a Polycam / Scaniverse export).</p>
+    <p class="note" style="margin-top:12px">Or <label for="pick" style="color:var(--ink);cursor:pointer;display:inline;text-decoration:underline">choose a file</label> already on this phone (video, or a Polycam / Scaniverse export).</p>
     <input id="pick" type="file" accept="video/*,.ply,.obj,.glb,.gltf,.stl,.mov,.mp4,.mkv,.twin" class="hidden">
     <label style="display:flex;gap:8px;align-items:center;margin-top:10px;cursor:pointer"><input type="checkbox" id="usegeo" checked style="width:auto"> use this phone's location so the sun schedule is real</label>
-    <div id="prog" class="hidden" style="margin-top:14px"><div id="stage" style="font-weight:600"></div><div style="height:3px;background:var(--line);border-radius:2px;margin-top:8px;overflow:hidden"><i id="bar" style="display:block;height:100%;width:0;background:var(--accent);transition:width .5s"></i></div><div id="done" class="note" style="margin-top:10px"></div></div>
+    <div id="prog" class="hidden" style="margin-top:14px"><div id="stage" style="font-weight:600"></div><div style="height:3px;background:var(--line);border-radius:2px;margin-top:8px;overflow:hidden"><i id="bar" style="display:block;height:100%;width:0;background:var(--ink);transition:width .5s"></i></div><div id="done" class="note" style="margin-top:10px"></div></div>
     '''}
   </div>
 </div>

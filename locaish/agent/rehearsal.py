@@ -7,9 +7,12 @@ in the real room, and only the first is the model's:
 marks the sweep can frame an actor on, each with its plain-language cues, the
 openings, what is in the room by name, the cast with their heights -- and
 answers with beats: who enters where, who walks to which mark, who says what,
-and for the beats that want a camera, what the shot *is* (a close-up of Maya,
-low, pushing in) rather than where the camera goes. It never writes a
-coordinate the room did not offer it.
+how they hold themselves while they do it (a pose, a piece of business with a
+real thing in the room, and what they look at), and for the beats that want a
+camera, what the shot *is* (a close-up of Maya, low, pushing in) rather than
+where the camera goes. It never writes a coordinate the room did not offer it.
+A seated actor's mark snaps to the nearest labelled chair, and they face the
+desk; a shot is composed on a third with look room, not aimed dead centre.
 
 **Placement.** Every shot request goes to the shot table through the same
 `find_setup` the coverage planner uses: a position, a height and a lens that
@@ -53,12 +56,16 @@ DEFAULT_DOLLY_M = 1.0
 MIN_CAMERA_SUBJECT_M = 1.2
 # How many scored rows placement looks through for one whose eyeline no other
 # actor stands in. The table's best row is still the best only if nobody is
-# standing in front of the lens.
+# standing in front of the lens. When all of them are blocked, or all sit on
+# the walk the shot is meant to hold, it looks once more through this many
+# before settling for the best blocked row.
 CANDIDATE_ROWS = 12
+WIDER_ROWS = 60
 
 _BREAKDOWN_SYSTEM = """You are a first assistant director and a DP breaking down a scene for a rehearsal inside a measured 3D twin of a real room.
 You answer with JSON only. You may place actors ONLY on the listed marks (by their names, M1, M2, ...), and you describe shots by what they are, never by coordinates: the measurement engine places the camera.
-Shot sizes: ecu, cu, mcu, ms, mls, ws (extreme close-up to wide). Heights: low, mid, eye, high. Movements: static, push-in, pull-out, dolly."""
+Shot sizes: ecu, cu, mcu, ms, mls, ws (extreme close-up to wide). Heights: low, mid, eye, high. Movements: static, push-in, pull-out, dolly.
+You also stage every beat: nobody stands at attention facing the lens. Each beat says the actor's pose (standing, sitting, leaning, walking), their business (a short phrase with a real thing from the room: "typing at the laptop", "leaning on the door frame", "hands in pockets", "arms folded", "looking out of the window", "turning to face him") and their eyeline (what they look at: another cast member's name, "window", "door", "down", or "camera" -- use "camera" almost never)."""
 
 _BREAKDOWN_PROMPT = """THE ROOM
 {facts}
@@ -75,6 +82,8 @@ Return this JSON object and nothing else:
   "beats": [
     {{"kind": "enter|move|line|hold|exit", "actor": "<cast name>", "to_mark": "<M# for enter/move, else null>",
       "text": "<the line for kind line, else null>", "seconds": <number for hold, else null>,
+      "pose": "standing|sitting|leaning|walking", "business": "<short phrase naming a thing in the room, or null>",
+      "eyeline": "<cast name|window|door|down|camera>",
       "shot": null | {{"size": "cu|mcu|ms|mls|ws|ecu", "subject": "<cast name>", "second_subject": "<cast name or null>",
                        "height": "low|mid|eye|high|null", "movement": "static|push-in|pull-out|dolly",
                        "no_window_behind": true|false, "description": "<what the shot is for>"}}
@@ -83,6 +92,7 @@ Return this JSON object and nothing else:
   "strikes": [{{"before_shot": <beat number>, "piece": "<a thing in the room to remove>"}}]
 }}
 Rules: every actor must enter (kind enter with a mark) before doing anything else; a move needs a different mark; keep lines verbatim from the scene; cover the scene with 3 to 8 shots, each attached to the beat where it starts; one shot per beat at most; prefer marks whose cues fit the scene's geography (a window, a door, the middle of the room).
+Staging rules: every beat carries pose, business and eyeline; business names things listed IN THE ROOM when it can (sit at a chair by a desk, lean on the door frame, look out of the window); a sitting actor is placed on the mark nearest the chair; eyelines go to the other actor during a conversation except where the scene says someone looks away; two people in a scene should not both face the camera.
 """
 
 _NOTES_PROMPT = """You are a DP writing one short paragraph (60 to 110 words) for the director about this rehearsal of {title} in a measured room.
@@ -135,23 +145,48 @@ def breakdown(
         raise RehearsalUnavailable("the sweep found no mark an actor could stand on")
     cast_lines = "\n".join(f"{n}: {h:.2f}" for n, h in cast.items()) or "(no cast given: use the names in the scene, 1.75 m)"
     contents_text = ""
-    if contents:
-        names = ", ".join(f"{c.get('label')} at x {float(c['xyz'][0]):+.1f}, y {float(c['xyz'][1]):+.1f}"
-                          for c in contents if c.get("label") and c.get("xyz"))
-        if names:
-            contents_text = f"IN THE ROOM\n{names}\n"
+    labelled = label_points(contents)
+    if labelled:
+        names = ", ".join(f"{name} at x {xy[0]:+.1f}, y {xy[1]:+.1f}" for name, xy in labelled)
+        contents_text = f"IN THE ROOM (labelled on the scan; name these in business and eyelines)\n{names}\n"
     prompt = _BREAKDOWN_PROMPT.format(facts=room_facts(twin, source), contents=contents_text,
                                       cast=cast_lines, scene=scene_text.strip())
-    data = client.chat_json(prompt, system=_BREAKDOWN_SYSTEM, model=model, max_tokens=4000)
+    data = client.chat_json(prompt, system=_BREAKDOWN_SYSTEM, model=model, max_tokens=5000)
     if not isinstance(data, dict):
         raise RehearsalUnavailable("the breakdown did not come back as an object")
-    return normalise_breakdown(data, marks, cast, scene_text)
+    return normalise_breakdown(data, marks, cast, scene_text, labels=[n for n, _ in labelled])
+
+
+def label_points(contents: list[dict] | None) -> list[tuple[str, tuple[float, float]]]:
+    """The labelled things in the room as (name, (x, y)), from either shape
+    the product passes: the raw label (`xyz`) or the package's description
+    (`x_m`, `y_m`). Things without a place are left out: a breakdown may
+    only name what the room can point to."""
+    out: list[tuple[str, tuple[float, float]]] = []
+    for c in contents or []:
+        if not isinstance(c, dict) or not c.get("label"):
+            continue
+        try:
+            if c.get("xyz") is not None:
+                xy = (float(c["xyz"][0]), float(c["xyz"][1]))
+            elif c.get("x_m") is not None and c.get("y_m") is not None:
+                xy = (float(c["x_m"]), float(c["y_m"]))
+            else:
+                continue
+        except (TypeError, ValueError, IndexError):
+            continue
+        out.append((str(c["label"]).strip(), xy))
+    return out
+
+
+MAX_BUSINESS_CHARS = 80
 
 
 def normalise_breakdown(data: dict, marks: dict[str, tuple[float, float]], cast: dict[str, float],
-                        scene_text: str = "") -> dict:
+                        scene_text: str = "", labels: list[str] | None = None) -> dict:
     names = {n.lower(): n for n in cast} if cast else {}
     notes: list[str] = []
+    label_words = {str(l).strip().lower() for l in (labels or []) if str(l).strip()}
 
     def actor_of(v: Any) -> str | None:
         s = str(v or "").strip()
@@ -174,6 +209,53 @@ def normalise_breakdown(data: dict, marks: dict[str, tuple[float, float]], cast:
         digits = "".join(ch for ch in s if ch.isdigit())
         if digits and f"M{int(digits)}" in marks:
             return f"M{int(digits)}"
+        return None
+
+    def pose_of(v: Any) -> str | None:
+        s = str(v or "").strip().lower()
+        s = {"sit": "sitting", "seated": "sitting", "sits": "sitting", "stand": "standing", "stands": "standing",
+             "lean": "leaning", "leans": "leaning", "walk": "walking", "walks": "walking"}.get(s, s)
+        return s if s in reh.POSES else None
+
+    def business_of(v: Any) -> str | None:
+        if v is None or isinstance(v, (dict, list)):
+            return None
+        s = " ".join(str(v).split()).strip().strip(".")
+        if not s or s.lower() in ("null", "none", "-"):
+            return None
+        return s[:MAX_BUSINESS_CHARS]
+
+    def eyeline_of(v: Any, actor: str) -> str | None:
+        """Another cast member (never oneself), an eyeline word, or a labelled
+        thing in the room; anything else is dropped and the engine's own
+        rules decide where the actor looks."""
+        s = str(v or "").strip()
+        if not s:
+            return None
+        low = s.lower()
+        if low in reh.EYELINE_WORDS:
+            return low
+        if low in ("the window", "out of the window", "out the window"):
+            return "window"
+        if low in ("the door", "the doorway", "doorway"):
+            return "door"
+        if low in ("floor", "the floor", "the ground", "his feet", "her feet", "their feet"):
+            return "down"
+        if low in ("lens", "the camera", "the lens", "audience"):
+            return "camera"
+        if names:
+            if low in names and names[low] != actor:
+                return names[low]
+            for cand, real in names.items():
+                if real != actor and (cand in low or low in cand):
+                    return real
+        elif s != actor and s[:1].isupper() and " " not in s:
+            return s
+        if low in label_words:
+            return low
+        for word in label_words:
+            if word in low or low in word:
+                return word
         return None
 
     beats: list[dict] = []
@@ -217,7 +299,9 @@ def normalise_breakdown(data: dict, marks: dict[str, tuple[float, float]], cast:
                    "no_window_behind": bool(shot.get("no_window_behind")),
                    "description": str(shot.get("description") or "")}
         beats.append({"kind": kind, "actor": actor, "to_mark": to_mark, "text": text,
-                      "seconds": seconds, "shot": req})
+                      "seconds": seconds, "shot": req,
+                      "pose": pose_of(raw.get("pose")), "business": business_of(raw.get("business")),
+                      "eyeline": eyeline_of(raw.get("eyeline"), actor)})
     strikes = []
     for s in data.get("strikes") or []:
         if isinstance(s, dict) and s.get("piece"):
@@ -226,6 +310,73 @@ def normalise_breakdown(data: dict, marks: dict[str, tuple[float, float]], cast:
             except (TypeError, ValueError):
                 continue
     return {"title": str(data.get("title") or "Scene"), "beats": beats, "strikes": strikes, "notes": notes}
+
+
+# ---------------------------------------------------------------------------
+# seats: a sitting actor sits on a real chair
+# ---------------------------------------------------------------------------
+
+SEAT_WORDS = ("chair", "stool", "sofa", "couch", "bench", "armchair", "seat", "bed")
+SURFACE_WORDS = ("desk", "table", "counter", "worktop")
+SEAT_SNAP_M = 1.2
+DESK_REACH_M = 1.5
+
+
+def _nearest_labelled(xy, labelled: list[tuple[str, tuple[float, float]]], words: tuple[str, ...], within: float):
+    best = None
+    for name, pt in labelled:
+        low = name.lower()
+        if not any(w in low for w in words):
+            continue
+        d = math.hypot(pt[0] - xy[0], pt[1] - xy[1])
+        if d <= within and (best is None or d < best[0]):
+            best = (d, name, pt)
+    return best
+
+
+def stage_seats(beats: list[dict], marks: dict[str, tuple[float, float]], contents: list[dict] | None,
+                targets: dict[str, tuple[float, float]] | None = None) -> list[str]:
+    """A beat that sits an actor on a mark sits them on the nearest labelled
+    seat within `SEAT_SNAP_M` of it instead, and faces them at the nearest
+    desk or table if the beat names no eyeline.
+
+    The seat becomes a new mark (`<mark>@<label>`) in `marks`, the desk a
+    target in `targets`, so the scene carries real positions and the engine
+    walks the actor to the chair. A seat further off than the snap radius is
+    not the one the breakdown meant, and the actor sits where the mark is.
+    Returns notes saying what moved.
+    """
+    labelled = label_points(contents)
+    notes: list[str] = []
+    if not labelled:
+        return notes
+    for b in beats:
+        if b.get("pose") != "sitting" or b.get("kind") not in ("enter", "move") or not b.get("to_mark"):
+            continue
+        mark = b["to_mark"]
+        if mark not in marks:
+            continue
+        xy = marks[mark]
+        seat = _nearest_labelled(xy, labelled, SEAT_WORDS, SEAT_SNAP_M)
+        if seat is None:
+            # A desk with no chair labelled: sit at the desk's near side.
+            seat = _nearest_labelled(xy, labelled, SURFACE_WORDS, SEAT_SNAP_M)
+        if seat is None:
+            notes.append(f"{b['actor']} sits at {mark}, but no chair, bed or desk is labelled within {SEAT_SNAP_M:.1f} m; they sit on the mark")
+            continue
+        d, label, pt = seat
+        seat_mark = f"{mark}@{label.replace(' ', '_')}"
+        marks[seat_mark] = (float(pt[0]), float(pt[1]))
+        b["to_mark"] = seat_mark
+        notes.append(f"{b['actor']} sits on the labelled {label} {d:.2f} m from {mark}")
+        if not b.get("eyeline") and targets is not None:
+            desk = _nearest_labelled(pt, labelled, SURFACE_WORDS, DESK_REACH_M)
+            if desk is not None and math.hypot(desk[2][0] - pt[0], desk[2][1] - pt[1]) > 0.15:
+                key = desk[1].lower()
+                targets[key] = (float(desk[2][0]), float(desk[2][1]))
+                b["eyeline"] = key
+                notes.append(f"{b['actor']} faces the {desk[1]}")
+    return notes
 
 
 # ---------------------------------------------------------------------------
@@ -289,11 +440,29 @@ def _clean_name(key: str) -> str:
     return key.split("@", 1)[0]
 
 
+def _dist_to_segment(p, a, b) -> float:
+    """Distance from point `p` to the segment `a`-`b`, in plan."""
+    p = np.asarray(p, dtype=np.float64)[:2]
+    a = np.asarray(a, dtype=np.float64)[:2]
+    b = np.asarray(b, dtype=np.float64)[:2]
+    ab = b - a
+    n2 = float(ab @ ab)
+    t = 0.0 if n2 < 1e-12 else float(np.clip((p - a) @ ab / n2, 0.0, 1.0))
+    return float(np.linalg.norm(p - (a + t * ab)))
+
+
 def _choose_row(rows: list[dict], shot: cov.Shot, subject_xy, others: dict[str, tuple[float, float]],
-                heights: dict[str, float] | None) -> tuple[dict, dict]:
+                heights: dict[str, float] | None, subject_start=None) -> tuple[dict, dict]:
     """The best-scored row whose eyeline no other actor cuts and whose lens no
     other actor crowds; among those, one with nobody stacked behind the subject.
-    Falls back to the best row, saying who is in the way."""
+    Falls back to the best row, saying who is in the way.
+
+    `subject_start` is where the subject stands when the beat begins, for a
+    shot that covers their walk: the row is scored for the mark they walk to,
+    and a lens within `MIN_CAMERA_SUBJECT_M` of the walk itself (the straight
+    line from where they set off to the mark, a fair stand-in for the route
+    the floor gives them) would open on the back of their head or have them
+    brush past it. Such rows are passed over like blocked ones."""
     subj_h = float((heights or {}).get(shot.subject, 1.75))
     subject_xyz = (float(subject_xy[0]), float(subject_xy[1]), reh.EYELINE_RATIO * subj_h)
     hts = None if heights is None else {k: float(heights.get(_clean_name(k), 1.75)) for k in others}
@@ -305,8 +474,11 @@ def _choose_row(rows: list[dict], shot: cov.Shot, subject_xy, others: dict[str, 
         behind = sorted({_clean_name(n) for n in _behind_on_line(cam, subject_xy, others)})
         # A lens inside the subject's own body (the sweep's straight-up and
         # straight-down rows) has no eyeline for anyone to cross; it is not a
-        # clear shot of them either, and never a replacement for one.
+        # clear shot of them either, and never a replacement for one. Nor is
+        # one standing on the first step of the walk the shot is meant to hold.
         inside = math.dist(cam[:2], subject_xy[:2]) < reh.OCCLUDER_RADIUS_M
+        if subject_start is not None and _dist_to_segment(cam[:2], subject_start, subject_xy) < MIN_CAMERA_SUBJECT_M:
+            inside = True
         judged.append((k, st, blocked, close, behind, inside))
     clean = [j for j in judged if not j[2] and not j[3] and not j[5]]
     if clean:
@@ -373,7 +545,19 @@ def place_shots(
                     if shot.second_subject:
                         exempt.add(shot.second_subject)
                     others = _occluder_positions(where, standing, marks, exempt)
-                    st, verdict = _choose_row(rows, shot, char_marks[shot.subject], others, cast)
+                    start_mark = where.get(shot.subject) if b["kind"] == "move" and b["actor"] == shot.subject else None
+                    subject_start = marks.get(start_mark) if start_mark in marks else None
+                    st, verdict = _choose_row(rows, shot, char_marks[shot.subject], others, cast, subject_start=subject_start)
+                    if verdict.get("occluded") and count > len(rows) and limit < WIDER_ROWS:
+                        # Every near-best row is blocked or on the walk; the
+                        # table has more. A clean row lower down beats the best
+                        # row with someone in front of it.
+                        wider, _c, _s, _r = cov.find_setup(source, shot, char_marks, location=twin.name,
+                                                           limit=WIDER_ROWS, context=ctx)
+                        if len(wider) > len(rows):
+                            st2, v2 = _choose_row(wider, shot, char_marks[shot.subject], others, cast, subject_start=subject_start)
+                            if not v2.get("occluded"):
+                                st, verdict = st2, {**v2, "widened_to": len(wider)}
                     ctx.learn(shot, st, char_marks)
                     spec = _spec_from_row(st, shot, char_marks[shot.subject], dolly_m)
                     placement = {"beat": i, "shot": shot_no, "placed": True, "setup": st,
@@ -381,20 +565,26 @@ def place_shots(
                                  "request": req, "best_setup_id": rows[0].get("setup_id"), **verdict}
                     if verdict.get("occluded"):
                         who = " and ".join(verdict["blocked_by"] or verdict["too_close"])
-                        placement["why"] = (f"{who} stands between every candidate camera and {shot.subject} "
-                                            f"at beat {i}; the best row is used and the rehearsal will show it")
+                        if who:
+                            placement["why"] = (f"{who} stands between every candidate camera and {shot.subject} "
+                                                f"at beat {i}; the best row is used and the rehearsal will show it")
+                        else:
+                            placement["why"] = (f"every candidate camera stands on {shot.subject} or on the first step of "
+                                                f"their walk at beat {i}; the best row is used and the rehearsal will show it")
                         if progress:
                             progress(f"shot {shot_no}: {placement['why']}")
                     elif verdict["skipped_rows"]:
                         placement["why"] = (f"the top {verdict['skipped_rows']} row(s) had another actor in the "
-                                            f"eyeline or on the lens; row {verdict['skipped_rows'] + 1} is clear")
+                                            f"eyeline or on the lens{', or stood on the walk' if subject_start is not None else ''}; "
+                                            f"row {verdict['skipped_rows'] + 1} is clear")
                     placements.append(placement)
                 else:
                     placements.append({"beat": i, "shot": shot_no, "placed": False, "request": req,
                                        "why": "no setup in this room holds this shot with a clear sightline",
                                        "relaxed": relaxed, "sql": sql})
         out.append(reh.Beat(number=i, kind=b["kind"], actor=b["actor"], text=b.get("text"),
-                            to_mark=b.get("to_mark"), seconds=b.get("seconds"), shot=spec))
+                            to_mark=b.get("to_mark"), seconds=b.get("seconds"), shot=spec,
+                            pose=b.get("pose"), business=b.get("business"), eyeline=b.get("eyeline")))
     return out, placements
 
 
@@ -419,9 +609,14 @@ def _spec_from_row(st: dict, shot: cov.Shot, subject_xy, dolly_m: float) -> reh.
             if float(np.linalg.norm(end - cam)) > 0.1:
                 dolly_to = (float(end[0]), float(end[1]))
                 gear = "doorway-dolly"
+    # Every placed shot is composed: the subject on a third with look room,
+    # headroom under the eyeline. An over-the-shoulder names its foreground
+    # actor so they keep the edge opposite the subject.
+    over = shot.second_subject if (shot.second_subject and getattr(shot, "ots", False)) else None
     return reh.ShotSpec(cam_xy=(float(cam[0]), float(cam[1])), height_m=float(st["cam_z"]),
                         focal_mm=float(st["focal_mm"]), subject=shot.subject,
-                        size=str(st.get("shot_size") or shot.size), dolly_to=dolly_to, gear_key=gear)
+                        size=str(st.get("shot_size") or shot.size), dolly_to=dolly_to, gear_key=gear,
+                        compose=True, ots_over=over)
 
 
 # ---------------------------------------------------------------------------
@@ -550,16 +745,24 @@ def run_rehearsal(
             bd = breakdown(scene_text, room, source, cast, client=client, model=model, contents=contents)
             breakdown_notes = bd["notes"]
             marks, _ = _marks_catalogue(room, source)
+            targets: dict[str, tuple[float, float]] = {}
+            seat_notes = stage_seats(bd["beats"], marks, contents, targets)
+            for n in seat_notes:
+                say(n)
+            breakdown_notes.extend(seat_notes)
             used = {b["to_mark"] for b in bd["beats"] if b.get("to_mark")}
             say(f"{len(bd['beats'])} beats on {len(used)} marks; placing the shots")
             beats, placements = place_shots(bd["beats"], marks, room, source, cast=cast or None, progress=say)
             if not cast:
                 cast = {b.actor: 1.75 for b in beats}
                 breakdown_notes.append("no heights were given; every actor is 1.75 m until cast")
+            # What the labels place, an eyeline may look at.
+            for name, xy in label_points(contents):
+                targets.setdefault(name.lower(), xy)
             scene = reh.Scene(title=bd["title"], beats=beats,
                               marks={m: marks[m] for m in used if m in marks},
                               cast={n: cast.get(n, 1.75) for n in dict.fromkeys(b.actor for b in beats)},
-                              strikes=bd["strikes"])
+                              strikes=bd["strikes"], targets=targets)
             provider = "meta"
     if shoot_date:
         scene.shoot_date = shoot_date if isinstance(shoot_date, _date) else _date.fromisoformat(str(shoot_date))
@@ -614,8 +817,9 @@ def run_rehearsal(
                     figs.append(castmod.figure(a, (x, y), facing, floor_z, workdir=workdir.parent))
                     continue
                 v = speed_of(name, frame)
-                pose = "walking" if v > 0.15 else "standing"
-                figs.append(figmod.figure_for_actor(a, (x, y), facing, floor_z, pose=pose,
+                staged = (frame.staging or {}).get(name) or {}
+                pose, arms = pose_for(staged, v)
+                figs.append(figmod.figure_for_actor(a, (x, y), facing, floor_z, pose=pose, arms=arms,
                                                     phase=figmod.walk_phase(frame.t, v) if pose == "walking" else 0.0))
             return figs
 
@@ -639,6 +843,22 @@ def run_rehearsal(
     )
     result.save(workdir)
     return result
+
+
+def pose_for(staged: dict, speed_mps: float) -> tuple[str, str]:
+    """The figure's pose and arms for a frame: a body that is moving walks
+    whatever the beat says; otherwise the staging's pose, with the arms the
+    business implies (`figures.arms_for_business`)."""
+    from ..product import figures as figmod
+
+    if speed_mps > 0.15:
+        return "walking", "down"
+    pose = staged.get("pose") or "standing"
+    if pose == "walking":
+        pose = "standing"
+    if pose not in figmod.POSES:
+        pose = "standing"
+    return pose, figmod.arms_for_business(staged.get("business"))
 
 
 def write_notes(rehearsal: reh.Rehearsal, sched: reh.Schedule | None, placements: list[dict], *,

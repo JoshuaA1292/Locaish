@@ -110,6 +110,22 @@ BACKLIGHT_ARC_DEG = 60.0
 
 BEAT_KINDS = ("line", "move", "hold", "enter", "exit")
 
+# Staging a beat may carry: what the actor's body is doing, and what they look
+# at. An eyeline is another actor's name, a named target of the scene (a
+# window, a door, the desk the labels placed), "down", or "camera".
+POSES = ("standing", "sitting", "leaning", "walking")
+EYELINE_WORDS = ("window", "door", "down", "camera")
+
+# Composition, when a shot asks for it (`ShotSpec.compose`): the subject sits
+# on a third of the frame with look room on the side they look toward, and
+# the aim drops below the eyeline so the head is not cramped against the top.
+THIRD_FRACTION = 0.18          # of the frame width at the subject's distance
+HEADROOM_M = 0.06
+# How wide a body is for the "never past the frame edge" test, and how much
+# of the frame width stays clear outside it.
+BODY_HALF_WIDTH_M = 0.30
+EDGE_MARGIN = 0.04
+
 
 # ---------------------------------------------------------------------------
 # the scene: input
@@ -127,6 +143,11 @@ class ShotSpec:
     size: str | None = None
     dolly_to: tuple[float, float] | None = None
     gear_key: str | None = None
+    # Compose the frame (thirds, look room, headroom) rather than aim dead at
+    # the eyeline; `ots_over` names the foreground actor of an over-the-shoulder,
+    # who keeps the edge opposite the subject.
+    compose: bool = False
+    ots_over: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -137,6 +158,8 @@ class ShotSpec:
             "size": self.size,
             "dolly_to": None if self.dolly_to is None else [float(self.dolly_to[0]), float(self.dolly_to[1])],
             "gear_key": self.gear_key,
+            "compose": bool(self.compose),
+            "ots_over": self.ots_over,
         }
 
     @classmethod
@@ -150,6 +173,8 @@ class ShotSpec:
             size=d.get("size") or None,
             dolly_to=None if dolly is None else (float(dolly[0]), float(dolly[1])),
             gear_key=d.get("gear_key") or None,
+            compose=bool(d.get("compose", False)),
+            ots_over=d.get("ots_over") or None,
         )
 
 
@@ -164,10 +189,23 @@ class Beat:
     to_mark: str | None = None
     seconds: float | None = None
     shot: ShotSpec | None = None
+    # Staging: how the actor holds themselves through the beat, what their
+    # hands are doing (a short phrase naming a thing in the room), and what
+    # they look at. All optional; a beat without them plays by the engine's
+    # own rules (face the speaker, face the way you walk).
+    pose: str | None = None
+    business: str | None = None
+    eyeline: str | None = None
 
     def __post_init__(self) -> None:
         if self.kind not in BEAT_KINDS:
             raise ValueError(f"beat {self.number}: unknown kind {self.kind!r}; have {BEAT_KINDS}")
+        if self.pose is not None and self.pose not in POSES:
+            raise ValueError(f"beat {self.number}: unknown pose {self.pose!r}; have {POSES}")
+
+    @property
+    def staged(self) -> bool:
+        return bool(self.pose or self.business or self.eyeline)
 
     def to_dict(self) -> dict:
         return {
@@ -178,6 +216,9 @@ class Beat:
             "to_mark": self.to_mark,
             "seconds": self.seconds,
             "shot": None if self.shot is None else self.shot.to_dict(),
+            "pose": self.pose,
+            "business": self.business,
+            "eyeline": self.eyeline,
         }
 
     @classmethod
@@ -191,6 +232,9 @@ class Beat:
             to_mark=d.get("to_mark"),
             seconds=None if d.get("seconds") is None else float(d["seconds"]),
             shot=None if shot is None else ShotSpec.from_dict(shot),
+            pose=d.get("pose") or None,
+            business=d.get("business") or None,
+            eyeline=d.get("eyeline") or None,
         )
 
 
@@ -207,6 +251,10 @@ class Scene:
     shoot_date: _date | None = None
     shoot_start: _time | None = None
     strikes: list[dict] = field(default_factory=list)
+    # Named points an eyeline may look at besides the cast: the desk a seated
+    # actor faces, a labelled window. Marks are where people stand; targets
+    # are what they look at.
+    targets: dict[str, tuple[float, float]] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -217,6 +265,7 @@ class Scene:
             "shoot_date": None if self.shoot_date is None else self.shoot_date.isoformat(),
             "shoot_start": None if self.shoot_start is None else self.shoot_start.strftime("%H:%M"),
             "strikes": [dict(s) for s in self.strikes],
+            "targets": {k: [float(v[0]), float(v[1])] for k, v in self.targets.items()},
         }
 
     @classmethod
@@ -231,6 +280,7 @@ class Scene:
             shoot_date=None if not sd else (sd if isinstance(sd, _date) else _date.fromisoformat(str(sd))),
             shoot_start=None if not st else (st if isinstance(st, _time) else _parse_hhmm(str(st))),
             strikes=[dict(s) for s in d.get("strikes") or []],
+            targets={str(k): (float(v[0]), float(v[1])) for k, v in (d.get("targets") or {}).items()},
         )
 
 
@@ -255,6 +305,9 @@ _EXIT_RE = re.compile(r"^([A-Za-z_][\w'-]*)\s+(?:exits|leaves)(?:\s+(?:at|to|thr
 _MOVE_RE = re.compile(r"^([A-Za-z_][\w'-]*)\s+(?:moves|walks|crosses|goes|runs)\s+(?:to|towards|toward)\s+([A-Za-z_][\w-]*)\s*$", re.IGNORECASE)
 _HOLD_RE = re.compile(r"^(?:([A-Za-z_][\w'-]*)\s+)?(?:hold|holds|beat|pause|pauses|waits?)\s*(\d+(?:\.\d+)?)?\s*s?(?:ec(?:onds?)?)?\s*$", re.IGNORECASE)
 _STRIKE_RE = re.compile(r"^(.+?)\s+before\s+(?:shot\s+|setup\s+)?(\d+)\s*$", re.IGNORECASE)
+# The staging bracket: `[pose, business, eyeline]`, any of them `-` for none.
+# It sits after the beat and before the camera bracket.
+_STAGE_RE = re.compile(r"\[\s*(standing|sitting|leaning|walking|-)\s*,([^\]]*?),([^\]]*?)\]\s*$", re.IGNORECASE)
 
 
 def parse_scene(text: str) -> Scene:
@@ -276,8 +329,13 @@ def parse_scene(text: str) -> Scene:
     ```
 
     The bracket after a beat is the shot: `cam (x,y)`, `h<metres>`, `<n>mm`,
-    `on <actor>`, optionally a size key (`cu`, `ms`...), `dolly to (x,y)` and
-    `gear <catalogue-key>`. A beat without a bracket keeps the previous camera.
+    `on <actor>`, optionally a size key (`cu`, `ms`...), `dolly to (x,y)`,
+    `gear <catalogue-key>`, `thirds` (compose the frame) and `over <actor>`
+    (an over-the-shoulder). A beat without a bracket keeps the previous
+    camera. Before the camera bracket a beat may carry its staging as
+    `[pose, business, eyeline]` -- `[sitting, typing at the laptop, desk]`,
+    `[standing, arms folded, Theo]`, `[-, -, window]` -- with `-` for a part
+    not given. `TARGETS: desk=(x,y)` names points an eyeline may look at.
     """
     title = "Scene"
     marks: dict[str, tuple[float, float]] = {}
@@ -286,6 +344,7 @@ def parse_scene(text: str) -> Scene:
     shoot_start = None
     strikes: list[dict] = []
     beats: list[Beat] = []
+    targets: dict[str, tuple[float, float]] = {}
 
     for raw in text.splitlines():
         line = raw.strip()
@@ -303,6 +362,10 @@ def parse_scene(text: str) -> Scene:
         if key == "CAST" and _:
             for name, h in _CAST_RE.findall(rest):
                 cast[name] = float(h)
+            continue
+        if key == "TARGETS" and _:
+            for name, x, y in _MARK_RE.findall(rest):
+                targets[name] = (float(x), float(y))
             continue
         if key == "DATE" and _:
             shoot_date = _date.fromisoformat(rest.strip())
@@ -325,10 +388,27 @@ def parse_scene(text: str) -> Scene:
         if sm:
             shot = _parse_shot(sm.group(1))
             body = body[: sm.start()].strip()
-        beats.append(_parse_beat(number, body, shot))
+        staging = None
+        gm = _STAGE_RE.search(body)
+        if gm:
+            staging = _parse_staging(gm)
+            body = body[: gm.start()].strip()
+        beat = _parse_beat(number, body, shot)
+        if staging:
+            beat.pose, beat.business, beat.eyeline = staging
+        beats.append(beat)
 
     return Scene(title=title, beats=beats, marks=marks, cast=cast,
-                 shoot_date=shoot_date, shoot_start=shoot_start, strikes=strikes)
+                 shoot_date=shoot_date, shoot_start=shoot_start, strikes=strikes, targets=targets)
+
+
+def _parse_staging(m: re.Match) -> tuple[str | None, str | None, str | None]:
+    def part(v: str) -> str | None:
+        v = v.strip()
+        return None if not v or v == "-" else v
+
+    pose = part(m.group(1))
+    return (pose.lower() if pose else None, part(m.group(2)), part(m.group(3)))
 
 
 def _parse_beat(number: int, body: str, shot: ShotSpec | None) -> Beat:
@@ -366,6 +446,8 @@ def _parse_shot(spec: str) -> ShotSpec:
     on = re.search(r"\bon\s+([A-Za-z_][\w'-]*)", tail)
     dolly = re.search(r"\bdolly\s+to\s+" + _XY, tail)
     gear = re.search(r"\bgear\s+([\w-]+)", tail)
+    over = re.search(r"\bover\s+([A-Za-z_][\w'-]*)", tail)
+    compose = re.search(r"\bthirds\b", tail) is not None
     size = None
     for tok in re.findall(r"\b([a-z]{2,3})\b", tail.lower()):
         if tok in optics.SHOT_BY_KEY:
@@ -381,6 +463,8 @@ def _parse_shot(spec: str) -> ShotSpec:
         size=size,
         dolly_to=(float(dolly.group(1)), float(dolly.group(2))) if dolly else None,
         gear_key=gear.group(1) if gear else None,
+        compose=compose,
+        ots_over=over.group(1) if over else None,
     )
 
 
@@ -391,6 +475,8 @@ def format_scene(scene: Scene) -> str:
         out.append("MARKS: " + " ".join(f"{k}=({v[0]:g},{v[1]:g})" for k, v in scene.marks.items()))
     if scene.cast:
         out.append("CAST: " + " ".join(f"{k}={v:g}" for k, v in scene.cast.items()))
+    if scene.targets:
+        out.append("TARGETS: " + " ".join(f"{k}=({v[0]:g},{v[1]:g})" for k, v in scene.targets.items()))
     if scene.shoot_date:
         out.append(f"DATE: {scene.shoot_date.isoformat()}")
     if scene.shoot_start:
@@ -408,6 +494,10 @@ def format_scene(scene: Scene) -> str:
             body = f"{b.actor} exits" + (f" to {b.to_mark}" if b.to_mark else "")
         else:
             body = (f"{b.actor} " if b.actor else "") + f"hold {b.seconds if b.seconds is not None else DEFAULT_HOLD_S:g}s"
+        if b.staged:
+            def tok(v):
+                return "-" if not v else str(v).replace(",", ";").replace("]", ")").strip()
+            body = f"{body}   [{tok(b.pose)}, {tok(b.business)}, {tok(b.eyeline)}]"
         if b.shot is not None:
             sp = b.shot
             spec = f"cam ({sp.cam_xy[0]:g},{sp.cam_xy[1]:g}) h{sp.height_m:g} {sp.focal_mm:g}mm on {sp.subject}"
@@ -417,6 +507,10 @@ def format_scene(scene: Scene) -> str:
                 spec += f" dolly to ({sp.dolly_to[0]:g},{sp.dolly_to[1]:g})"
             if sp.gear_key:
                 spec += f" gear {sp.gear_key}"
+            if sp.compose:
+                spec += " thirds"
+            if sp.ots_over:
+                spec += f" over {sp.ots_over}"
             body = f"{body}   [{spec}]"
         out.append(f"{b.number}. {body}")
     return "\n".join(out)
@@ -659,6 +753,13 @@ class Frame:
     sun: dict | None
     framing: dict | None = None
     beat: int | None = None
+    # Each present actor's staging through this instant: {pose, business,
+    # eyeline}; the speaker and their line when the beat is a line; and how
+    # the shot is composed when the camera was asked to compose it.
+    staging: dict[str, dict] = field(default_factory=dict)
+    speaker: str | None = None
+    line: str | None = None
+    composition: dict | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -674,6 +775,10 @@ class Frame:
             },
             "sun": self.sun,
             "framing": self.framing,
+            "staging": {k: dict(v) for k, v in self.staging.items()},
+            "speaker": self.speaker,
+            "line": self.line,
+            "composition": self.composition,
         }
 
 
@@ -838,9 +943,12 @@ def rehearse(
     beat_timings: list[BeatTiming] = []
     routes: dict[int, Route] = {}
     starts: list[dict[str, _ActorState]] = []   # actor states at each beat's start
+    staging: dict[str, dict] = {}                # each actor's staging as it persists
+    during: list[dict[str, dict]] = []           # per beat: everyone's staging through it
     t = 0.0
     for b in scene.beats:
         starts.append({k: _ActorState(v.xy.copy(), v.facing, v.present) for k, v in states.items()})
+        during.append(_staging_through(b, staging))
         dur = 0.0
         rt = None
         blocked = False
@@ -935,6 +1043,7 @@ def rehearse(
     n_frames = int(round(duration / DT_S)) + 1
     frames: list[Frame] = []
     sensor = optics.SENSORS[optics.DEFAULT_SENSOR]
+    looks = _Eyelines(twin, scene)
     beat_index = 0
     for k in range(n_frames):
         tk = min(k * DT_S, duration)
@@ -945,18 +1054,21 @@ def rehearse(
             beat_index += 1
         bt = beat_timings[beat_index] if beat_timings else None
         b = scene.beats[beat_index] if scene.beats else None
-        actors = _actors_at(tk, b, bt, starts[beat_index] if starts else {}, routes)
+        st = beat_shot[beat_index] if beat_shot else None
+        sp = camera_specs[st.number] if st is not None else None
+        cam_xy = _camera_xy_at(sp, st, tk) if st is not None else None
+        stage_now = during[beat_index] if during else {}
+        actors = _actors_at(tk, b, bt, starts[beat_index] if starts else {}, routes,
+                            staging=stage_now, look_at=lambda name, eyeline, st_: looks.resolve(name, eyeline, st_, cam_xy))
         camera = None
         framing = None
-        st = beat_shot[beat_index] if beat_shot else None
+        composition = None
         if st is not None:
-            sp = camera_specs[st.number]
-            cam_xy = _camera_xy_at(sp, st, tk)
             cam_pos = (float(cam_xy[0]), float(cam_xy[1]), floor_z + float(sp.height_m))
             subj = actors.get(sp.subject)
             if subj is not None:
-                aim = (subj[0], subj[1], floor_z + EYELINE_RATIO * stature(sp.subject))
-                dist = float(math.dist(cam_pos, aim))
+                eye = (subj[0], subj[1], floor_z + EYELINE_RATIO * stature(sp.subject))
+                dist = float(math.dist(cam_pos, eye))
                 fh = optics.framed_height_m(sensor, sp.focal_mm, max(dist, 1e-3))
                 size = optics.classify_framing(fh)
                 framing = {
@@ -967,14 +1079,22 @@ def rehearse(
                     "shot_size": size.key,
                     "size_name": size.name,
                 }
+                aim = eye
+                if sp.compose:
+                    aim, composition = compose_aim(cam_pos, eye, subj[2], sp, actors, sensor)
             else:
                 aim = _aim_from_setup(st.setup, floor_z, stature(sp.subject))
                 framing = {"subject": sp.subject, "absent": True}
             camera = (cam_pos, tuple(float(a) for a in aim), float(sp.focal_mm), st.number)
         clock = None if clock0 is None else clock0 + timedelta(seconds=tk)
         sun_tag = None if sun is None or clock is None else sun.at(clock)
+        present_staging = {n: dict(stage_now[n]) for n in actors if n in stage_now}
         frames.append(Frame(t=tk, clock=clock, actors=actors, camera=camera, sun=sun_tag,
-                            framing=framing, beat=None if bt is None else bt.number))
+                            framing=framing, beat=None if bt is None else bt.number,
+                            staging=present_staging,
+                            speaker=b.actor if (b is not None and b.kind == "line") else None,
+                            line=b.text if (b is not None and b.kind == "line") else None,
+                            composition=composition))
 
     # -- sizes seen per shot, and the dolly checks -----------------------------
     for st in shots:
@@ -1006,17 +1126,145 @@ def _facing_into_room(maps: space.FloorMaps, xy: np.ndarray) -> float:
     return math.degrees(math.atan2(d[1], d[0])) if np.linalg.norm(d) > 1e-6 else 0.0
 
 
+def _staging_through(b: Beat, staging: dict[str, dict]) -> dict[str, dict]:
+    """Everyone's staging during beat `b`, and the lasting change it makes.
+
+    A beat's pose, business and eyeline belong to its actor. An entrance or
+    a line sets what is given and keeps the rest; a move walks (the old
+    staging is left behind) and the beat's own staging applies on arrival;
+    an exit clears it. What is not given persists: Maya sat typing at beat 3
+    is still sat typing while Theo speaks at beat 4. An actor no beat ever
+    staged has no entry at all, and plays by the engine's own rules.
+    """
+    during = {k: dict(v) for k, v in staging.items()}
+    own = {"pose": b.pose, "business": b.business, "eyeline": b.eyeline}
+    if b.kind == "exit":
+        staging.pop(b.actor, None)
+        during.pop(b.actor, None)
+    elif b.kind == "move":
+        if b.actor in staging:
+            during[b.actor] = {"pose": "walking", "business": None, "eyeline": None}
+        staging.pop(b.actor, None)
+        if b.staged:
+            staging[b.actor] = {"pose": b.pose or "standing", "business": b.business, "eyeline": b.eyeline}
+    elif b.kind == "enter":
+        staging.pop(b.actor, None)
+        if b.staged:
+            staging[b.actor] = {"pose": b.pose or "standing", "business": b.business, "eyeline": b.eyeline}
+            during[b.actor] = dict(staging[b.actor])
+    elif b.staged:
+        cur = staging.setdefault(b.actor, {"pose": "standing", "business": None, "eyeline": None})
+        for k, v in own.items():
+            if v:
+                cur[k] = v
+        during[b.actor] = dict(cur)
+    return during
+
+
+class _Eyelines:
+    """Where an eyeline word points, in the room: another actor, the camera,
+    the nearest window or door the twin found, or a target the scene named.
+    "down" and an unknown word point nowhere and leave the facing to the
+    engine's rules."""
+
+    def __init__(self, twin: Twin, scene: Scene) -> None:
+        openings = getattr(twin.structure, "openings", None) or []
+        self.windows = [np.asarray(o.center, dtype=np.float64)[:2] for o in openings if getattr(o, "kind", "window") != "door"]
+        self.doors = [np.asarray(o.center, dtype=np.float64)[:2] for o in openings if getattr(o, "kind", "window") == "door"]
+        self.targets = {k.lower(): np.asarray(v, dtype=np.float64) for k, v in scene.targets.items()}
+        self.cast = {n.lower(): n for n in scene.cast}
+
+    def resolve(self, name: str, eyeline: str | None, st: dict, cam_xy) -> np.ndarray | None:
+        if not eyeline:
+            return None
+        word = str(eyeline).strip()
+        low = word.lower()
+        me = st.get(name)
+        here = me.xy if me is not None else None
+        real = self.cast.get(low, word)
+        if real != name and real in st and st[real].present:
+            return st[real].xy
+        if low == "camera":
+            return None if cam_xy is None else np.asarray(cam_xy, dtype=np.float64)[:2]
+        if low in ("window", "door"):
+            pool = self.windows if low == "window" else self.doors
+            if not pool:
+                return None
+            if here is None:
+                return pool[0]
+            return min(pool, key=lambda c: float(np.linalg.norm(c - here)))
+        if low in self.targets:
+            return self.targets[low]
+        for key, xy in self.targets.items():
+            if key in low or low in key:
+                return xy
+        return None
+
+
+def compose_aim(cam_pos, eye, facing_deg: float, sp: ShotSpec, actors: dict, sensor) -> tuple[tuple[float, float, float], dict]:
+    """The aim point for a composed shot, and what the composition is.
+
+    The subject sits on a third of the frame with look room on the side they
+    look toward: the aim point moves along the camera's right vector by
+    `THIRD_FRACTION` of the frame width at the subject's distance, toward
+    the side the subject looks (so the subject lands on the other third).
+    An over-the-shoulder takes the foreground actor's side instead, so the
+    subject keeps the edge opposite them. The offset shrinks so a body
+    `BODY_HALF_WIDTH_M` wide never goes past the frame edge, which on a
+    close-up means the centre. Headroom: the aim drops `HEADROOM_M` under
+    the eyeline so the head is not cramped against the top of the frame.
+    """
+    cam = np.asarray(cam_pos, dtype=np.float64)
+    eye = np.asarray(eye, dtype=np.float64)
+    fwd = eye - cam
+    right = np.array([fwd[1], -fwd[0], 0.0])
+    rn = float(np.linalg.norm(right))
+    dist = float(np.linalg.norm(fwd))
+    third = "centre"
+    offset = 0.0
+    side = 0.0
+    why = "subject looks into the lens"
+    if rn > 1e-9 and dist > 1e-6:
+        right /= rn
+        fg = actors.get(sp.ots_over) if sp.ots_over else None
+        if fg is not None:
+            lat = float((np.array([fg[0], fg[1], cam[2]]) - cam) @ right)
+            side = 1.0 if lat >= 0 else -1.0
+            why = f"over {sp.ots_over}'s shoulder, who keeps the {'right' if side > 0 else 'left'} edge"
+        else:
+            f = np.array([math.cos(math.radians(facing_deg)), math.sin(math.radians(facing_deg)), 0.0])
+            lat = float(f @ right)
+            if abs(lat) >= 0.2:
+                side = 1.0 if lat > 0 else -1.0
+                why = f"looking frame {'right' if side > 0 else 'left'}"
+        width_at = dist * sensor.width_mm / float(sp.focal_mm)
+        frac = min(THIRD_FRACTION, 0.5 - EDGE_MARGIN - BODY_HALF_WIDTH_M / max(width_at, 1e-6))
+        if side != 0.0 and frac >= 0.05:
+            offset = side * frac * width_at
+            third = "left" if side > 0 else "right"
+        elif side != 0.0:
+            why = "too close for a third: the body would cross the frame edge"
+    aim = eye + offset * right + np.array([0.0, 0.0, -HEADROOM_M])
+    return (float(aim[0]), float(aim[1]), float(aim[2])), {
+        "subject": sp.subject, "third": third, "look_room": bool(offset != 0.0),
+        "offset_m": round(float(offset), 3), "headroom_m": HEADROOM_M, "why": why,
+    }
+
+
 def _actors_at(tk, b: Beat | None, bt: BeatTiming | None, start_states: dict[str, _ActorState],
-               routes: dict[int, Route]) -> dict[str, tuple[float, float, float]]:
+               routes: dict[int, Route], *, staging: dict[str, dict] | None = None,
+               look_at=None) -> dict[str, tuple[float, float, float]]:
     """Every present actor's (x, y, facing) at time `tk` within beat `b`.
 
     `start_states` is where everyone stood when the beat began (an entering
     actor is already on the mark). The walking actor is carried along the
-    beat's route at walking pace; everyone else stands and turns: toward the
-    speaker, toward the nearest other actor when speaking, toward whoever is
-    walking, or else as they were.
+    beat's route at walking pace; everyone else stands and turns: toward
+    their eyeline when the staging gives one (`look_at(name, eyeline, states)`
+    says where that is), else toward the speaker, toward the nearest other
+    actor when speaking, toward whoever is walking, or else as they were.
     """
     st = {k: _ActorState(v.xy.copy(), v.facing, v.present) for k, v in start_states.items()}
+    staging = staging or {}
     if b is not None and bt is not None:
         walking = b.kind in ("move", "exit") and bt.number in routes and b.actor in st
         if walking:
@@ -1031,7 +1279,12 @@ def _actors_at(tk, b: Beat | None, bt: BeatTiming | None, start_states: dict[str
             if not a.present or (walking and name == b.actor):
                 continue
             target = None
-            if speaker is not None and name != speaker and speaker in st and st[speaker].present:
+            eyeline = (staging.get(name) or {}).get("eyeline")
+            if eyeline and look_at is not None:
+                target = look_at(name, eyeline, st)
+            if target is not None:
+                pass
+            elif speaker is not None and name != speaker and speaker in st and st[speaker].present:
                 target = st[speaker].xy
             elif speaker == name and others:
                 target = min((st[o].xy for o in others), key=lambda p: float(np.linalg.norm(p - a.xy)))
@@ -1188,7 +1441,8 @@ def _actor_occlusion_problems(st: ShotTiming, sp: ShotSpec, scene: Scene, subj_f
         if not others:
             continue
         cam = fr.camera[0]
-        for name in actor_blocks(cam, fr.camera[1], others, heights=heights, floor_z=floor_z):
+        for name in actor_blocks(cam, _subject_eye(fr, sp, floor_z, heights.get(sp.subject, render.SUBJECT_HEIGHT_M)),
+                                 others, heights=heights, floor_z=floor_z):
             t0, _ = crossing.get(name, (fr.t, fr.t))
             crossing[name] = (t0, fr.t)
         for name in actor_too_close(cam, others):
@@ -1204,6 +1458,15 @@ def _actor_occlusion_problems(st: ShotTiming, sp: ShotSpec, scene: Scene, subj_f
     for name, (d, t) in sorted(close.items(), key=lambda kv: kv[1][1]):
         out.append(f"at {t:.1f} s {name} is {d:.1f} m from the lens and fills the frame")
     return out
+
+
+def _subject_eye(fr: Frame, sp: ShotSpec, floor_z: float, stature_m: float) -> tuple[float, float, float]:
+    """The subject's eyeline in this frame: where the shot is *of*, which a
+    composed aim point stands beside."""
+    a = fr.actors.get(sp.subject)
+    if a is None:
+        return tuple(fr.camera[1])
+    return (float(a[0]), float(a[1]), floor_z + EYELINE_RATIO * float(stature_m))
 
 
 def _check_shot(st: ShotTiming, sp: ShotSpec, scene: Scene, maps, occupancy, frames, floor_z, stature_m) -> None:
@@ -1224,9 +1487,10 @@ def _check_shot(st: ShotTiming, sp: ShotSpec, scene: Scene, maps, occupancy, fra
     if not subj_frames:
         st.problems.append(f"{sp.subject} is not in the room during this shot")
         return
-    # Sightline at the first and last instants of the shot, as the sweep would test.
+    # Sightline at the first and last instants of the shot, as the sweep would
+    # test: to the subject's eyeline, whatever the composed aim point is.
     for fr in (subj_frames[0], subj_frames[-1]):
-        if not space.visible(grid, origin, cell, fr.camera[0], fr.camera[1]):
+        if not space.visible(grid, origin, cell, fr.camera[0], _subject_eye(fr, sp, floor_z, stature_m)):
             st.problems.append(f"at {fr.t:.1f} s something is between the camera and {sp.subject}")
             break
     # The other actors, every frame: the room is not the only thing that can
@@ -1580,6 +1844,13 @@ def animatic(
         height = float(rehearsal.scene.cast.get(subject, render.SUBJECT_HEIGHT_M)) if subject else render.SUBJECT_HEIGHT_M
         subj_xy = (aim[0], aim[1])
         figs = figures_for(fr) if figures_for is not None else None
+        # The renderer aims at an eyeline it derives from a stature. A composed
+        # aim sits under the eyeline (headroom), so with real figures in the
+        # frame the stature handed over is the one that puts the renderer's
+        # eyeline at the aim; the stick stand-in, when it is drawn, keeps the
+        # true height and the aim is 6 cm high.
+        if figs is not None and fr.composition is not None:
+            height = max(0.3, (float(aim[2]) - floor_z) / EYELINE_RATIO)
         others = [(a[0], a[1]) for name, a in fr.actors.items() if name != subject]
         im = render.render_shot(
             twin, cam_pos, subj_xy, focal, width_px=width_px,

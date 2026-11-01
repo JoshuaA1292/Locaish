@@ -124,6 +124,41 @@ def read_gaussian_ply(path: str | Path) -> dict[str, np.ndarray]:
     }
 
 
+def write_gaussian_ply(path: str | Path, g: dict[str, np.ndarray]) -> Path:
+    """The inverse of `read_gaussian_ply`: a standard 3DGS PLY, binary little
+    endian, from decoded arrays (`xyz`, `rgb01`, `opacity` 0-1, `scale` in
+    scene units, `quat` wxyz). Stored activations are re-encoded: colour as
+    the degree-0 SH coefficient, opacity as a logit, scale as a log, so any
+    3DGS reader, our own included, decodes it back to the same numbers."""
+    path = Path(path)
+    xyz = np.asarray(g["xyz"], dtype=np.float32).reshape(-1, 3)
+    n = len(xyz)
+    rgb = np.clip(np.asarray(g["rgb01"], dtype=np.float64).reshape(n, 3), 0.0, 1.0)
+    f_dc = ((rgb - 0.5) / SH_C0).astype(np.float32)
+    opa = np.clip(np.asarray(g["opacity"], dtype=np.float64).reshape(n), 1e-4, 1 - 1e-4)
+    logit = np.log(opa / (1.0 - opa)).astype(np.float32)
+    scale = np.log(np.clip(np.asarray(g["scale"], dtype=np.float64).reshape(n, 3), 1e-9, None)).astype(np.float32)
+    q = np.asarray(g["quat"], dtype=np.float32).reshape(n, 4)
+    names = (["x", "y", "z", "nx", "ny", "nz"] + [f"f_dc_{i}" for i in range(3)] + ["opacity"]
+             + [f"scale_{i}" for i in range(3)] + [f"rot_{i}" for i in range(4)])
+    dtype = np.dtype([(nm, "<f4") for nm in names])
+    v = np.zeros(n, dtype=dtype)
+    v["x"], v["y"], v["z"] = xyz[:, 0], xyz[:, 1], xyz[:, 2]
+    for i in range(3):
+        v[f"f_dc_{i}"] = f_dc[:, i]
+        v[f"scale_{i}"] = scale[:, i]
+    v["opacity"] = logit
+    for i in range(4):
+        v[f"rot_{i}"] = q[:, i]
+    header = ("ply\nformat binary_little_endian 1.0\n" + f"element vertex {n}\n"
+              + "".join(f"property float {nm}\n" for nm in names) + "end_header\n")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "wb") as f:
+        f.write(header.encode("ascii"))
+        f.write(v.tobytes())
+    return path
+
+
 def _quat_to_rot(q: np.ndarray) -> np.ndarray:
     """(N, 4) normalised wxyz -> (N, 3, 3); columns are the Gaussian's axes."""
     w, x, y, z = q.T

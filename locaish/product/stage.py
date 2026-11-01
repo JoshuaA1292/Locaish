@@ -1632,6 +1632,17 @@ class Stage:
                     progress=lambda e: self._world_progress(run, e, "finishing", base),
                 )
 
+            # The world is the room. People are painted into the frames of a
+            # scene, where the camera is fixed; in sixty views of one room they
+            # disagree from view to view and the bake averages them into
+            # ghosts. The viewer draws the cast as bodies where they stand.
+            people = bool(body.get("people"))
+            if not people:
+                cast = []
+                heads = {}
+                figures = [f for f in figures if (getattr(f, "label", "") or "") not in actors]
+            method = str(body.get("method") or "bake")
+
             def figures_for(*_args, **_kwargs):
                 return list(figures)
 
@@ -1641,7 +1652,7 @@ class Stage:
             run.emit("stage", f"rendering {n_views} views of the measured room")
             result = worldmod.build_world(
                 twin, run.workdir, finish_fn=finish_fn, figures_for=figures_for, exclude=exclude,
-                n_views=n_views, steps=steps, light=light, dressing=dressing, progress=building,
+                n_views=n_views, steps=steps, method=method, light=light, dressing=dressing, progress=building,
                 actors=actors,
                 world_meta={"date": run.date, "hour": run.hour, "dressing": dressing,
                             "built_at": time.strftime("%Y-%m-%dT%H:%M:%S")},
