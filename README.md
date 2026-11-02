@@ -61,6 +61,13 @@ room*:
   reviews each finished frame beside its render (the head count, a seated
   person on a visible seat, the framing, the furniture where it was) and a
   frame it rejects is finished again with the correction in the prompt.
+  The painter is told what this camera sees, from the twin itself (the
+  labels and the window openings projected through the frame's camera,
+  left to right, with distances, and what is not in frame), what the
+  scan's photographs were shot under (a room scanned at night and
+  finished for the afternoon gets daylit windows, not black glass), and
+  who is out of frame; the reviewer sees the photographs too and keeps the
+  best attempt.
 - **Walk into the location as it will be on the day.** Pick a date and an
   hour and say how the room will be dressed. Sixty views of the measured
   room, chosen to cover every wall, are finished by Muse Image with the
