@@ -39,8 +39,14 @@ def main() -> None:
     gy0 = 170
     V = [cv2.cvtColor(cv2.resize(cv2.imread(p), (gw, gh), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2RGB) for p in views[:n]]
     F = [cv2.cvtColor(cv2.resize(cv2.imread(p), (gw, gh), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2RGB) for p in fins[:n]]
-    bright = [float(cv2.imread(p).mean()) for p in fins[:n]]
-    hero_i = int(np.argsort(bright)[-4])     # one of the sunlit views, not the brightest wall
+    # the hero: a bright view with the most in it (edge energy), not a bare wall
+    stats = []
+    for p in fins[:n]:
+        im = cv2.imread(p, cv2.IMREAD_GRAYSCALE)
+        stats.append((float(im.mean()), float(cv2.Laplacian(im, cv2.CV_64F).var())))
+    med = float(np.median([b for b, _e in stats]))
+    cands = [k for k, (b, _e) in enumerate(stats) if b >= med]
+    hero_i = int(max(cands, key=lambda k: stats[k][1]))
     hero = cv2.cvtColor(cv2.imread(fins[hero_i]), cv2.COLOR_BGR2RGB)
     hero_m = cv2.cvtColor(cv2.imread(views[hero_i]), cv2.COLOR_BGR2RGB)
     out = Path(a.out); out.mkdir(parents=True, exist_ok=True)
