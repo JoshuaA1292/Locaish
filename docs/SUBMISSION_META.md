@@ -3,7 +3,7 @@
 Paste-ready. Deadline 4 November 2026, 9:00 PM ET.
 
 **Repo:** https://github.com/JoshuaA1292/Locaish (public, MIT)
-**Hosted dorm, play with it:** https://locaish-564007129146.us-central1.run.app
+**Hosted dorm, look around it:** https://locaish-564007129146.us-central1.run.app (look-only: the rehearsal, the camera move, the finished frames and the world made here; nothing a judge does spends)
 **Video:** _paste link_
 
 ## Project name
@@ -68,5 +68,6 @@ submitting.
 
 Open the hosted dorm. Walk the twin (WASD), read what Muse Spark named, open
 the rehearsal and scrub the finished frames, play the camera move and read
-the operator's log, open the world and stand on the photographs. Paste your
-own scene and rehearse it: it runs live against the Meta Model API.
+the operator's log, open the world and stand on the photographs. To rehearse
+your own scene live, clone the repo and run the studio with a Meta Model API
+key (`META_API_KEY`); the hosted copy is deliberately look-only.

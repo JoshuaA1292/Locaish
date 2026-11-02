@@ -215,9 +215,12 @@ def test_reference_priority_within_the_ten_image_limit(tmp_path):
     F.finish_world_views(views2, client=fake2, cast=big_cast, headshots=big_heads, room_refs=lambda m: [room1, room2],
                          out_dir=tmp_path / "fin2", workers=1)
     last = fake2.log[-1]
-    assert last["references"] == 10 and len(last["refs"]) == 10
-    assert last["refs"][3:5] == [room1, room2] and last["refs"][5:] == [big_heads[f"A{k}"] for k in range(5)]
-    assert "image 10 is A4's headshot" in last["prompt"] and "A5's headshot" not in last["prompt"]
+    # the view shows two stand-ins (red A0, blue A1): the other six are out of
+    # frame, get no headshot, and the painter is told not to paint them
+    assert last["references"] == 7 and len(last["refs"]) == 7
+    assert last["refs"][3:5] == [room1, room2] and last["refs"][5:] == [big_heads["A0"], big_heads["A1"]]
+    assert "image 6 is A0's headshot" in last["prompt"] and "A2's headshot" not in last["prompt"]
+    assert "A2 is in the room but OUT OF FRAME" in last["prompt"]
 
 
 # ---------------------------------------------------------------------------

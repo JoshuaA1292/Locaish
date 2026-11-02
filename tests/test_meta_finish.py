@@ -87,5 +87,7 @@ def test_the_review_can_be_switched_off_and_gives_up_after_its_tries(tmp_path):
     stubborn = FakeMetaClient(image=_png(160, 90), chat_answers=[{"ok": False, "problems": ["still floating"]}] * 5)
     out = F.finish_sequence([("frame_0001.png", _png(160, 90), _sitting_meta())], client=stubborn, cast=[theo],
                             out_dir=tmp_path / "b", workers=1, review_tries=2)
-    assert [e["kind"] for e in stubborn.log] == ["image", "chat_json", "image", "chat_json", "image"]
+    # every attempt is judged, the last one too, and the best of them is kept
+    assert [e["kind"] for e in stubborn.log] == ["image", "chat_json", "image", "chat_json", "image", "chat_json"]
     assert out[0].meta["review"]["rejected"] == 2 and out[0].path.exists()
+    assert len(out[0].meta["review"]["verdicts"]) == 3 and out[0].path.with_suffix(".json").exists()

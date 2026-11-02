@@ -401,7 +401,7 @@ def test_sequence_prompt_says_pose_business_eyeline_expression_composition_hour_
     assert "typing at the laptop, looking at the desk" in p
     assert "asking a question" in p and "listening to Maya" in p
     assert "standing exactly where the figure is" not in p, "a staged person is not the passport sentence"
-    assert "Maya sits on the left third of the frame" in p and "room in front of Maya on the right" in p
+    assert "Maya is placed in the left third of the frame" in p and "room in front of Maya on the right" in p
     assert "at 15:00" in p and "azimuth 230 degrees" in p and "from the SW" in p
     # Unstaged frames keep the old sentence, and the clock is to the minute.
     bare = dict(meta)
@@ -431,7 +431,7 @@ def test_anchor_rides_in_every_later_frame_with_the_nearest_neighbour_and_one_ho
         assert "at 15:00" in call["prompt"] and "azimuth 230 degrees" in call["prompt"]
     # Frames 1-2 share the anchor's camera: the anchor rides once, as both references.
     for call in fake.log[1:3]:
-        assert call["references"] == 5 and "Image 5 is the previous finished frame of this scene and its first photograph" in call["prompt"]
+        assert call["references"] == 5 and "Image 5 is the first photograph of this scene and the previous finished frame of THIS SAME SETUP" in call["prompt"]
     # Frames 3-4 moved the camera, but every finished frame so far stands at the
     # anchor's camera, so the anchor is as near as any and rides once.
     for call in fake.log[3:5]:
@@ -441,12 +441,12 @@ def test_anchor_rides_in_every_later_frame_with_the_nearest_neighbour_and_one_ho
     call = fake.log[5]
     assert call["references"] == 6
     assert "Image 5 is the first photograph of this scene" in call["prompt"]
-    assert "Image 6 is the previous finished frame of this scene from the camera nearest this one" in call["prompt"]
+    assert "Image 6 is the previous finished frame of THIS SAME SETUP" in call["prompt"]  # same shot, same camera
     assert "image 2 is Theo's headshot" in call["prompt"] and "Image 3 and image 4 are photographs of THIS EXACT ROOM" in call["prompt"]
     assert out[0].meta["anchor"] is False and all(f.meta["anchor"] for f in out[1:])
     # Staged people in every prompt.
     assert all("typing at the laptop" in c["prompt"] and "hands in pockets" in c["prompt"] for c in fake.log)
-    assert all("Maya sits on the left third" in c["prompt"] for c in fake.log)
+    assert all("Maya is placed in the left third" in c["prompt"] for c in fake.log)
 
 
 def test_anchor_survives_a_failed_first_frame(tmp_path):

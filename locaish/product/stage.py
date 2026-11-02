@@ -1229,6 +1229,7 @@ class Stage:
         errors: list[str] = []
         out = finmod.finish_sequence(
             [(src.name, src.read_bytes(), meta)], client=client, cast=cast, headshots=heads, room_refs=self._room_refs(job),
+            layout=self._layout_fn(job), photo_light=self._photo_light(job, client),
             out_dir=run.workdir / "finish", workers=1, force=True,
             scene_light=str(body.get("light") or ""), mood=str(body.get("mood") or ""),
             progress=lambda e: errors.append(e["text"]) if e.get("kind") == "error" else None,
@@ -1310,26 +1311,132 @@ class Stage:
             key = (tuple(np.round(pos, 1)), tuple(np.round(aim, 1)))
             if key in cache:
                 return cache[key]
-            chosen: list[int] = []
-            try:
-                for v in frames.best_views(aim, tree, k=2):
-                    chosen.append(int(v["index"]))
-            except Exception:  # noqa: BLE001
-                pass
-            # The capture frame whose camera stood nearest the planned one and looked the same way.
+            # A photograph that looks the opposite way shows the opposite
+            # wall, and the painter copies it: every candidate must look
+            # roughly the way the planned camera looks (within 60 degrees),
+            # and the two chosen must not be neighbouring video frames.
             want = aim - pos
             want = want / max(float(np.linalg.norm(want)), 1e-9)
             fwd = frames.extr[:, 2, :3] @ frames.R.T              # the camera's viewing axis, twin frame
             fwd = fwd / np.maximum(np.linalg.norm(fwd, axis=1, keepdims=True), 1e-9)
-            score = np.linalg.norm(frames.centres_twin - pos, axis=1) + 1.5 * (1.0 - fwd @ want)
-            for i in np.argsort(score)[:2]:
-                if int(i) not in chosen:
-                    chosen.append(int(i))
+            agree = fwd @ want
+            chosen: list[int] = []
+
+            def take(i: int) -> None:
+                i = int(i)
+                if i in chosen or any(abs(i - j) < 10 for j in chosen):
+                    return
+                chosen.append(i)
+
+            try:
+                for v in frames.best_views(aim, tree, k=6):
+                    if agree[int(v["index"])] > 0.5:
+                        take(v["index"])
+                    if len(chosen) >= 1:
+                        break
+            except Exception:  # noqa: BLE001
+                pass
+            # The capture frame whose camera stood nearest the planned one and looked the same way.
+            score = np.linalg.norm(frames.centres_twin - pos, axis=1) + 1.5 * (1.0 - agree)
+            for gate in (0.5, 0.0, -1.0):
+                for i in np.argsort(score):
+                    if agree[int(i)] > gate:
+                        take(i)
+                    if len(chosen) >= 2:
+                        break
+                if len(chosen) >= 2:
+                    break
             out = [encode(i) for i in chosen[:2]]
             cache[key] = out
             return out
 
         return pick
+
+    def _layout_fn(self, job):
+        """A callable the finisher asks for the sentence that says what a
+        frame's camera sees: the job's labels and the twin's window openings
+        projected through that camera (`finish.layout_words`)."""
+        from ..meta import finish as finmod
+
+        try:
+            twin = self.studio.twin_of(job)
+            labels = self.studio.labels_of(job) or []
+        except Exception:  # noqa: BLE001 - no twin or labels is no layout
+            return None
+        things = [(str(l.get("label") or ""), l.get("xyz")) for l in labels
+                  if l.get("xyz") is not None and str(l.get("kind") or "") not in ("structure", "surface")]
+        # A doubtful opening (the solver's confidence under 0.8 and no window
+        # label near it) is not announced as a window: told it is one, the
+        # painter paints one. Its number is kept so "window 2" stays window 2.
+        win_labels = [np.asarray(l["xyz"], dtype=np.float64) for l in labels
+                      if l.get("xyz") is not None and "window" in str(l.get("label") or "").lower()]
+        openings = []
+        for o in list(getattr(twin.structure, "openings", None) or []):
+            c = np.asarray(o.center, dtype=np.float64)
+            vouched = any(float(np.linalg.norm(w[:2] - c[:2])) < 0.7 for w in win_labels)
+            kind = str(getattr(o, "kind", "window") or "window")
+            if kind == "window" and float(getattr(o, "confidence", 1.0) or 1.0) < 0.8 and not vouched:
+                kind = "doubtful"
+            openings.append({"center": c.tolist(), "width": float(o.width), "height": float(o.height), "kind": kind})
+
+        def layout(meta: dict) -> str:
+            return finmod.layout_words(meta, things, openings)
+
+        return layout
+
+    def _photo_light(self, job, client) -> dict | None:
+        """What the scan's photographs were shot under, read once by Muse
+        Spark from four of them spread along the walk and kept beside the job
+        (`photo_light.json`), so every finish can say how the frame's hour
+        differs from the photographs."""
+        from ..meta import finish as finmod
+
+        cache = job.workdir / "photo_light.json"
+        if cache.exists():
+            try:
+                info = json.loads(cache.read_text())
+                if isinstance(info, dict) and info.get("time"):
+                    return info
+            except (OSError, ValueError):
+                pass
+        frames = self.studio.frames_of(job)
+        if frames is None or not len(frames.paths):
+            return None
+        import io
+
+        from PIL import Image
+
+        picks = []
+        n = len(frames.paths)
+        for i in sorted({int(n * f) for f in (0.1, 0.35, 0.6, 0.85)}):
+            try:
+                im = Image.open(frames.paths[min(i, n - 1)]).convert("RGB")
+                im.thumbnail((960, 960))
+                buf = io.BytesIO()
+                im.save(buf, format="JPEG", quality=80)
+                picks.append(buf.getvalue())
+            except Exception:  # noqa: BLE001
+                continue
+        info = finmod.classify_photo_light(client, picks)
+        if info:
+            try:
+                cache.write_text(json.dumps(info))
+            except OSError:
+                pass
+        return info
+
+    @staticmethod
+    def _light_note(info: dict | None, light: dict | None) -> str:
+        """One line for the log: when the scan was shot and what the finish paints."""
+        if not info:
+            return ""
+        when = {"night": "at night", "day": "by day", "dusk": "at dusk"}.get(str(info.get("time")), "")
+        windows = {"black": "black", "bright": "daylit", "curtained": "curtained"}.get(str(info.get("windows")), "")
+        hour = ""
+        if isinstance(light, dict) and light.get("clock"):
+            hour = f" at {light['clock']}"
+        paints = "daylight" if isinstance(light, dict) and float(light.get("elevation_deg") or 0) > 0 else "the hour's light"
+        return f"the scan was shot {when}, its windows {windows}; the finish{hour} paints {paints}".replace("  ", " ")
 
     @staticmethod
     def _headshots(job, cast) -> dict[str, bytes]:
@@ -1350,6 +1457,8 @@ class Stage:
             frun.emit("frame", f"{counter['n']} of {total} finished", done=counter["n"], total=total,
                       index=e.get("index"), name=e.get("name"), file=e.get("file"), url=f"{url_base}/{e.get('file')}",
                       cached=kind == "skip")
+        elif kind == "note":
+            frun.emit("note", str(e.get("text") or ""), index=e.get("index"), name=e.get("name"))
         elif kind == "error":
             counter["failed"] += 1
             frun.emit("note", str(e.get("text") or "a frame failed"), index=e.get("index"), name=e.get("name"))
@@ -1380,9 +1489,14 @@ class Stage:
                 raise ValueError("the rehearsal has no animatic frames to finish")
             cast = castmod.load_cast(job.workdir)
             counter = {"n": 0, "failed": 0}
+            photo_light = self._photo_light(job, client)
+            note = self._light_note(photo_light, next((finmod.frame_light(m) for _n, _p, m in frames if finmod.frame_light(m)), None))
+            if note:
+                frun.emit("stage", note)
             frun.emit("stage", f"Muse Image is finishing {len(frames)} frames", total=len(frames))
             finished = finmod.finish_sequence(
                 frames, client=client, cast=cast, headshots=self._headshots(job, cast), room_refs=self._room_refs(job), out_dir=frun.workdir,
+                layout=self._layout_fn(job), photo_light=photo_light,
                 workers=int(body.get("workers") or FINISH_WORKERS), force=bool(body.get("force")),
                 scene_light=str(body.get("light") or ""), mood=str(body.get("mood") or ""),
                 progress=lambda e: self._finish_progress(frun, f"/rehearsal-image/{job.id}/{run.id}", counter, e),
@@ -1452,6 +1566,7 @@ class Stage:
                       total=len(frames))
             finished = finmod.finish_sequence(
                 frames, client=client, cast=cast, headshots=self._headshots(job, cast), room_refs=self._room_refs(job), out_dir=frun.workdir,
+                layout=self._layout_fn(job), photo_light=self._photo_light(job, client),
                 workers=int(body.get("workers") or FINISH_WORKERS), force=bool(body.get("force")),
                 scene_light=str(body.get("light") or ""), mood=str(body.get("mood") or ""),
                 progress=lambda e: self._finish_progress(frun, f"/sim-file/{job.id}/{sim_id}", counter, e),
@@ -1633,10 +1748,15 @@ class Stage:
                         meta.setdefault("actors", dict(actors))
                         meta.setdefault("light", light)
                         meta.setdefault("dressing", dressing)
+                photo_light = self._photo_light(job, client)
+                note = self._light_note(photo_light, light)
+                if note:
+                    run.emit("stage", note)
                 run.emit("stage", f"Muse Image is finishing {len(views)} views", total=len(views))
                 return finmod.finish_world_views(
                     views, client=client, cast=cast, headshots=heads, room_refs=room_refs, light=light,
                     dressing=dressing, out_dir=run.workdir / "finished", workers=FINISH_WORKERS, force=force,
+                    layout=self._layout_fn(job), photo_light=photo_light, review=True,
                     progress=lambda e: self._world_progress(run, e, "finishing", base),
                 )
 

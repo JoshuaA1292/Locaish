@@ -152,13 +152,16 @@ def test_first_frame_goes_alone_then_continuity_rides_along_and_files_land(tmp_p
     assert "20 mm" in first["prompt"], "the first frame is finished first, before any parallel chunk"
     assert "previous finished frame" not in first["prompt"] and first["references"] == 2  # the frame + Theo's headshot
     for call in _images(fake)[1:]:
-        assert "previous finished frame" in call["prompt"] and call["references"] == 3
-        assert "image 2 is Theo's headshot" in call["prompt"] and "Image 3 is the previous finished frame" in call["prompt"]
+        # the frame after the anchor carries it once, as both; a later frame of the
+        # same setup carries the anchor and the setup\'s previous finished frame
+        assert "previous finished frame" in call["prompt"] and call["references"] in (3, 4)
+        assert "image 2 is Theo's headshot" in call["prompt"] and "Image 3 is the" in call["prompt"]
     assert out[0].references == 1 and out[1].references == 2 and out[1].meta["continuity"] is True and out[0].meta["continuity"] is False
     # Stamped as a render: the bottom-left corner is darkened.
     im = Image.open(io.BytesIO(out[0].png))
-    assert im.size == (80, 50) and sum(im.getpixel((6, 32))) < sum((90, 120, 200))
-    assert out[0].raw == fake._image and out[0].png != out[0].raw
+    # the answer is cropped to the render's aspect (16:9) before it is stamped
+    assert im.size == (80, 45) and sum(im.getpixel((6, 28))) < sum((90, 120, 200))
+    assert Image.open(io.BytesIO(out[0].raw)).size == (80, 45) and out[0].png != out[0].raw
     # Cache: a second run touches nothing; force redoes it all.
     events.clear()
     again = F.finish_sequence(_frames(5), client=fake, cast=_cast(), headshots={}, out_dir=tmp_path / "fin", progress=events.append)

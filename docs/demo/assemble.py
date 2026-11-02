@@ -164,13 +164,15 @@ def build_segment(seg: dict, i: int, W: int, H: int, fps: int, root: Path, work:
     return out
 
 
-def concat(segs: list[Path], out: Path, xfade: float = 0.4) -> tuple[Path, list[float]]:
+def concat(segs: list[Path], out: Path, xfade: float = 0.4, fades: list[float] | None = None) -> tuple[Path, list[float]]:
     """Crossfade the video segments into one silent picture. Returns the
-    output and each segment's start time on the finished timeline."""
+    output and each segment's start time on the finished timeline. `fades`
+    gives the transition into each segment (0 = a hard cut)."""
     durs = [probe_seconds(s) for s in segs]
+    fades = [max(float(f), 1.0 / 30) for f in (fades or [xfade] * len(segs))]
     starts = [0.0]
     for k in range(1, len(segs)):
-        starts.append(starts[-1] + durs[k - 1] - xfade)
+        starts.append(starts[-1] + durs[k - 1] - fades[k] - 1.0 / 30)   # a frame of slack: xfade needs offset+duration < the clip
     if len(segs) == 1:
         out.write_bytes(segs[0].read_bytes())
         return out, starts
@@ -180,16 +182,18 @@ def concat(segs: list[Path], out: Path, xfade: float = 0.4) -> tuple[Path, list[
     vf: list[str] = []
     vprev = "0:v"
     for k in range(1, len(segs)):
-        vf.append(f"[{vprev}][{k}:v]xfade=transition=fade:duration={xfade}:offset={starts[k]:.3f}[v{k}]")
+        vf.append(f"[{vprev}][{k}:v]xfade=transition=fade:duration={fades[k]:.3f}:offset={starts[k]:.3f}[v{k}]")
         vprev = f"v{k}"
     run(["ffmpeg", "-y", "-v", "error"] + inputs + ["-filter_complex", ";".join(vf), "-map", f"[{vprev}]",
          "-c:v", "libx264", "-crf", "17", "-preset", "medium", "-pix_fmt", "yuv420p", "-an", str(out)])
     return out, starts
 
 
-def lay_voices(video: Path, voices: list[tuple[float, Path]], out: Path) -> Path:
+def lay_voices(video: Path, voices: list[tuple[float, Path]], out: Path, music: Path | None = None,
+               music_db: float = -6.0) -> Path:
     """One narration track over the picture: each clip at its absolute
-    second, mixed without normalisation so a sentence keeps its level."""
+    second, mixed without normalisation so a sentence keeps its level. A
+    music bed, when given, runs from 0 and ducks under the narration."""
     total = probe_seconds(video)
     inputs = ["-i", str(video), "-f", "lavfi", "-t", f"{total:.3f}", "-i", "anullsrc=r=48000:cl=stereo"]
     vf = ["[1:a]anull[s0]"]
@@ -199,7 +203,17 @@ def lay_voices(video: Path, voices: list[tuple[float, Path]], out: Path) -> Path
         ms = int(round(at * 1000))
         vf.append(f"[{k + 2}:a]aformat=sample_rates=48000:channel_layouts=stereo,adelay={ms}|{ms}[n{k}]")
         labels.append(f"n{k}")
-    vf.append("".join(f"[{l}]" for l in labels) + f"amix=inputs={len(labels)}:normalize=0:duration=first[a]")
+    vf.append("".join(f"[{l}]" for l in labels) + f"amix=inputs={len(labels)}:normalize=0:duration=first[vo]")
+    if music is not None:
+        inputs += ["-i", str(music)]
+        m = len(voices) + 2
+        vf.append(f"[{m}:a]aformat=sample_rates=48000:channel_layouts=stereo,volume={music_db}dB,"
+                  f"apad,atrim=duration={total:.3f}[mu]")
+        vf.append("[vo]asplit[vo1][vo2]")
+        vf.append("[mu][vo2]sidechaincompress=threshold=0.02:ratio=5:attack=30:release=700:makeup=1[duck]")
+        vf.append("[vo1][duck]amix=inputs=2:normalize=0:duration=first[a]")
+    else:
+        vf.append("[vo]anull[a]")
     run(["ffmpeg", "-y", "-v", "error"] + inputs + ["-filter_complex", ";".join(vf), "-map", "0:v", "-map", "[a]",
          "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-movflags", "+faststart", str(out)])
     return out
@@ -213,10 +227,14 @@ def main() -> None:
     work.mkdir(parents=True, exist_ok=True)
     W, H, fps = int(tl.get("width", 1920)), int(tl.get("height", 1080)), int(tl.get("fps", 30))
     segs = [build_segment(s, i, W, H, fps, root, work) for i, s in enumerate(tl["segments"])]
-    silent, starts = concat(segs, work / "picture.mp4", float(tl.get("xfade", 0.4)))
+    fades = [float(s.get("xfade", tl.get("xfade", 0.4))) for s in tl["segments"]]
+    silent, starts = concat(segs, work / "picture.mp4", float(tl.get("xfade", 0.4)), fades)
     voices = [(starts[i] + float(s.get("voice_at", 0.3)), root / s["voice"])
               for i, s in enumerate(tl["segments"]) if s.get("voice")]
-    lay_voices(silent, voices, out)
+    music = (root / tl["music"]) if tl.get("music") else None
+    lay_voices(silent, voices, out, music, float(tl.get("music_db", -6.0)))
+    for i, s in enumerate(tl["segments"]):
+        print(f"  {starts[i]:6.1f}s  {s.get('video') or s.get('image') or 'card'}")
     for (at, path), i in zip(voices, [i for i, s in enumerate(tl["segments"]) if s.get("voice")]):
         end = at + probe_seconds(path)
         nxt = next((starts[j] + float(tl["segments"][j].get("voice_at", 0.3))
