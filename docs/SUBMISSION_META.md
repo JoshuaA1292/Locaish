@@ -15,24 +15,20 @@ Locaish
 Meta's models, inside a measured room: shoot the scene before anyone drives
 to the location.
 
-## What it is
+## Project description (paste this)
 
-Locaish turns one phone walk through a room into a measured 3D twin, then
-puts Meta's models to work inside it. Muse Spark reads the room and names
-what it sees, each name checked against the geometry. The room is swept
-before anyone writes a shot: every camera position in it is tested for lens,
-size, sightline and whether a dolly fits. Paste a scene and Muse Spark
-breaks it into shots; the room checks each one and says which cannot be
-held. The cast stand as bodies at their real heights on their marks. Tell
-the operator what you want and Muse Wonder drives the rig through the
-engine while Muse Spark reviews every frame as a DP. Muse Image finishes
-each frame from the measured render and the scan's own photographs of that
-angle, and Muse Spark reviews the finish beside the render and sends back
-what the painter invented. Lift the bunk bed out of the scan with SAM 3.1
-and SAM 3D Objects, move it half a metre, and the shot table says what
-changed. Pick the shoot date and the hour: sixty views of the room are
-finished with the sun where it will be and painted onto the measured room,
-so you can walk into the location as it will be on the day.
+**Locaish turns one phone walk through a room into a measured 3D location, then puts Meta's models to work inside it, so a film crew can shoot the scene before anyone drives there.**
+
+**Who it's for.** Producers, DPs and location managers on commercials, indie film and TV. Today a location is chosen from photographs, then someone flies out with a tape measure, then a tech scout finds out the dolly doesn't fit. Locaish replaces the scouting trip, the tape measure, the pre-vis artist and the guesswork: scan the room once (50 seconds on a phone), and plan everything in metres.
+
+**What it does.**
+- Builds a measured twin from the walk (every camera pose recovered, every dimension traceable to the footage) and sweeps it: 9,666 candidate camera setups tested for lens, shot size, clear sightline and whether a dolly fits.
+- **Muse Spark** reads the room and names what's in it, each name pinned to measured geometry; breaks a pasted scene into beats and shots, which the room then checks ("this dolly needs 68 cm of clear floor, there are 30"); reviews every camera move as a DP and every finished still against the real photographs.
+- **Muse Wonder** operates the camera through the engine's own tools from a sentence of direction.
+- **Muse Image** paints the cast into the scan's own photographs: the measured bodies are placed by the geometry and cropped to the planned lens, and the model is allowed to change the people and nothing else. It also finishes sixty views of the room for the shoot date and hour, with the sun where it will actually be.
+- **SAM 3.1 and SAM 3D** lift the furniture out of the scan as solids; move the bunk bed half a metre and the shot table is recomputed (+176 clear setups).
+
+**Where it pushes the boundary.** The models never work from a prompt alone: they work inside a measurement. Every output is checked against something real, by geometry (labels, shots, dolly fits), by the scan's photographs (the finish), or by another model acting as judge (Muse Spark reviews Muse Image and Muse Wonder, and sends work back). The painter's job was cut down until it could not invent a room, and the result is pre-vis that is faithful to the actual space. Nothing a model says ever becomes a measurement.
 
 ## Which Meta model does which job
 
