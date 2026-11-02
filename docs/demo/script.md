@@ -1,34 +1,72 @@
-# Locaish demo, Meta Global AI Developer Hackathon (3 minutes)
+# Locaish demo, Meta Global AI Developer Hackathon (v3, about 2:50)
 
-1080p, 16:9. Voice: Jamie (Premium). Captions carry the Meta model names. Every
-finished picture on screen is labelled a render, as it is in the product.
+The point of the film: Meta's models read a 3D reconstruction of a real room
+and work inside it, and every claim is shown through a worked example from
+this one dorm room (scan IMG_6208, job 511430a1306a). The reconstruction is
+on screen only as the thing the models are reading: the labelled dollhouse,
+the floor plan, the bodies and the camera rail. What fills the screen is what
+the models understand, plan, place, direct, move, lift and paint.
+
+Voice: Jamie (Premium) at 150 wpm, short sentences, one idea each. Captions
+name the model doing the work. Every finished picture carries the product's
+own "a render" tag.
 
 | # | Time | On screen | Narration |
 |---|---|---|---|
-| 1 | 0:00 | The phone walk of the dorm, 48 s at 8x. Caption: *one phone, 48 seconds*. | This is a dorm room, filmed on a phone in forty-eight seconds. Nobody measured anything. |
-| 2 | 0:10 | Title: **Locaish**. Then the twin in the viewer, orbiting; the panel's numbers; the labels appearing on the furniture. Caption: *Muse Spark names every object*. | Locaish turns that video into a measured twin: walls, floor, the window, the ceiling height, every centimetre traceable back to the footage. Muse Spark reads the frames and names what it sees, and each name is checked against the geometry before it is kept. |
-| 3 | 0:30 | The studio page. The scene text pasted. The log: *Muse Spark is breaking the scene down*, beats, marks, shots placed. The cast with heights. The blocking plan and the shoot day against the sun. | Now paste a scene. Muse Spark breaks it into beats and marks, and every shot is placed from the room's own measured shot table: where a camera can stand, what lens, who is in the way. The cast are bodies at their real heights. The shoot day is laid out against the sun through the real window. |
-| 4 | 0:55 | Simulate mode: a dolly move keyed in the twin, the frustum, the bodies. The operator log: Muse Wonder calling the tools, Muse Spark's DP review. A failing segment flagged: the dolly needs 68 cm and has 30. | Camera moves are keyed on real rigs inside the measured room, like a camera department's Blender, but every number is a measurement. Tell the operator what the camera should do and Muse Wonder builds the move through the engine's tools, while Muse Spark watches the frames as a DP and sends it back until it holds. When a dolly does not fit, the room says so. |
-| 5 | 1:25 | The finished frames: the measured frame, then the finished one, then the sequence scrubbed. Caption: *Muse Image, from the scan's own photographs*. | Then Muse Image finishes every frame from the measured render, the scan's own photographs of that view, and the cast's looks. The real room. These people. This angle. Consistent from frame to frame, and labelled a render, with the measured frame one toggle away. |
-| 6 | 1:55 | The world: date, hour, dressing typed. The log time-lapsed: sixty views rendered, finished, painted onto the scan's gaussians. Then first person: walking the room, the sun on the wall, stepping onto a photograph and watching it fade in. Caption: *Walk into the location as it will be on the day*. | And this is the part nobody has done. Pick the shoot date and the hour. Sixty views of the measured room are finished by Muse Image with the sun where it will actually be, then painted onto the scan's own gaussians, so the walls stay exactly where they were measured. Now walk in. Stand where a view was finished and the photograph itself fades in. Put on a headset and you are in the room, on the day. |
-| 7 | 2:35 | The scanned room beside the world, toggled. The end card: Locaish. Then the model credits. | A location scout's report, before anyone drives there. Everything the models paint is labelled a render; nothing they say becomes a measurement. Muse Spark reads and judges. Muse Wonder operates. Muse Image paints. The room is the room. Locaish. |
+| 1 | 0:00 | The phone walk of the room, sped up. Caption: *one phone · one walk through the room*. | This is a dorm room. One phone. One walk through it. Fifty seconds. |
+| 2 | 0:08 | Title: **Locaish**. Sub: *Meta's models, inside a measured room*. | Locaish turns that walk into a measured three D twin. Then Meta's models go to work inside it. |
+| 3 | 0:14 | The photographs that saw each thing, one after another, with Muse Spark's name on it and a ring on the pinned point: bunk bed, study desk, desk hutch, tower fan, wall poster, small window, wardrobe, curtain. Caption: *Muse Spark reads the room · every name checked against the geometry*. | First, Muse Spark looks at the frames and names what it sees. Bunk bed. Study desk. Tower fan. Each name is pinned to the geometry and checked against it. The big window is one point nine metres wide, with its sill at sixty-two centimetres. |
+| 4 | 0:31 | The scout's report: the lens table, the grip table, the floor plan. Caption: *the room is swept before anyone writes a shot · 9,666 camera positions, each one tested*. | Before anyone writes a shot, the room has been swept. Nine thousand six hundred camera positions, each one tested. What lens. What size. What is in the way. Whether a dolly fits. Ask where a close-up can stand, and it answers in metres. |
+| 5 | 0:47 | The studio: the scene pasted, Muse Spark's breakdown in the log, the shot table. The two problems highlighted. Caption: *Muse Spark breaks the scene into shots · the room checks every one*. | Now paste a scene. Muse Spark breaks it into beats and picks the shots. Then the room checks each one. Shot one wanted a wide on Theo from the door. No camera position holds it with a clear sightline, so it says so. Shot eight has Theo crossing in front of Maya at nine point eight seconds. Nothing is hidden. |
+| 6 | 1:09 | The red and blue bodies on their marks in the twin, then the measured frame with the body in it. Caption: *bodies at real heights on real marks*. | Maya is one sixty-eight. Theo is one eighty-four. They stand as bodies at those heights, on their marks, cut by the real furniture, in the real frame. |
+| 7 | 1:20 | Simulate: the frustum and the rail in the twin, then the operator's log: Muse Wonder's tool calls, Muse Spark's DP notes. Caption: *Muse Wonder operates the camera · Muse Spark reviews every frame as a DP*. | Tell the operator what you want. A slow push-in on Theo from the doorway. Muse Wonder drives the rig through the engine. Muse Spark watches every frame as a DP. Headroom. Eye line. Look room. It sends the move back until it holds. |
+| 8 | 1:38 | The measured frame, then the same frame finished. The animatic scrubbing through finished frames. Caption: *Muse Image finishes every frame · from the scan's own photographs*. | Then Muse Image finishes each frame. It starts from the measured render and the scan's own photographs of that angle. The same room. These people. Labelled a render, with the measured frame one toggle away. |
+| 9 | 1:53 | The studio: the bunk bed lifted out of the scan; nudged half a metre toward the wall, the shot table's sentence; pulled into the room, the sentence again. The plan shows it in amber. Caption: *lift a thing out of the scan and move it · the room is swept again as dressed*. | The furniture is real too. Lift the bunk bed out of the scan. Push it half a metre toward the wall, and the room is swept again as dressed: a hundred and seventy-six more clear camera setups. Pull it into the room instead, and it loses two thousand seven hundred. Every frame downstream follows it. |
+| 10 | 2:09 | SAM 3.1's mask, the piece alone as a solid, turning. The body from one photograph. Caption: *SAM 3.1 masks it · SAM 3D Objects lifts it · SAM 3D Body stands a person up*. | SAM 3.1 masks it in the frame that saw it best. SAM 3D Objects lifts it into a solid at its measured size. SAM 3D Body stands a person up from one photograph, at their height. |
+| 11 | 2:22 | Date and hour typed. The time-lapse: sixty views finished by Muse Image. Then standing on the photographs, one after another. Caption: *the room on the shoot day · sixty views finished for that hour, painted onto the measured room*. | And the shoot day itself. Fourteen November, twenty to five. Sixty views are finished by Muse Image with the sun where it will be, through that window, and painted back onto the measured room. Walk in. Stand where a view was finished and the photograph fades in. |
+| 12 | 2:42 | The finished frames and the lifted piece together, then the end card. | A scout's report. A shot list. A camera move. The room on the day. Before anyone drives there. Nothing a model says becomes a measurement. Muse Spark reads. Muse Wonder operates. Muse Image paints. SAM lifts. Locaish. |
 
-## Captions (lower third)
+## Captions
 
-1. one phone · 48 seconds
-2. Muse Spark names every object · checked against the geometry
-3. Muse Spark breaks the scene into beats · placed from the measured shot table
-4. Muse Wonder operates the camera · Muse Spark reviews as a DP
-5. Muse Image finishes every frame · a render, the measurement one toggle away
-6. Walk into the location as it will be on the day
-7. nothing a model says becomes a measurement
+1. one phone · one walk through the room
+2. Muse Spark reads the room · every name checked against the geometry
+3. the room is swept before anyone writes a shot · 9,666 camera positions, each one tested
+4. Muse Spark breaks the scene into shots · the room checks every one
+5. bodies at real heights on real marks
+6. Muse Wonder operates the camera · Muse Spark reviews every frame as a DP
+7. Muse Image finishes every frame · from the scan's own photographs
+8. lift a thing out of the scan and move it · the room is swept again as dressed
+9. SAM 3.1 masks it · SAM 3D Objects lifts it · SAM 3D Body stands a person up
+10. the room on the shoot day · sixty views finished for that hour
+11. nothing a model says becomes a measurement
 
 ## End card
 
 Locaish
-Muse Spark · Muse Wonder · Muse Image · SAM 3.1
-Built in the Meta Global AI Developer Hackathon, 26 October to 4 November 2026
+Muse Spark · Muse Wonder · Muse Image · SAM 3.1 · SAM 3D Objects · SAM 3D Body
+Meta Global AI Developer Hackathon · 26 October to 4 November 2026
 
-## Added 1 Nov: SAM 3D (between 6 and 7)
+## The examples, with their sources (scan IMG_6208)
 
-| 6b | 2:35 | The studio: "Lift to 3D" on the chair; SAM 3.1 masks it, SAM 3D Objects returns the splat; the chair alone, textured. | The furniture is real too. SAM 3.1 masks the chair in the frame that saw it best, and SAM 3D Objects lifts it into a solid you can pick up and move, fitted to its measured footprint. |
+- Labels: 18 names from Muse Spark (bunk bed, study desk, desk hutch, tower fan,
+  wall poster, small window, window curtain, stacked suitcase, ...).
+- Window: 1.93 × 1.18 m, sill 0.62 m, faces W, direct sun 12:12 to 17:04 (scout).
+- Sweep: 9,666 setups in the shot table; the doorway dolly fits 0.7 m² of floor.
+- Scene: "Dorm Room Late Afternoon", 8 beats, 4 of 8 shots placed. Shot 1 (wide
+  on Theo from the door) and shot 3 (close-up on Theo) have no setup with a
+  clear sightline. Shot 8: at 9.8 s Theo crosses between the camera and Maya.
+- Schedule: shot 8's window coverage holds 12:12 to 16:56; set at 16:00.
+- Cast: Maya 1.68 m, Theo 1.84 m.
+- Set piece: the bunk bed (2.24 × 1.09 × 1.12 m, 275,139 returns) lifted from the scan;
+  SAM 3D Objects lifted it as 2beb74c2. Moved 0.5 m north: the room gained 176 clear
+  setups (8414 to 8590); moved 0.5 m south: lost 2,706 (a 16 mm long shot lost 273).
+- World: 14 November, 16:40.
+
+## Shooting notes
+
+- Raw reconstruction on screen only under the bodies and the frustum (beats
+  6, 7) and under the finished frame's measured toggle (beat 8); never as a
+  bare splat. The labels ride on the photographs, the plan is drawn, the world
+  is seen from its photographs.
+- Everything the models produce is shown large: labels, the shot table and
+  its problems, finished frames, the moved piece, the photographs in the world.

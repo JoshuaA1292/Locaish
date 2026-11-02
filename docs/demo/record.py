@@ -69,24 +69,33 @@ class CDP:
         return r.get("result", {}).get("value")
 
 
-def launch(port: int, width: int, height: int, headed: bool, profile: Path) -> subprocess.Popen:
+def launch(port: int, width: int, height: int, headed: bool, profile: Path, url: str = "about:blank") -> subprocess.Popen:
     args = [CHROME, f"--remote-debugging-port={port}", "--remote-allow-origins=*", f"--user-data-dir={profile}",
             f"--window-size={width},{height}", "--no-first-run", "--no-default-browser-check", "--hide-scrollbars",
             "--disable-infobars", "--autoplay-policy=no-user-gesture-required", "--force-device-scale-factor=1"]
     if not headed:
         args += ["--headless=new", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"]
     else:
-        args += ["--window-position=0,0", "--app=about:blank"]
+        # An occluded or unfocused window stops painting, and the screencast
+        # then delivers one frame for the whole take: keep it rendering.
+        # The page is opened straight into the app window: with `--app=about:blank`
+        # plus a later navigate, the debugger sometimes picks a page target that
+        # is not the visible window, and the take records a blank page.
+        args += ["--window-position=0,0", f"--app={url}", "--disable-backgrounding-occluded-windows",
+                 "--disable-renderer-backgrounding", "--disable-background-timer-throttling"]
     return subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def ws_url(port: int) -> str:
+def ws_url(port: int, prefer: str = "") -> str:
     for _ in range(60):
         try:
             with urllib.request.urlopen(f"http://127.0.0.1:{port}/json", timeout=2) as r:
-                for t in json.load(r):
-                    if t.get("type") == "page":
+                pages = [t for t in json.load(r) if t.get("type") == "page"]
+                for t in pages:
+                    if prefer and t.get("url", "").startswith(prefer):
                         return t["webSocketDebuggerUrl"]
+                if pages and not prefer:
+                    return pages[0]["webSocketDebuggerUrl"]
         except Exception:  # noqa: BLE001
             pass
         time.sleep(0.5)
@@ -100,9 +109,9 @@ async def run(url: str, out: Path, actions: list[dict], seconds: float, width: i
     for f in out.glob("f_*.jpg"):
         f.unlink()
     profile = out / "profile"
-    proc = launch(port, width, height, headed, profile)
+    proc = launch(port, width, height, headed, profile, url if headed else "about:blank")
     try:
-        ws = ws_url(port)
+        ws = ws_url(port, url.split("?")[0] if headed else "")
         async with websockets.connect(ws, max_size=64 * 1024 * 1024) as sock:
             cdp = CDP(sock)
             pump = asyncio.create_task(cdp.pump())
@@ -110,7 +119,8 @@ async def run(url: str, out: Path, actions: list[dict], seconds: float, width: i
             await cdp.call("Runtime.enable")
             await cdp.call("Emulation.setDeviceMetricsOverride", width=width, height=height,
                            deviceScaleFactor=1, mobile=False)
-            await cdp.call("Page.navigate", url=url)
+            if not headed:
+                await cdp.call("Page.navigate", url=url)
             await asyncio.sleep(settle)
             frames: list[tuple[float, Path]] = []
             # Two ways to get frames: the screencast pushes one per compositor
