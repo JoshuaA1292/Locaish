@@ -73,9 +73,11 @@ Meta's models do every job that reads, names, judges, plans or paints: Muse
 Spark (`locaish/meta/vision.py`, the breakdown, the DP reviews of frames,
 filmstrips and video), Muse Wonder (the operator, `locaish/agent/sim.py`;
 the scout and planner through `locaish/meta/adk.py`), Muse Image
-(`locaish/meta/finish.py`), SAM 3.1 (`locaish/meta/masks.py`) and the
-open-weight SAM 3D models on Modal (`locaish/meta/sam3d.py`,
-`docs/SAM3D_MODAL.md`) for bodies from a photograph. The reconstruction
+(`locaish/meta/finish.py`), SAM 3.1 (`locaish/meta/masks.py`, masks decoded
+with Meta's `meta-sam-parser`) and the open-weight SAM 3D models deployed on
+Modal (`locaish/meta/sam3d.py`, `docs/SAM3D_MODAL.md`): a labelled chair
+lifts from the scan into a textured splat on its measured footprint, and a
+body lifts from a photograph. The reconstruction
 stays geometry; nothing a model says becomes a measurement except the
 stature anchor, through the fusion. The bodies are `locaish/product/figures.py`
 and `locaish/film/render.py`; the engine is `locaish/film/sim.py`; the

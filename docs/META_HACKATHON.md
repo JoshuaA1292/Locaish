@@ -122,6 +122,10 @@ Meta key or a deployed Modal endpoint yet:
 | The world: sixty views of the measured room chosen for coverage, finished by Muse Image for a date and hour (sun through the real window) and a dressing, then **baked onto the scan's own gaussians** | `locaish/product/world.py`, `video/splat.py` | done 1 Nov; bake 7 s, 3 min with relighting; see below |
 | Walk mode and WebXR in the viewer; photographs pinned where they were taken fade in underfoot; `?photo=view_0012` deep link; N steps to the next; the studio strip stands you on a click | `locaish/viewer/template.html`, `viewer/stage.js`, `product/stage.py` | done 1 Nov, screenshot-verified (SwiftShader) |
 | The studio in black and white: tokens, no gradients, the scene first on the page | `locaish/product/pages.py`, `serve.py`, `viewer/stage.js` | done 1 Nov |
+| The studio set like a printed programme: serif titles, the picture first, one number, captions folded; phone width holds | `serve.py`, `product/pages.py`, `viewer/stage.js`, `viewer/template.html` | done 1 Nov PM, 625 tests |
+| SAM 3.1 masks decoded through Meta's `meta-sam-parser` (base85 over an arithmetic coder); boxes stand in without it | `locaish/meta/client.py` | done 1 Nov, verified on a live sample |
+| **SAM 3D Objects and SAM 3D Body deployed on Modal** (L40S / L4); the chair lifted from the dorm scan to a 263k-gaussian textured splat on its measured footprint in 87 s; a body to an 18k-vertex mesh in 84 s | `locaish/meta/modal_app.py`, `meta/sam3d.py`, `product/stage.py` | **live 1 Nov**, eight deploys to get the images to build (see commit b747cb2) |
+| Demo video tooling: script, DevTools screencast/poll recorder, ffmpeg assembler with cards and captions, Jamie (Premium) narration | `docs/demo/` | built 1 Nov; the cut is assembled from `docs/demo/timeline.json` |
 
 ### 1 November: the world, and why it is baked rather than trained
 
