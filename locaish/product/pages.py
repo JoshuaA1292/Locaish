@@ -22,60 +22,90 @@ MARK = ("<svg class='mark' viewBox='0 0 16 16' width='14' height='14' aria-hidde
 _SHELL_CSS = """
 :root { --bg:#000000; --surface:#0a0a0a; --surface2:#111111; --line:#1f1f1f; --line2:#2a2a2a; --ink:#ffffff;
         --dim:#9a9a9a; --mute:#5a5a5a; --accent:#ffffff; --accent-ink:#000000; --ok:#ffffff; --warn:#9a9a9a; --bad:#ffffff;
-        --sun:#ffffff; --render:#d9a86c; --r:12px; --r2:8px; --r3:6px;
-        --sans:-apple-system, "Helvetica Neue", Inter, sans-serif; --mono:ui-monospace, "SF Mono", Menlo, monospace; }
+        --sun:#ffffff; --render:#d9a86c; --r:12px; --r2:8px; --r3:6px; --gap:64px; --pad:24px; --measure:560px; --col:1280px; --edge:40px;
+        --sans:-apple-system, "Helvetica Neue", Inter, sans-serif;
+        --ui:system-ui, -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+        --serif:ui-serif, "Iowan Old Style", Charter, Georgia, serif;
+        --mono:ui-monospace, "SF Mono", Menlo, monospace; }
 * { box-sizing:border-box; } html,body { height:100%; }
-body { margin:0; background:var(--bg); color:var(--ink); -webkit-font-smoothing:antialiased; font:14px/1.5 var(--sans); }
+body { margin:0; background:var(--bg); color:var(--ink); -webkit-font-smoothing:antialiased; font:15px/1.55 var(--ui); }
 a { color:inherit; } .hidden { display:none !important; }
-main { max-width:1200px; margin:0 auto; padding:0 32px 120px; }
-#top { position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:20px; height:56px; margin:0 -32px 48px;
-       padding:0 32px; background:var(--bg); border-bottom:1px solid var(--line); }
-#top .brand { font-weight:600; font-size:15px; letter-spacing:-.01em; text-decoration:none; display:inline-flex; align-items:center; gap:8px; }
-#top nav { display:flex; gap:18px; margin-left:4px; } #top nav a { color:var(--dim); text-decoration:none; font-size:13px; }
+b, strong { font-weight:500; }
+main { max-width:var(--col); margin:0 auto; padding:0 var(--edge) 120px; }
+#top { position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:24px; height:56px; margin:0 calc(-1 * var(--edge)) 48px;
+       padding:0 var(--edge); background:var(--bg); border-bottom:1px solid var(--line); }
+#top .brand { font:500 15px/1 var(--ui); text-decoration:none; display:inline-flex; align-items:center; gap:8px; }
+#top nav { display:flex; gap:24px; } #top nav a { color:var(--dim); text-decoration:none; font-size:13px; }
 #top nav a:hover, #top nav a.on { color:var(--ink); }
-#top .right { margin-left:auto; display:flex; gap:10px; align-items:center; }
-h1 { font-size:32px; letter-spacing:-.025em; margin:0 0 8px; font-weight:600; line-height:1.2; }
-h2 { font-size:13px; font-weight:500; letter-spacing:.08em; text-transform:uppercase; color:var(--dim); margin:0 0 16px; }
-p.lead { color:var(--dim); font-size:15px; margin:0 0 40px; max-width:640px; }
-.card { background:var(--surface); border:1px solid var(--line); border-radius:var(--r); padding:24px; min-width:0; overflow-wrap:anywhere; }
-.btn { display:inline-flex; align-items:center; justify-content:center; background:var(--ink); color:var(--bg); border:1px solid var(--ink); border-radius:var(--r2);
-       padding:8px 16px; font:inherit; font-weight:600; font-size:13px; cursor:pointer; text-decoration:none; white-space:nowrap; }
+#top .right { margin-left:auto; display:flex; gap:20px; align-items:center; }
+h1 { font:400 36px/1.15 var(--serif); letter-spacing:-.01em; margin:0 0 8px; }
+h1[contenteditable] { outline:none; }
+h2 { font:500 13px/1.4 var(--ui); letter-spacing:0; text-transform:none; color:var(--dim); margin:0 0 16px; }
+h2.mt0 { margin:0; }
+p.lead { color:var(--dim); font-size:15px; margin:0 0 40px; max-width:var(--measure); }
+.card { background:transparent; border:0; border-top:1px solid var(--line); border-radius:0; padding:24px 0; min-width:0; overflow-wrap:anywhere; }
+.btn { display:inline-flex; align-items:center; justify-content:center; background:var(--ink); color:var(--bg); border:1px solid var(--ink); border-radius:var(--r3);
+       height:36px; padding:0 16px; font:500 13px/1 var(--ui); cursor:pointer; text-decoration:none; white-space:nowrap; }
 .btn:hover { background:#e6e6e6; border-color:#e6e6e6; } .btn:disabled { opacity:.4; cursor:default; }
-.btn.quiet { background:transparent; color:var(--ink); border:1px solid var(--ink); font-weight:500; }
+.btn.quiet { background:transparent; color:var(--ink); border:1px solid var(--ink); }
 .btn.quiet:hover { background:var(--surface2); }
-.btn.small { padding:5px 10px; font-size:12px; }
-input, textarea, select { width:100%; background:var(--bg); color:var(--ink); border:1px solid var(--line2); border-radius:var(--r2);
-       padding:8px 10px; font:inherit; font-size:13px; outline:none; }
+.btn.small { height:28px; padding:0 10px; font-size:12px; }
+.btn.block { display:flex; width:100%; height:48px; }
+input, textarea, select { width:100%; background:var(--bg); color:var(--ink); border:1px solid var(--line2); border-radius:var(--r3); height:36px;
+       padding:0 12px; font:400 14px/1.4 var(--ui); font-variant-numeric:tabular-nums; outline:none; max-width:100%; min-width:0; }
+textarea { height:auto; min-height:96px; padding:10px 12px; line-height:1.55; resize:vertical; }
 input:focus, textarea:focus, select:focus { border-color:var(--ink); }
 input::placeholder, textarea::placeholder { color:var(--mute); }
-input[type=checkbox] { accent-color:#fff; }
-label { display:block; color:var(--dim); font-size:12px; margin-bottom:4px; }
-.field { margin-bottom:14px; }
-.grid2 { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:16px; }
-.plans { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:16px; }
-@media (max-width:800px) { .grid2, .plans { grid-template-columns:minmax(0,1fr); } #top nav { display:none; } }
-.price { font:28px/1.2 var(--mono); font-weight:500; letter-spacing:-.02em; margin:0 0 12px; }
-.price .muted { font:13px/1.4 var(--sans); }
-.pill { font:11px/1.4 var(--mono); color:var(--dim); border:1px solid var(--line2); border-radius:var(--r3); padding:3px 8px; white-space:nowrap; }
+input[type=date]:invalid, input[type=time]:invalid { color:var(--mute); }
+input.empty::-webkit-datetime-edit, input.empty::-webkit-datetime-edit-text, input.empty::-webkit-datetime-edit-year-field, input.empty::-webkit-datetime-edit-month-field, input.empty::-webkit-datetime-edit-day-field { color:var(--mute); }
+input[type=date]::-webkit-calendar-picker-indicator { filter:invert(1); opacity:.5; }
+input[type=checkbox] { accent-color:#fff; width:auto; height:auto; }
+label { display:block; color:var(--dim); font-size:13px; margin-bottom:6px; }
+label.row { color:var(--dim); cursor:pointer; margin-top:10px; }
+label.pick { display:inline; color:var(--ink); cursor:pointer; text-decoration:underline; margin:0; }
+.field { margin-bottom:16px; }
+.grid2 { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:0 40px; align-items:start; }
+.plans { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:0 40px; }
+@media (max-width:800px) { .grid2, .plans { grid-template-columns:minmax(0,1fr); } #top nav { display:none; } main { padding:0 20px 96px; } #top { margin:0 -20px 32px; padding:0 20px; } }
+.price { font:400 48px/1.1 var(--serif); font-variant-numeric:tabular-nums; letter-spacing:-.01em; margin:0 0 12px; }
+.price .muted { font:13px/1.4 var(--ui); color:var(--dim); }
+.pill { font:12px/1.4 var(--ui); color:var(--dim); border:0; padding:0; white-space:nowrap; }
 .pill.on { color:var(--ink); }
-table { border-collapse:collapse; width:100%; font-size:13.5px; }
-th { text-align:left; color:var(--mute); font-weight:500; font-size:11px; letter-spacing:.06em; text-transform:uppercase; padding:8px 10px; border-bottom:1px solid var(--line); }
-td { padding:10px; border-bottom:1px solid var(--line); vertical-align:top; }
+table { border-collapse:collapse; width:100%; font-size:14px; }
+th { text-align:left; color:var(--dim); font-weight:500; font-size:13px; letter-spacing:0; text-transform:none; padding:8px 16px 8px 0; border-bottom:1px solid var(--line); }
+td { padding:12px 16px 12px 0; border-bottom:1px solid var(--line); vertical-align:top; }
 tr:last-child td { border-bottom:0; }
-td.num, th.num { text-align:right; font-family:var(--mono); font-variant-numeric:tabular-nums; }
-.v { display:inline-block; width:22px; height:22px; line-height:20px; text-align:center; border-radius:var(--r3); font-size:12px; font-weight:600; border:1px solid var(--line2); }
+td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; padding-right:0; }
+td a, .room .b a { text-decoration:underline; text-underline-offset:3px; text-decoration-color:var(--line2); }
+.v { display:inline-block; width:22px; height:22px; line-height:20px; text-align:center; border-radius:var(--r3); font-size:12px; font-weight:500; border:1px solid var(--line2); }
 .v.held { background:var(--ink); color:var(--bg); border-color:var(--ink); } .v.relaxed { color:var(--ink); } .v.missed { color:var(--mute); }
 .note { color:var(--dim); font-size:13px; } .err { color:var(--ink); }
-.muted { color:var(--mute); font-size:12px; }
-ul.note, ol.note { line-height:1.7; }
-.rooms { display:grid; grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); gap:12px; }
-.room { display:block; text-decoration:none; background:var(--bg); border:1px solid var(--line); border-radius:var(--r2); overflow:hidden; }
-.room img { width:100%; aspect-ratio:16/9; object-fit:cover; display:block; background:var(--bg); }
-.room .b { display:block; padding:10px 12px; } .room b { display:block; font-size:13.5px; font-weight:500; } .room span { color:var(--dim); font-size:12px; }
+.muted { color:var(--mute); font-size:13px; }
+.foot { max-width:60ch; font-size:14px; line-height:1.6; }
+.mt { margin-top:12px; } .mt2 { margin-top:26px; } .narrow { max-width:420px; margin:12vh auto 0; } .wide { max-width:720px; }
+.row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; } .row.between { justify-content:space-between; align-items:baseline; }
+.scroll { overflow-x:auto; }
+pre.note { white-space:pre-wrap; font:inherit; margin:0 0 12px; max-width:var(--measure); }
+.plain { text-decoration:none; }
+ul.note, ol.note { line-height:1.7; padding-left:20px; }
+.rooms { display:grid; grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); gap:24px; }
+.room { display:block; text-decoration:none; background:transparent; border:0; border-radius:0; }
+.room img { width:100%; aspect-ratio:16/9; object-fit:cover; display:block; background:var(--surface); }
+.room .b { display:block; padding:10px 0 0; } .room b { display:block; font-size:15px; font-weight:500; } .room span { color:var(--dim); font-size:13px; }
+.room .b.links { display:flex; gap:12px; padding-top:4px; font-size:13px; }
 .room .b a { color:var(--dim); } .room .b a:hover { color:var(--ink); }
+.prog .track { height:1px; background:var(--line); margin-top:8px; overflow:hidden; }
+.prog .track i { display:block; height:100%; width:0; background:var(--ink); transition:width .5s; }
 .toast { position:fixed; bottom:22px; left:50%; transform:translateX(-50%); background:var(--surface2); border:1px solid var(--line2);
-         border-radius:var(--r2); padding:9px 14px; font-size:13px; }
+         border-radius:var(--r3); padding:9px 14px; font-size:13px; }
 """
+
+
+# An empty date input shows its mask in the placeholder grey, not as a value.
+_DATE_JS = ("(function(){var f=function(i){i.classList.toggle('empty',!i.value);};"
+            "var all=function(){document.querySelectorAll('input[type=date],input[type=time]').forEach(f);};"
+            "['input','change'].forEach(function(ev){document.addEventListener(ev,function(e){var i=e.target;"
+            "if(i&&(i.type==='date'||i.type==='time'))f(i);});});all();})();")
 
 
 def _e(x: Any) -> str:
@@ -94,7 +124,7 @@ def shell(title: str, body: str, *, nav: str = "", script: str = "", extra_css: 
         f"<a href='/capture' {'class=on' if nav == 'capture' else ''}>Capture</a>"
         f"<a href='/pricing' {'class=on' if nav == 'pricing' else ''}>Pricing</a></nav>"
         "<div class='right'></div></div>"
-        f"{body}</main><script>{script}</script></body></html>"
+        f"{body}</main><script>{_DATE_JS}{script}</script></body></html>"
     )
 
 
@@ -105,7 +135,7 @@ def shell(title: str, body: str, *, nav: str = "", script: str = "", extra_css: 
 
 def projects_page(projects: list[dict], rooms: list[dict]) -> str:
     rows = "".join(
-        f"<tr><td><a href='/project/{_e(p['id'])}' style='text-decoration:none;font-weight:600'>{_e(p['title'])}</a>"
+        f"<tr><td><a href='/project/{_e(p['id'])}' class='plain'>{_e(p['title'])}</a>"
         f"<div class='muted'>{_e(p.get('client') or '')}</div></td>"
         f"<td>{_e(p.get('shoot_date') or '—')}</td><td class='num'>{len(p.get('locations') or [])}</td>"
         f"<td class='num'>{_e((p.get('updated_at') or '')[:10])}</td></tr>"
@@ -148,7 +178,7 @@ def project_page(project: dict, rooms: list[dict], *, share_base: str = "") -> s
     data = json.dumps({"project": project, "rooms": rooms}).replace("</", "<\\/")
     body = f"""
 <div id="phead"></div>
-<div class="grid2" style="align-items:start">
+<div class="grid2">
   <div class="card">
     <h2>The scene</h2>
     <div class="field"><label>Shot list, one per line (or paste the scene; the deterministic compare reads shot lines)</label>
@@ -158,7 +188,7 @@ def project_page(project: dict, rooms: list[dict], *, share_base: str = "") -> s
       <div class="field"><label>Client / agency</label><input id="client"></div>
     </div>
     <div class="field"><label>Notes</label><textarea id="notes" rows="2"></textarea></div>
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <div class="row">
       <button class="btn quiet" id="save">Save</button>
       <button class="btn" id="compare">Compare the rooms</button>
       <span class="note" id="status"></span>
@@ -167,28 +197,28 @@ def project_page(project: dict, rooms: list[dict], *, share_base: str = "") -> s
   <div class="card">
     <h2>Candidate rooms</h2>
     <div id="cands"></div>
-    <div style="display:flex;gap:8px;margin-top:10px">
+    <div class="row mt">
       <select id="addroom"></select><button class="btn quiet" id="addbtn">Add</button>
     </div>
-    <p class="muted" style="margin-top:10px">Every finished scan in this studio can be a candidate. Scan more from the <a href="/">Locations</a> page or the <a href="/capture">phone capture</a> page.</p>
+    <p class="muted mt">Every finished scan in this studio can be a candidate. Scan more from the <a href="/">Locations</a> page or the <a href="/capture">phone capture</a> page.</p>
   </div>
 </div>
-<section id="fitwrap" class="hidden" style="margin-top:26px">
+<section id="fitwrap" class="hidden mt2">
   <div class="card">
-    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap">
-      <h2 style="margin:0">Which rooms hold the scene</h2>
+    <div class="row between">
+      <h2 class="mt0">Which rooms hold the scene</h2>
       <span class="note" id="fitmeta"></span>
     </div>
-    <div style="overflow-x:auto;margin-top:10px"><table id="fit"></table></div>
-    <p class="muted" style="margin-top:10px"><span class="v held">✓</span> holds the shot with a clear sightline &nbsp;
+    <div class="scroll mt"><table id="fit"></table></div>
+    <p class="muted mt"><span class="v held">✓</span> holds the shot with a clear sightline &nbsp;
       <span class="v relaxed">~</span> holds it with a compromise (lens, height, or a window behind the subject) &nbsp;
       <span class="v missed">✗</span> no setup in the room frames it. Placed by the deterministic planner over every swept camera position; the same brief gives the same answer every time.</p>
   </div>
 </section>
-<section style="margin-top:26px">
+<section class="mt2">
   <div class="card">
-    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap">
-      <h2 style="margin:0">Send it to the director</h2>
+    <div class="row between">
+      <h2 class="mt0">Send it to the director</h2>
       <button class="btn small quiet" id="sharebtn">Create share link</button>
     </div>
     <p class="note" id="sharenote">A read-only page with the ranking and every room's location package. No account needed to open it; revoke it any time.</p>
@@ -203,7 +233,7 @@ const SHARE_BASE = """ + json.dumps(share_base) + """;
 function esc(t){ const d = document.createElement('div'); d.textContent = t == null ? '' : String(t); return d.innerHTML; }
 function roomName(id){ const r = byId[id]; if (!r) return id; return String(r.name || id).replace(/\\.[a-z0-9]+$/i,'').replace(/_+/g,' '); }
 function paintHead(){
-  $('phead').innerHTML = '<a href="/projects" class="muted" style="text-decoration:none">← Projects</a>'
+  $('phead').innerHTML = '<a href="/projects" class="muted plain">← Projects</a>'
     + '<h1 contenteditable="true" id="title" spellcheck="false">' + esc(P.title) + '</h1>'
     + '<p class="lead">' + (P.client ? esc(P.client) + ' · ' : '') + (P.shoot_date ? 'shooting ' + esc(P.shoot_date) : 'no shoot date yet — set one so the sun schedule is real')
     + ' · ' + P.locations.length + ' candidate room' + (P.locations.length === 1 ? '' : 's') + '</p>';
@@ -213,9 +243,9 @@ function paintCands(){
   const box = $('cands');
   if (!P.locations.length) { box.innerHTML = '<p class="note">No rooms yet. Add the scans you are considering for this job.</p>'; }
   else box.innerHTML = '<div class="rooms">' + P.locations.map(id => '<div class="room">'
-    + '<a href="/?job=' + id + '" style="text-decoration:none"><img loading="lazy" src="/thumb/' + id + '" alt="" onerror="this.remove()"><span class="b"><b>' + esc(roomName(id)) + '</b>'
+    + '<a href="/?job=' + id + '" class="plain"><img loading="lazy" src="/thumb/' + id + '" alt="" onerror="this.remove()"><span class="b"><b>' + esc(roomName(id)) + '</b>'
     + '<span>' + esc((byId[id] && byId[id].meta) || '') + '</span></span></a>'
-    + '<span class="b" style="display:flex;gap:12px;padding-top:0;font-size:12px"><a href="/package/' + id + (P.shoot_date ? '?date=' + P.shoot_date : '') + '" target="_blank">package</a>'
+    + '<span class="b links"><a href="/package/' + id + (P.shoot_date ? '?date=' + P.shoot_date : '') + '" target="_blank">package</a>'
     + '<a href="#" data-rm="' + id + '">remove</a></span></div>').join('') + '</div>';
   box.querySelectorAll('[data-rm]').forEach(a => a.onclick = e => { e.preventDefault(); save({remove_location: a.dataset.rm}); });
   const sel = $('addroom'); sel.innerHTML = '';
@@ -254,7 +284,7 @@ function paintFit(fit){
       return '<td><span class="v ' + f.verdict + '" title="' + esc(tip) + '">' + t + '</span></td>'; }).join('');
     const sun = r.sun ? (r.sun.windows_with_direct_sun + ' window' + (r.sun.windows_with_direct_sun === 1 ? '' : 's') + ' lit' + (r.sun.heading_assumed ? ' <span class="muted">(heading assumed)</span>' : '')) : '<span class="muted">no coordinates</span>';
     const trust = r.trust ? (r.trust.qa_verdict === 'pass' ? '<span class="pill on">measured</span>' : '<span class="pill">scale ±' + (r.trust.scale_confidence >= 0.8 ? '3' : r.trust.scale_confidence >= 0.6 ? '10' : '20') + '%</span>') : '';
-    h += '<tr><td class="num"><b>' + r.rank + '</b></td><td><a href="/?job=' + r.job_id + '" style="text-decoration:none;font-weight:600">' + esc(r.display_name || roomName(r.job_id)) + '</a><div class="muted">' + esc(r.summary || '') + '</div></td>'
+    h += '<tr><td class="num"><b>' + r.rank + '</b></td><td><a href="/?job=' + r.job_id + '" class="plain">' + esc(r.display_name || roomName(r.job_id)) + '</a><div class="muted">' + esc(r.summary || '') + '</div></td>'
       + cells + '<td class="num">' + (r.workable_floor_m2 != null ? r.workable_floor_m2 + ' m²' : '—') + '</td><td>' + esc((r.dollies_fit || []).filter(d => /dolly|PeeWee|Fisher/i.test(d)).length + ' of 3') + '</td>'
       + '<td>' + sun + '</td><td>' + trust + '</td><td><a href="/package/' + r.job_id + (fit.shoot_date ? '?date=' + fit.shoot_date : '') + '" target="_blank">package</a></td></tr>';
   });
@@ -292,7 +322,7 @@ def shared_project_page(project: dict, fit: dict | None, rooms: dict[str, dict],
             cells.append(f"<td><span class='v {f['verdict']}'>{sym}</span></td>")
         pkg = f"/s/{_e(token)}/package/{_e(r['job_id'])}"
         body_rows.append(
-            f"<tr><td class='num'><b>{r.get('rank')}</b></td><td><a href='{pkg}' style='text-decoration:none;font-weight:600'>{_e(r.get('display_name') or r['job_id'])}</a>"
+            f"<tr><td class='num'><b>{r.get('rank')}</b></td><td><a href='{pkg}' class='plain'>{_e(r.get('display_name') or r['job_id'])}</a>"
             f"<div class='muted'>{_e(r.get('summary'))}</div></td>{''.join(cells)}"
             f"<td class='num'>{_e(r.get('workable_floor_m2'))} m²</td><td><a href='{pkg}'>package</a> · <a href='/s/{_e(token)}/view/{_e(r['job_id'])}' target='_blank'>3D twin</a></td></tr>"
         )
@@ -300,16 +330,16 @@ def shared_project_page(project: dict, fit: dict | None, rooms: dict[str, dict],
         body_rows.append("<tr><td colspan='99' class='note'>The rooms have not been compared yet.</td></tr>")
         for jid in project.get("locations") or []:
             r = rooms.get(jid) or {}
-            body_rows.append(f"<tr><td></td><td><a href='/s/{_e(token)}/package/{_e(jid)}' style='font-weight:600'>{_e(r.get('name') or jid)}</a></td>"
+            body_rows.append(f"<tr><td></td><td><a href='/s/{_e(token)}/package/{_e(jid)}' class='plain'>{_e(r.get('name') or jid)}</a></td>"
                              f"<td colspan='98'><a href='/s/{_e(token)}/package/{_e(jid)}'>package</a> · <a href='/s/{_e(token)}/view/{_e(jid)}' target='_blank'>3D twin</a></td></tr>")
     body = f"""
 <h1>{_e(project['title'])}</h1>
 <p class="lead">{_e(project.get('client') or '')}{' · ' if project.get('client') else ''}{('shooting ' + _e(project['shoot_date'])) if project.get('shoot_date') else ''}</p>
 <div class="card">
   <h2>Which rooms hold the scene</h2>
-  {('<pre class="note" style="white-space:pre-wrap;font:inherit;margin:0 0 12px">' + _e(project.get('brief')) + '</pre>') if project.get('brief') else ''}
-  <div style="overflow-x:auto"><table><tr><th>#</th><th>Room</th>{head}<th class="num">Workable floor</th><th></th></tr>{''.join(body_rows)}</table></div>
-  <p class="muted" style="margin-top:10px"><span class="v held">✓</span> clear sightline &nbsp; <span class="v relaxed">~</span> with a compromise &nbsp; <span class="v missed">✗</span> not possible in this room. Measured from phone captures by Locaish; open a package for the numbers and their error bars.</p>
+  {('<pre class="note">' + _e(project.get('brief')) + '</pre>') if project.get('brief') else ''}
+  <div class="scroll"><table><tr><th>#</th><th>Room</th>{head}<th class="num">Workable floor</th><th></th></tr>{''.join(body_rows)}</table></div>
+  <p class="muted mt"><span class="v held">✓</span> clear sightline &nbsp; <span class="v relaxed">~</span> with a compromise &nbsp; <span class="v missed">✗</span> not possible in this room. Measured from phone captures by Locaish; open a package for the numbers and their error bars.</p>
 </div>
 """
     return shell(f"{project['title']} · shared", body)
@@ -334,26 +364,26 @@ def pricing_page(*, stripe_scout: str = "", stripe_production: str = "", contact
     <h2>Scout</h2>
     <div class="price">$29<span class="muted"> / month</span></div>
     <p class="note">Free for your first six months, or $29 for a single package with no subscription. For freelance scouts and location managers: a better deliverable than the next scout's folder of JPEGs.</p>
-    <ul class="note" style="padding-left:18px"><li>10 location packages a month</li><li>Sun on the shoot date, through every window</li><li>Share links the director opens on a phone</li><li>Your personal library</li></ul>
+    <ul class="note"><li>10 location packages a month</li><li>Sun on the shoot date, through every window</li><li>Share links the director opens on a phone</li><li>Your personal library</li></ul>
     {cta(stripe_scout, "Start free", "scout")}
   </div>
   <div class="card" style="border-color:var(--ink)">
     <h2>Production</h2>
     <div class="price">$249<span class="muted"> / job, or $499 / month</span></div>
     <p class="note">For production companies bidding jobs, billed to the job like the scout is: up to eight candidate rooms ranked against the shot list, packages and share links for 60 days. Unlimited jobs at $499 a month.</p>
-    <ul class="note" style="padding-left:18px"><li>Projects: every candidate room ranked against the brief</li><li>Coverage planning with rendered frames</li><li>Company library and shot search</li><li>Team passcode, private deployment</li></ul>
+    <ul class="note"><li>Projects: every candidate room ranked against the brief</li><li>Coverage planning with rendered frames</li><li>Company library and shot search</li><li>Team passcode, private deployment</li></ul>
     {cta(stripe_production, "Subscribe", "production")}
   </div>
   <div class="card">
     <h2>Capture service</h2>
     <div class="price">$350<span class="muted"> / location</span></div>
     <p class="note">We send a trained scout with a LiDAR phone and deliver the package within 24 hours. The fastest way to find out whether this is worth it to you.</p>
-    <ul class="note" style="padding-left:18px"><li>Los Angeles, New York, London</li><li>Package, twin, and coverage plan</li><li>$750 for a multi-room location</li></ul>
+    <ul class="note"><li>Los Angeles, New York, London</li><li>Package, twin, and coverage plan</li><li>$750 for a multi-room location</li></ul>
     <a class="btn quiet" href="#pilot" data-plan="capture">Book a capture</a>
   </div>
 </div>
-<section id="pilot" style="margin-top:30px">
-  <div class="card" style="max-width:720px">
+<section id="pilot" class="mt2">
+  <div class="card wide">
     <h2>Design-partner pilot</h2>
     <p class="note">Ten companies, ninety days, free Production plan. In return: one captured room a week and a fifteen-minute call every two weeks. We build what you block on.</p>
     <form id="lead">
@@ -369,7 +399,7 @@ def pricing_page(*, stripe_scout: str = "", stripe_production: str = "", contact
     </form>
   </div>
 </section>
-<p class="muted" style="margin-top:22px">Every number Locaish produces traces to a measurement, a solar ephemeris or a catalogue dimension, and every twin grades its own accuracy. We do not replace the final visit; we choose which room gets it.{(' Questions: <a href="mailto:' + _e(contact_email) + '">' + _e(contact_email) + '</a>') if contact_email else ''}</p>
+<p class="muted mt2 foot">Every number Locaish produces traces to a measurement, a solar ephemeris or a catalogue dimension, and every twin grades its own accuracy. We do not replace the final visit; we choose which room gets it.{(' Questions: <a href="mailto:' + _e(contact_email) + '">' + _e(contact_email) + '</a>') if contact_email else ''}</p>
 """
     script = """
 document.querySelectorAll('[data-plan]').forEach(a => a.onclick = () => { document.querySelector('[name=plan]').value = a.dataset.plan; });
@@ -397,7 +427,7 @@ def capture_page(*, showcase: bool = False) -> str:
 <div class="grid2">
   <div class="card">
     <h2>The recipe</h2>
-    <ol class="note" style="padding-left:20px;line-height:1.7">
+    <ol class="note">
       <li><b>Hold the phone at chest height</b>, landscape, and keep it there. The camera height is one of the scale anchors.</li>
       <li><b>Walk the whole room slowly</b>, along the walls, keeping every wall in frame as you pass it. Turn corners with the camera, not your feet.</li>
       <li><b>Include a door</b>, fully, top to bottom. A door leaf is the same height almost everywhere on earth and it is the tightest anchor we have.</li>
@@ -410,12 +440,12 @@ def capture_page(*, showcase: bool = False) -> str:
     <h2>Film it now</h2>
     {"<p class='note'>Uploads are off on this gallery. Run the studio locally or on your own deployment to scan.</p>" if showcase else '''
     <p class="note">Tap to open the camera, film the walk, and the upload starts when you stop. Keep this page open; the report is ready in about fifteen minutes.</p>
-    <label class="btn" style="display:block;text-align:center;padding:16px" for="cam">Open the camera</label>
+    <label class="btn block" for="cam">Open the camera</label>
     <input id="cam" type="file" accept="video/*" capture="environment" class="hidden">
-    <p class="note" style="margin-top:12px">Or <label for="pick" style="color:var(--ink);cursor:pointer;display:inline;text-decoration:underline">choose a file</label> already on this phone (video, or a Polycam / Scaniverse export).</p>
+    <p class="note mt">Or <label for="pick" class="pick">choose a file</label> already on this phone (video, or a Polycam / Scaniverse export).</p>
     <input id="pick" type="file" accept="video/*,.ply,.obj,.glb,.gltf,.stl,.mov,.mp4,.mkv,.twin" class="hidden">
-    <label style="display:flex;gap:8px;align-items:center;margin-top:10px;cursor:pointer"><input type="checkbox" id="usegeo" checked style="width:auto"> use this phone's location so the sun schedule is real</label>
-    <div id="prog" class="hidden" style="margin-top:14px"><div id="stage" style="font-weight:600"></div><div style="height:3px;background:var(--line);border-radius:2px;margin-top:8px;overflow:hidden"><i id="bar" style="display:block;height:100%;width:0;background:var(--ink);transition:width .5s"></i></div><div id="done" class="note" style="margin-top:10px"></div></div>
+    <label class="row"><input type="checkbox" id="usegeo" checked> use this phone's location so the sun schedule is real</label>
+    <div id="prog" class="hidden prog mt"><div id="stage"></div><div class="track"><i id="bar"></i></div><div id="done" class="note mt"></div></div>
     '''}
   </div>
 </div>
@@ -462,7 +492,7 @@ $('pick').onchange = () => go($('pick').files[0]);
 
 def login_page(*, error: str = "", next_url: str = "/") -> str:
     body = f"""
-<div style="max-width:420px;margin:12vh auto 0">
+<div class="narrow">
   <div class="card">
     <h2>This studio is private</h2>
     <p class="note">Enter the team passcode. Share links sent from here open without one.</p>

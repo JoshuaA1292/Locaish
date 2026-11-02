@@ -94,7 +94,7 @@ def ws_url(port: int) -> str:
 
 
 async def run(url: str, out: Path, actions: list[dict], seconds: float, width: int, height: int,
-              headed: bool, port: int, settle: float, quality: int) -> Path:
+              headed: bool, port: int, settle: float, quality: int, every_nth: int = 1) -> Path:
     out.mkdir(parents=True, exist_ok=True)
     for f in out.glob("f_*.jpg"):
         f.unlink()
@@ -113,7 +113,7 @@ async def run(url: str, out: Path, actions: list[dict], seconds: float, width: i
             await asyncio.sleep(settle)
             frames: list[tuple[float, Path]] = []
             await cdp.call("Page.startScreencast", format="jpeg", quality=quality, maxWidth=width,
-                           maxHeight=height, everyNthFrame=1)
+                           maxHeight=height, everyNthFrame=max(1, int(every_nth)))
             t0 = time.monotonic()
             todo = sorted(actions, key=lambda a: a["at"])
             holds: list[tuple[float, str]] = []           # (release at, key)
@@ -205,11 +205,13 @@ def main() -> None:
     ap.add_argument("--port", type=int, default=9333)
     ap.add_argument("--settle", type=float, default=4.0, help="seconds to wait after navigation before recording")
     ap.add_argument("--quality", type=int, default=90)
+    ap.add_argument("--every-nth", type=int, default=1, help="keep every nth repaint (time-lapses)")
     a = ap.parse_args()
     actions = json.loads(Path(a.actions).read_text()) if a.actions else []
     if shutil.which("ffmpeg") is None:
         sys.exit("ffmpeg is needed")
-    asyncio.run(run(a.url, Path(a.out), actions, a.seconds, a.width, a.height, a.headed, a.port, a.settle, a.quality))
+    asyncio.run(run(a.url, Path(a.out), actions, a.seconds, a.width, a.height, a.headed, a.port, a.settle, a.quality,
+                    a.every_nth))
 
 
 if __name__ == "__main__":

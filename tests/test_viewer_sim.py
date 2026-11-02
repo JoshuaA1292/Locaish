@@ -272,7 +272,8 @@ def test_template_stands_the_walker_where_a_person_could():
 def test_template_labels_the_world_a_render():
     t = _template()
     assert 'id="worldtag"' in t
-    assert 'b.textContent = "a render:"' in t
+    # round 3 of the restyle: the label is the one word; the hour and date move to the tag's title
+    assert 'b.textContent = "a render"' in t
     assert '"the room as it will be at " + worldClock(WORLD) + " on " + (WORLD.date' in t
     assert "function worldClock(w)" in t and "w.clock" in t
     # and the side panel says so too

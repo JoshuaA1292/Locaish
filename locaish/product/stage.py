@@ -209,7 +209,10 @@ FINISH_WORKERS = 4
 WORLD_VIEWS = 60
 WORLD_STEPS = 6000
 SIM_FINISH_EVERY = 12
-SIM_CAPTION_PX = 40
+SIM_CAPTION_PX = 22
+# The simulator draws bodies in one quiet grey so the measured move is black and
+# white like everything else on the page; the palette stays for the viewer's layer.
+SIM_BODY_GREY = 0.9
 SIM_FIGURE_CAP = 3000
 
 
@@ -917,6 +920,9 @@ class Stage:
 
         sim = _engine()
         twin = self.studio.twin_of(job)
+        # The cast (the figures before the moved pieces) in one quiet grey.
+        n_cast = max(0, len(figures) - len(drawn))
+        figures = [_grey_figure(f) if i < n_cast else f for i, f in enumerate(figures)]
         im = None
         if hasattr(sim, "render_frame"):
             try:
@@ -947,7 +953,7 @@ class Stage:
         canvas = Image.new("RGB", (W, H + SIM_CAPTION_PX), (14, 16, 19))
         canvas.paste(im, (0, 0))
         d = ImageDraw.Draw(canvas)
-        font = ImageFont.load_default()
+        font = _hud_font()
         fps = _ev_fps({}, tl)
         t = float(frame.get("t") or 0.0)
         size = str(frame.get("shot_size") or "")
@@ -957,10 +963,11 @@ class Stage:
                 + f"  dof {_dof_text(frame.get('dof'))}"
                 + f"  pan {float(frame.get('pan_deg') or 0):.0f}  tilt {float(frame.get('tilt_deg') or 0):.0f}"
                 + (f"  {float(frame.get('speed_mps') or 0):.2f} m/s" if frame.get("speed_mps") else ""))
-        d.text((6, H + 4), line, fill=(232, 234, 237), font=font)
         probs = [str(p) for p in frame.get("problems") or []]
         if probs:
-            d.text((6, H + 22), "; ".join(probs)[:160], fill=(224, 112, 122), font=font)
+            line += "   ! " + "; ".join(probs)[:120]
+        # a small readout at sixty per cent white: an instrument's caption, not a title
+        d.text((6, H + 6), line, fill=(153, 153, 153), font=font)
         return canvas
 
     def sim_frame_png(self, job, sim_id: str, t: float, *, width_px: int = 640) -> bytes:
@@ -2068,6 +2075,41 @@ def _sensor_key(sensor) -> str:
              "s35": "super35", "super-35": "super35", "mft": "m43", "phone": "phone-main"}
     s = alias.get(s, s)
     return s if s in optics.SENSORS else optics.DEFAULT_SENSOR
+
+
+def _hud_font(size: int = 9):
+    """A small monospace face for the burnt-in readout; PIL's default when the
+    system has none."""
+    from PIL import ImageFont
+
+    for path in ("/System/Library/Fonts/Menlo.ttc", "/System/Library/Fonts/SFNSMono.ttf",
+                 "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"):
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:  # noqa: BLE001 - try the next face
+            continue
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:  # very old Pillow
+        return ImageFont.load_default()
+
+
+def _grey_figure(fig):
+    """The same body in one grey (SIM_BODY_GREY at the brightest face), its
+    shading kept: the measured move is black and white."""
+    from ..film import render
+
+    try:
+        rgb = np.full_like(np.asarray(fig.rgb, dtype=np.float32), SIM_BODY_GREY)
+        mesh_rgb = None
+        if getattr(fig, "mesh_rgb", None) is not None:
+            mr = np.asarray(fig.mesh_rgb, dtype=np.float32).reshape(-1, 3)
+            lum = mr @ np.array([0.299, 0.587, 0.114], dtype=np.float32)
+            lum = lum / max(float(lum.max()), 1e-6) * SIM_BODY_GREY
+            mesh_rgb = np.repeat(lum[:, None], 3, axis=1)
+        return render.Figure(fig.xyz, rgb, fig.radius_m, fig.cov, fig.opacity, fig.label, fig.mesh, mesh_rgb)
+    except Exception:  # noqa: BLE001 - a figure the recolour cannot read is drawn as it is
+        return fig
 
 
 def _sim_camera(frame: dict, tl: dict, width_px: int):

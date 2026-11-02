@@ -82,7 +82,9 @@ def test_primary_is_white_and_the_render_label_is_warm():
     assert re.search(r"\.st_tag \{[^}]*color: var\(--render\)", css)
     assert re.search(r"\.st_stamp \{[^}]*color: var\(--render\)", css)
     assert re.search(r"\.st_strip img\.active \{[^}]*border-color: var\(--ink\)", css)
-    assert re.search(r"\.st_framerow\.has_fin \{ grid-template-columns: minmax\(0, 1fr\) 300px; \}", css), "the finished frame leads, the measured one small beside it"
+    # the finished frame takes the whole column; the measurement it came from is a small inset in its corner
+    assert re.search(r"\.st_framerow\.has_fin \{ position: relative; \}", css)
+    assert re.search(r"\.st_framerow\.has_fin #st_finished \{[^}]*position: absolute;[^}]*width: 220px;", css), "the finished frame leads, the measured one small inset in it"
 
 
 # ---------------------------------------------------------------------------

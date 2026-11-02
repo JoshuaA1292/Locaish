@@ -1163,11 +1163,12 @@ def floor_plan_svg(
         t = t / max(float(np.linalg.norm(t)), 1e-9)
         a = c[:2] - t * op.width / 2
         b = c[:2] + t * op.width / 2
-        colour = "#6ea8fe" if op.kind == "window" else "#e5c07b"
+        # one ink: a window is the brighter bar, a door the quieter one
+        colour, alpha = "#ffffff", ("0.7" if op.kind == "window" else "0.4")
         parts.append(f'<line x1="{X(a[0]):.1f}" y1="{Y(a[1]):.1f}" x2="{X(b[0]):.1f}" y2="{Y(b[1]):.1f}" '
-                     f'stroke="{colour}" stroke-width="6" stroke-linecap="butt"/>')
+                     f'stroke="{colour}" stroke-opacity="{alpha}" stroke-width="6" stroke-linecap="butt"/>')
         lx, ly = c[:2] + n * 0.25
-        parts.append(f'<text x="{X(lx):.1f}" y="{Y(ly):.1f}" fill="{colour}" font-size="11" '
+        parts.append(f'<text x="{X(lx):.1f}" y="{Y(ly):.1f}" fill="{colour}" fill-opacity="{alpha}" font-size="11" '
                      f'text-anchor="middle">{op.kind} {j + 1}</text>')
     # fixtures
     for fx in s.fixtures:
@@ -1189,9 +1190,9 @@ def floor_plan_svg(
         l = (cx + reach * math.cos(yaw - half), cy + reach * math.sin(yaw - half))
         r = (cx + reach * math.cos(yaw + half), cy + reach * math.sin(yaw + half))
         parts.append(f'<path d="M{X(cx):.1f},{Y(cy):.1f} L{X(l[0]):.1f},{Y(l[1]):.1f} A{reach * scale:.1f},{reach * scale:.1f} 0 0 0 '
-                     f'{X(r[0]):.1f},{Y(r[1]):.1f} Z" fill="#6ea8fe" fill-opacity="0.10" stroke="#6ea8fe" stroke-opacity="0.5" stroke-width="1"/>')
+                     f'{X(r[0]):.1f},{Y(r[1]):.1f} Z" fill="#ffffff" fill-opacity="0.08" stroke="#ffffff" stroke-opacity="0.5" stroke-width="1"/>')
         parts.append(f'<line x1="{X(cx):.1f}" y1="{Y(cy):.1f}" x2="{X(st["subj_x"]):.1f}" y2="{Y(st["subj_y"]):.1f}" '
-                     f'stroke="#6ea8fe" stroke-width="1" stroke-dasharray="3 3" stroke-opacity="0.8"/>')
+                     f'stroke="#ffffff" stroke-width="1" stroke-dasharray="3 3" stroke-opacity="0.6"/>')
     # Shots that share a camera position share one mark, labelled with all
     # their numbers: two setups on the same spot are the norm (the master and
     # the two-shot from the corner), and stacked circles hide each other.
@@ -1207,7 +1208,7 @@ def floor_plan_svg(
         cx, cy = float(st["cam_x"]), float(st["cam_y"])
         nums = ",".join(str(m.shot.number) for m in members)
         r = 11 if len(members) == 1 else 13 + 3 * min(len(members) - 1, 3)
-        parts.append(f'<circle cx="{X(cx):.1f}" cy="{Y(cy):.1f}" r="{r}" fill="#0e1013" stroke="#6ea8fe" stroke-width="2.5"/>')
+        parts.append(f'<circle cx="{X(cx):.1f}" cy="{Y(cy):.1f}" r="{r}" fill="#0e1013" stroke="#ffffff" stroke-width="2.5"/>')
         parts.append(f'<text x="{X(cx):.1f}" y="{Y(cy) + 4:.1f}" fill="#e8eaed" font-size="{11 if len(nums) < 4 else 9}" '
                      f'font-weight="700" text-anchor="middle">{nums}</text>')
         lenses = sorted({int(m.setup["focal_mm"]) for m in members})
@@ -1217,10 +1218,10 @@ def floor_plan_svg(
 
     # subject marks, on top: an actor's mark must never hide under a camera
     for name, (mx, my) in (plan.marks.items() if plan is not None else []):
-        parts.append(f'<circle cx="{X(mx):.1f}" cy="{Y(my):.1f}" r="9" fill="#e5c07b" fill-opacity="0.95"/>')
+        parts.append(f'<circle cx="{X(mx):.1f}" cy="{Y(my):.1f}" r="9" fill="#ffffff" fill-opacity="0.9"/>')
         parts.append(f'<text x="{X(mx):.1f}" y="{Y(my) + 4:.1f}" fill="#0e1013" font-size="10" font-weight="700" '
                      f'text-anchor="middle">{_esc(name[:3])}</text>')
-        parts.append(f'<text x="{X(mx):.1f}" y="{Y(my) - 12:.1f}" fill="#e5c07b" font-size="10" '
+        parts.append(f'<text x="{X(mx):.1f}" y="{Y(my) - 12:.1f}" fill="#e8eaed" font-size="10" '
                      f'text-anchor="middle">{_esc(name)}</text>')
 
     # scale bar and legend

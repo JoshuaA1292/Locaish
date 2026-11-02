@@ -241,63 +241,64 @@ def _hhmm(h: float) -> str:
 
 _CSS = """
 :root { --ink:#15181d; --dim:#5b6470; --mute:#8a94a3; --line:#e4e7eb; --paper:#fff; --soft:#f5f6f8;
-        --accent:#2f6fed; --ok:#1f9d5a; --warn:#b7791f; --bad:#c23b4a; --sun:#f3b63c; }
+        --accent:#15181d; --ok:#1f9d5a; --warn:#b7791f; --bad:#c23b4a; --sun:#f3b63c; --render:#b8853f;
+        --ui:system-ui, -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+        --serif:ui-serif, "Iowan Old Style", Charter, Georgia, serif; }
 * { box-sizing: border-box; }
-body { margin:0; background:#eceef1; color:var(--ink);
-       font: 14px/1.55 "Inter", ui-sans-serif, -apple-system, "SF Pro Text", system-ui, sans-serif; }
-a { color: var(--accent); }
+body { margin:0; background:var(--soft); color:var(--ink); font: 15px/1.55 var(--ui); }
+a { color: var(--ink); text-decoration: underline; text-underline-offset: 2px; }
 .sheet { max-width: 900px; margin: 24px auto; background: var(--paper); padding: 40px 44px 48px;
-         box-shadow: 0 10px 40px rgba(0,0,0,.08); border-radius: 6px; }
+         border: 1px solid var(--line); border-radius: 0; }
 header { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; margin-bottom: 18px; }
-header h1 { font-size: 26px; letter-spacing:-.02em; margin: 0 0 4px; }
+header h1 { font: 400 36px/1.1 var(--serif); letter-spacing:-.01em; margin: 0 0 4px; }
 header .sub { color: var(--dim); font-size: 13px; }
-header .brand { display:flex; align-items:center; gap:8px; color:var(--dim); font-size:12px; font-weight:600;
+header .brand { display:flex; align-items:center; gap:8px; color:var(--dim); font-size:12px; font-weight:500;
                 white-space:nowrap; text-decoration:none; }
 .hero { display:grid; grid-template-columns: 1.3fr 1fr; gap: 18px; margin: 10px 0 22px; }
-.hero img { width:100%; aspect-ratio: 16/9; object-fit: cover; border-radius: 8px; background:#111; display:block; }
+.hero img { width:100%; aspect-ratio: 16/9; object-fit: cover; border-radius: 0; background:#111; display:block; }
 .facts { display:grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; align-content:start; }
-.fact b { display:block; font-size: 20px; font-weight: 600; letter-spacing:-.01em; }
+.fact b { display:block; font: 400 24px/1.2 var(--serif); letter-spacing:-.01em; font-variant-numeric: tabular-nums; }
 .fact span { color: var(--dim); font-size: 12px; }
-.trust { border-left: 4px solid var(--accent); background: var(--soft); padding: 12px 14px; border-radius: 6px; margin: 0 0 22px; }
+.trust { border-left: 2px solid var(--accent); background: var(--soft); padding: 12px 14px; border-radius: 0; margin: 0 0 22px; }
 .trust.approximate, .trust.proportional, .trust.unknown { border-color: var(--warn); }
 .trust.measured { border-color: var(--ok); }
 .trust b { font-size: 13px; }
 .trust ul { margin: 6px 0 0 18px; padding:0; color: var(--dim); font-size: 12.5px; }
-h2 { font-size: 15px; letter-spacing:.04em; text-transform: uppercase; color: var(--dim); margin: 28px 0 10px;
+h2 { font: 500 11px/1.2 var(--ui); letter-spacing:.08em; text-transform: uppercase; color: var(--mute); margin: 28px 0 10px;
      padding-bottom: 6px; border-bottom: 1px solid var(--line); }
 table { border-collapse: collapse; width: 100%; font-size: 13px; }
 th { text-align:left; color: var(--mute); font-weight: 500; font-size: 11.5px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
 td { padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
-.tag { display:inline-block; font-size: 11px; padding: 1px 7px; border-radius: 999px; border:1px solid var(--line); color: var(--dim); }
+.tag { display:inline-block; font-size: 11px; padding: 1px 7px; border-radius: 0; border:1px solid var(--line); color: var(--dim); }
 .tag.ok { color: var(--ok); border-color: #bfe6cf; } .tag.warn { color: var(--warn); border-color: #efd9a8; } .tag.bad { color: var(--bad); border-color: #f0c0c6; }
 .sunrow { display:grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
 .sunrow figure { margin:0; }
-.sunrow figure svg { width:100%; height:auto; border-radius: 6px; display:block; }
+.sunrow figure svg { width:100%; height:auto; border-radius: 0; display:block; }
 .sunrow figcaption { font-size: 12px; color: var(--dim); margin-top: 6px; }
 .sunrow figcaption b { color: var(--ink); }
 .kv { display:grid; grid-template-columns: 140px 1fr; gap: 6px 14px; font-size: 13px; }
 .kv dt { color: var(--mute); } .kv dd { margin:0; white-space: pre-wrap; }
 .shots { display:grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
-.shot img { width:100%; aspect-ratio: 16/9; object-fit: cover; border-radius: 6px; background:#111; display:block; }
+.shot img { width:100%; aspect-ratio: 16/9; object-fit: cover; border-radius: 0; background:#111; display:block; }
 .shot b { display:block; font-size: 13px; margin-top: 6px; }
 .shot span { color: var(--dim); font-size: 12px; }
-.planimg svg { width:100%; height:auto; border-radius: 6px; display:block; }
+.planimg svg { width:100%; height:auto; border-radius: 0; display:block; }
 .caveats { color: var(--dim); font-size: 12.5px; }
 .caveats li { margin-bottom: 4px; }
 footer { margin-top: 34px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--mute); font-size: 11.5px;
          display:flex; justify-content:space-between; gap: 12px; flex-wrap: wrap; }
 .actions { display:flex; gap: 8px; justify-content:flex-end; max-width: 900px; margin: 0 auto 8px; padding: 0 4px; }
-.actions a, .actions button { font: inherit; font-size: 13px; padding: 7px 12px; border-radius: 8px; border: 1px solid #cfd4db;
+.actions a, .actions button { font: inherit; font-size: 13px; padding: 7px 12px; border-radius: 6px; border: 1px solid var(--ink);
                  background: #fff; color: var(--ink); text-decoration:none; cursor:pointer; }
-.actions .primary { background: var(--accent); color:#fff; border-color: var(--accent); }
+.actions .primary { background: var(--ink); color:#fff; border-color: var(--ink); }
 .hours { display:flex; gap:6px; margin: 0 0 10px; }
-.hours button { font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 999px; border:1px solid var(--line); background:#fff; cursor:pointer; }
+.hours button { font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 6px; border:1px solid var(--line); background:#fff; cursor:pointer; }
 .hours button[aria-pressed="true"] { background: var(--sun); border-color: var(--sun); }
 .legend { font-size: 12px; color: var(--dim); margin-top: 8px; }
 .legend i { display:inline-block; width: 12px; height: 12px; background: rgba(255,207,90,.6); border:1px solid #ffb020; vertical-align: -2px; margin-right: 4px; }
 @media (max-width: 700px) { .sheet { padding: 22px 16px; margin: 0; border-radius:0; } .hero, .sunrow, .shots { grid-template-columns: 1fr; } .kv { grid-template-columns: 1fr; } }
-@media print { body { background:#fff; } .sheet { box-shadow:none; margin:0; max-width:none; padding: 0; } .actions { display:none; }
+@media print { body { background:#fff; } .sheet { border:0; margin:0; max-width:none; padding: 0; } .actions { display:none; }
                h2 { break-after: avoid; } .sunrow, .shots, table { break-inside: avoid; } a { color: inherit; text-decoration: none; } }
 """
 
@@ -476,7 +477,7 @@ def render_html(pkg: dict[str, Any], *, image_base: str = "", print_only: bool =
         add("<div class='shots'>")
         for s in plan["shots"]:
             img = (f"<img src='{_e(image_base)}/plan-image/{_e(pkg['job_id'])}/{_e(plan['plan_id'])}/{_e(s['frame'])}' alt=''>"
-                   if s.get("frame") else "<div style='aspect-ratio:16/9;background:#f5f6f8;border-radius:6px'></div>")
+                   if s.get("frame") else "<div style='aspect-ratio:16/9;background:#f5f6f8'></div>")
             meta = (f"{s['focal_mm']:.0f} mm · {s['distance_m']:.1f} m · h {s['cam_z']:.2f} m"
                     if s.get("held") and s.get("focal_mm") else "no clear setup in this room")
             add(f"<div class='shot'>{img}<b>#{s['number']} · {_e(s['size'])} of {_e(s['subject'])}</b><span>{_e(meta)}</span></div>")

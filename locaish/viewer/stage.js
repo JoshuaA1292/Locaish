@@ -26,11 +26,20 @@ function initStage(id) {
   $('st_example_prose').onclick = e => { e.preventDefault(); $('st_scene').value = proseExample(); };
   $('st_scrub').oninput = () => showFrame(Number($('st_scrub').value));
   $('st_play').onclick = togglePlay;
-  const d = $('d_shoot_date'); if (d && d.value) $('st_date').value = d.value;
+  const d = $('d_shoot_date'); $('st_date').value = (d && d.value) || new Date().toISOString().slice(0, 10);
+  ['st_date', 'st_start', 'st_setup'].forEach(k => { $(k).oninput = paintStageWhen; $(k).onchange = paintStageWhen; });
+  paintStageWhen();
+  if (typeof dateEmpty === 'function') dateEmpty();
   fetch('/stage-status/' + id).then(r => r.json()).then(s => { stStatus = s || {}; paintStatus(); if (typeof initDirect === 'function') initDirect(); }).catch(() => {});
   loadCast(); loadPieces(); loadRuns();
   if (typeof initSim === 'function') initSim(id);
   if (typeof initWorld === 'function') initWorld(id);
+}
+
+// The fold under the scene is closed; its summary says what the rehearsal will assume.
+function paintStageWhen() {
+  const el = $('st_when'); if (!el) return;
+  el.textContent = ($('st_date').value || 'no date') + ' \u00b7 first frame ' + ($('st_start').value || '09:00') + ' \u00b7 ' + (Number($('st_setup').value) || 25) + ' min a setup';
 }
 
 function paintStatus() {
@@ -185,14 +194,14 @@ function loadRuns() {
   fetch('/rehearsals/' + stJob).then(r => r.json()).then(r => {
     stRuns = r.rehearsals || [];
     const box = $('st_prev');
-    if (!stRuns.length) { box.classList.add('hidden'); return; }
+    if (!stRuns.length) { box.classList.add('hidden'); const fold = $('st_fold'); if (fold) fold.open = true; return; }
     box.classList.remove('hidden');
     box.innerHTML = '<span class="dim">earlier:</span> ' + stRuns.filter(x => x.state === 'done').map(x =>
       '<a href="#" data-run="' + x.rehearsal_id + '">' + esc(x.title) + ' · ' + x.shots + ' setups · ' + Math.round(x.duration_s || 0) + ' s</a>').join(' ');
-    box.querySelectorAll('[data-run]').forEach(a => a.onclick = e => { e.preventDefault(); openRun(a.dataset.run); });
-    // Coming back to a room shows its last rehearsal without a click.
+    box.querySelectorAll('[data-run]').forEach(a => a.onclick = e => { e.preventDefault(); openRun(a.dataset.run, true); });
+    // Coming back to a room shows its last rehearsal without a click, and without scrolling to it.
     const done = stRuns.filter(x => x.state === 'done');
-    if (!stCurrent && done.length) openRun(done[done.length - 1].rehearsal_id);
+    if (!stCurrent && done.length) openRun(done[done.length - 1].rehearsal_id, false);
   }).catch(() => {});
 }
 
@@ -227,25 +236,28 @@ function listenRehearsal(rid) {
     else if (m.kind === 'error') { settled = true; es.close(); rehearsalFail(m.text); }
     else if (m.kind === 'done') {
       settled = true; es.close(); stBusy = false; $('st_run').disabled = false; stLog('done'); loadRuns();
-      openRun(rid).then(() => { if (stStatus.finish && stCast.length && autoFinish()) startFinishAll(false); });
+      openRun(rid, true).then(() => { if (stStatus.finish && stCast.length && autoFinish()) startFinishAll(false); });
     }
   };
   es.onerror = () => { es.close(); if (!settled) setTimeout(() => { if (!settled) listenRehearsal(rid); }, 2000); };
 }
 
-function openRun(rid) {
+function openRun(rid, scroll) {
   return fetch('/rehearsal/' + stJob + '/' + rid).then(r => r.json()).then(r => {
     if (r.error) { stLog(r.error, 'error'); return; }
     stCurrent = {id: rid, data: r};
     if (stFinishRun && stFinishRun.rid !== rid) stFinishText = '';
-    renderRun();
+    renderRun(scroll);
   });
 }
 
-function renderRun() {
+function renderRun(scroll) {
   const r = stCurrent.data, rid = stCurrent.id, reh = r.rehearsal || {}, sc = r.scene || {};
   $('st_out').classList.remove('hidden');
   const prov = r.provider === 'meta' ? ' · broken down by Muse Spark' : ' · typed scene';
+  if (sc.shoot_date) $('st_date').value = sc.shoot_date;
+  if (sc.shoot_start) $('st_start').value = String(sc.shoot_start).slice(0, 5);
+  paintStageWhen(); if (typeof dateEmpty === 'function') dateEmpty();
   $('st_head').innerHTML = '<b>' + esc(sc.title || 'Rehearsal') + '</b><span>' + Math.round(reh.duration_s || 0) + ' s · ' + (reh.shots || []).length + ' setups · ' + (sc.beats || []).length + ' beats' + prov + '</span>';
   // frames: the finished ones first, so the strip shows them where they exist
   Promise.all([
@@ -254,6 +266,7 @@ function renderRun() {
   ]).then(([a, fin]) => {
     stFrames = (a.frames || []).filter(f => f.file);
     stFinished = new Set(fin.files || []);
+    if (typeof paintJobMeta === 'function') { const nf = stFrames.filter(hasFinished).length; jobFacts.frames = nf ? nf + ' finished frame' + (nf === 1 ? '' : 's') : stFrames.length + ' measured frame' + (stFrames.length === 1 ? '' : 's'); paintJobMeta(); }
     $('st_scrub').max = Math.max(0, stFrames.length - 1); $('st_scrub').value = 0;
     $('st_strip').innerHTML = stFrames.map((f, i) => '<img data-i="' + i + '" src="' + frameSrc(f, rid) + '" class="' + (hasFinished(f) ? 'finished' : '') + '" loading="lazy" alt="">').join('');
     $('st_strip').querySelectorAll('img').forEach(im => im.onclick = () => { stopAnimatic(); showFrame(Number(im.dataset.i)); });
@@ -280,7 +293,7 @@ function renderRun() {
   $('st_blocking').innerHTML = r.blocking_svg || '';
   const base = '/rehearsal/' + stJob + '/' + rid;
   $('st_links').innerHTML = '<a href="' + base + '/callsheet.txt" target="_blank">Call sheet (.txt)</a><a href="' + base + '/blocking.svg" target="_blank">Blocking (.svg)</a><a href="' + base + '/rehearsal.json">Rehearsal (.json)</a>';
-  $('st_out').scrollIntoView({behavior: 'smooth', block: 'start'});
+  if (scroll) $('st_out').scrollIntoView({behavior: 'smooth', block: 'start'});
 }
 
 function showFrame(i) {
@@ -293,13 +306,16 @@ function showFrame(i) {
   const sun = f.sun ? (f.sun.direct_sun ? 'direct sun through window ' + (f.sun.windows_lit || []).map(w => w + 1).join(', ') : 'no direct sun') : '';
   const finishBtn = stStatus.finish ? '<button class="lensbtn" id="st_finish">' + (hasFinished(f) ? 'Finish this frame again' : 'Finish this frame with Muse Image') + '</button>' : '';
   const showFin = hasFinished(f) && stView === 'finished';
-  const facts = 't ' + Number(f.t).toFixed(1) + ' s' + (f.clock ? ' · ' + f.clock : '') + (cam.focal_mm ? ' · ' + Math.round(cam.focal_mm) + ' mm · shot ' + cam.shot : '') + (who ? ' · ' + esc(who) : '') + (sun ? ' · ' + sun : '');
+  const clock = f.clock ? String(f.clock).slice(0, 5) : '';
+  const facts = [cam.focal_mm ? 'shot ' + cam.shot : '', cam.focal_mm ? Math.round(cam.focal_mm) + ' mm' : '', clock, who ? esc(who) : '', sun].filter(Boolean).join(' · ');
   const big = showFin
-    ? '<div class="st_frame_finished"><img src="/rehearsal-image/' + stJob + '/' + rid + '/' + encodeURIComponent(finishedName(f)) + '" alt="finished frame"><span class="st_stamp">finished · Muse Image · a render</span></div><div class="dim">finished frame, the measured one underneath it · ' + facts + '</div>'
-    : '<img src="/rehearsal-image/' + stJob + '/' + rid + '/' + encodeURIComponent(f.file) + '" alt="frame"><div class="dim">measured frame · ' + facts + '</div>';
+    ? '<div class="st_frame_finished"><div class="pic"><img src="/rehearsal-image/' + stJob + '/' + rid + '/' + encodeURIComponent(finishedName(f)) + '" alt="finished frame"></div><span class="st_stamp">finished · Muse Image · a render</span></div>'
+    : '<div class="pic"><img src="/rehearsal-image/' + stJob + '/' + rid + '/' + encodeURIComponent(f.file) + '" alt="frame"></div>';
+  const ribbon = (showFin ? '' : 'measured · ') + facts;
   $('st_frame').innerHTML = '<div class="st_framerow' + (showFin ? ' has_fin' : '') + '"><div>' + big + '</div>'
-    + '<div id="st_finished">' + (showFin ? '<img src="/rehearsal-image/' + stJob + '/' + rid + '/' + encodeURIComponent(f.file) + '" alt="measured frame"><div class="dim">the measurement it was finished from</div>' : '') + '</div></div>'
-    + '<div class="st_acts"><button class="lensbtn" id="st_look">Look through it in the twin</button>' + finishBtn + '</div>';
+    + '<div id="st_finished">' + (showFin ? '<div class="pic"><img src="/rehearsal-image/' + stJob + '/' + rid + '/' + encodeURIComponent(f.file) + '" alt="measured frame"></div><div class="dim">the measurement it was finished from</div>' : '') + '</div></div>'
+    + '<div class="st_acts st_ribbon"><span class="dim">' + ribbon + '</span><button class="plain" id="st_look">Look through it in the twin</button></div>';
+  const more = $('st_framemore'); if (more) more.innerHTML = finishBtn;
   $('st_strip').querySelectorAll('img').forEach(im => im.classList.toggle('active', Number(im.dataset.i) === stFrameIdx));
   paintToggle();
   $('st_look').onclick = () => {
@@ -344,15 +360,17 @@ function landFinished(file, rid) {
 function paintFinishBar() {
   const bar = $('st_finishbar');
   if (!bar) return;
-  if (!stFrames.length) { bar.innerHTML = ''; return; }
+  if (!stFrames.length) { bar.innerHTML = ''; const m = $('st_finishmore'); if (m) m.innerHTML = ''; const st = $('st_finishstatus'); if (st) st.innerHTML = ''; return; }
   const n = stFrames.filter(hasFinished).length;
   const can = !!stStatus.finish;
-  bar.innerHTML = '<span class="st_toggle"><button data-view="measured">measured</button><button data-view="finished">finished</button></span>'
-    + '<span class="dim" id="st_fincount"></span>'
+  bar.innerHTML = '<span class="st_toggle"><button data-view="measured">measured</button><button data-view="finished">finished</button></span>';
+  const more = $('st_finishmore');
+  if (more) more.innerHTML = '<span class="dim" id="st_fincount"></span>'
     + (can ? '<button class="lensbtn" id="st_finishall">' + (n === stFrames.length && n ? 'Finish the whole scene again' : 'Finish the whole scene with Muse Image') + '</button>'
       + '<label><input type="checkbox" id="st_autofin"' + (autoFinish() ? ' checked' : '') + '> finish automatically</label>'
-      : '<span class="dim">no Meta key on this studio: the measured frames stand</span>')
-    + '<span class="st_progress" id="st_finishline"></span>';
+      : '<span class="dim">no Meta key on this studio: the measured frames stand</span>');
+  const status = $('st_finishstatus');
+  if (status) status.innerHTML = '<span class="st_progress" id="st_finishline"></span>';
   bar.querySelectorAll('[data-view]').forEach(b => b.onclick = () => { stView = b.dataset.view; showFrame(stFrameIdx); });
   if (can) {
     $('st_finishall').onclick = () => startFinishAll(n > 0);
@@ -418,8 +436,11 @@ function initDirect() {
   if (!btn) return;
   btn.onclick = directCamera;
   inp.onkeydown = e => { if (e.key === 'Enter') directCamera(); };
-  if (!stStatus.meta) { btn.disabled = true; $('sm_directnote').textContent = 'no Meta key on this studio: key the move in the twin instead'; }
-  else $('sm_directnote').textContent = 'Muse Wonder operates the camera through the engine; Muse Spark looks at the frames.';
+  inp.oninput = () => btn.classList.toggle('ready', !!inp.value.trim());
+  btn.classList.toggle('ready', !!inp.value.trim());
+  btn.disabled = !stStatus.meta || !smCur;  // initDirect runs again once the stage status has arrived
+  inp.disabled = !smCur;                    // and again when a move is open
+  $('sm_directnote').textContent = stStatus.meta ? 'Muse Wonder operates the camera through the engine; Muse Spark looks at the frames.' : 'no Meta key on this studio: key the move in the twin instead';
 }
 
 function directCamera() {
@@ -444,7 +465,7 @@ function listenDirect(url) {
     const m = JSON.parse(ev.data);
     if (m.kind === 'stage') dlog(m.text);
     else if (m.kind === 'call') dlog('→ ' + m.tool + (m.summary ? ': ' + m.summary : ''));
-    else if (m.kind === 'agent') dlog('operator: ' + (m.text || ''), 'ag');
+    else if (m.kind === 'agent') { dlog('operator: ' + (m.text || ''), 'ag'); const fold = $('sm_fold_log'); if (fold) fold.open = true; }
     else if (m.kind === 'look') {
       const base = '/sim-file/' + stJob + '/' + smCur.id + '/';
       const f = document.createElement('figure');
@@ -479,6 +500,9 @@ function initSim(id) {
   $('sm_fromreh').onchange = () => { const rid = $('sm_fromreh').value; $('sm_fromreh').value = ''; if (rid) simFromRehearsal(rid); };
   $('sm_twin').onclick = openInTwin;
   $('sm_render').onclick = renderMove;
+  const play = $('sm_play'); if (play) play.onclick = toggleSimPlay;
+  const view = $('sm_view');
+  if (view) view.querySelectorAll('[data-v]').forEach(b => b.onclick = () => setSimView(b.dataset.v));
   if (!smListening) { smListening = true; window.addEventListener('message', simMessage); }
   loadSims();
   loadSimRehearsals();
@@ -503,7 +527,10 @@ function loadSimRehearsals() {
 
 function paintSims() {
   const box = $('sm_list');
-  if (!smSims.length) { box.innerHTML = '<span class="dim">no camera moves yet: start one, or build one from a rehearsal</span>'; return; }
+  const fold = $('sm_listfold'), count = $('sm_count');
+  if (fold) fold.classList.toggle('hidden', !smSims.length);
+  if (count) count.textContent = smSims.length ? String(smSims.length) : '';
+  if (!smSims.length) { box.innerHTML = ''; $('sm_status').textContent = $('sm_status').textContent || 'no camera moves yet: start one, or build one from a rehearsal'; return; }
   box.innerHTML = smSims.map(s =>
     '<span class="sm_item' + (smCur && smCur.timeline.id === s.sim_id ? ' active' : '') + '" data-open="' + s.sim_id + '"><b>' + esc(s.title) + '</b><span class="dim">' + esc(s.rig) + ' · ' + Number(s.duration_s || 0).toFixed(1) + ' s</span>'
     + (s.problems ? '<span class="sm_probs">' + s.problems + ' problem' + (s.problems === 1 ? '' : 's') + '</span>' : '')
@@ -512,7 +539,7 @@ function paintSims() {
   box.querySelectorAll('[data-del]').forEach(b => b.onclick = e => {
     e.stopPropagation();
     fetch('/sim/' + smJob + '/' + b.dataset.del, {method: 'DELETE'}).then(() => {
-      if (smCur && smCur.timeline.id === b.dataset.del) { smCur = null; $('sm_open').classList.add('hidden'); if (smMode) postViewer({type: 'locaish:sim-mode', on: false}); }
+      if (smCur && smCur.timeline.id === b.dataset.del) { smCur = null; $('sm_open').classList.add('hidden'); $('sm_head').innerHTML = ''; initDirect(); if (smMode) postViewer({type: 'locaish:sim-mode', on: false}); }
       loadSims();
     });
   });
@@ -541,10 +568,25 @@ function openSim(id) {
   fetch('/sim/' + smJob + '/' + id).then(r => r.json()).then(r => { if (r.error) return simFail(r.error); takeSim(r); paintSims(); }).catch(e => simFail(String(e)));
 }
 
+// The frame slot shows the measured preview at the playhead or, once the move
+// is rendered, the video; the toggle under it is the same as the scene's.
+let smView = 'measured';
+function setSimView(v) {
+  const files = (smCur && smCur.files) || {};
+  smView = v === 'rendered' && files.move_mp4 ? 'rendered' : 'measured';
+  const slot = $('sm_slot'); if (slot) { slot.classList.toggle('show_video', smView === 'rendered'); slot.classList.toggle('show_frame', smView !== 'rendered'); }
+  const play = $('sm_play'); if (play) { play.classList.toggle('hidden', smView !== 'rendered'); play.textContent = 'Play'; }
+  if (smView !== 'rendered') $('sm_video').querySelectorAll('video').forEach(v => v.pause());
+  const view = $('sm_view');
+  if (view) view.querySelectorAll('[data-v]').forEach(b => { b.classList.toggle('on', b.dataset.v === smView); if (b.dataset.v === 'rendered') b.disabled = !files.move_mp4; });
+}
+
 function takeSim(r) {
   smCur = r; smT = 0; smRun = null; smFinishRun = null;
   $('sm_video').innerHTML = ''; $('sm_log').innerHTML = ''; $('sm_finishline').textContent = '';
+  smView = 'measured';
   $('sm_open').classList.remove('hidden');
+  initDirect();
   paintSim();
   paintSimVideos();
   if (smMode) postViewer({type: 'locaish:sim', timeline: smCur.timeline, evaluation: smCur.evaluation});
@@ -563,6 +605,9 @@ function paintSim() {
   const tl = smCur.timeline, ev = smCur.evaluation || {};
   const rig = tl.rig || {}, params = rig.params || {};
   const gear = Object.keys(params).map(k => k.replace(/_/g, ' ') + ' ' + fmtVal(params[k])).join(' · ');
+  // the headline: the move's name in the serif, the rig and its length beneath
+  const head = $('sm_head');
+  if (head) head.innerHTML = '<b>' + esc(tl.title || 'Camera move') + '</b><span>' + esc(rig.kind || 'tripod') + ' · ' + Number(tl.duration_s || 0).toFixed(1) + ' s · ' + (tl.fps || 24) + ' fps</span>';
   $('sm_rig').innerHTML = '<b>' + esc(tl.title || 'Camera move') + '</b> · ' + esc(rig.kind || 'tripod') + ' · ' + Number(tl.duration_s || 0).toFixed(1) + ' s at ' + (tl.fps || 24) + ' fps · ' + esc(String(tl.sensor || '')) + ' f/' + (tl.aperture_f || '')
     + (gear ? '<div class="dim">' + esc(gear) + '</div>' : '') + (smCur.rig_text ? '<p>' + esc(smCur.rig_text) + '</p>' : '')
     + paramDocs(smCur.rig_info)
@@ -608,9 +653,9 @@ function refreshSimFrame(t) {
   smFrameTimer = setTimeout(() => {
     const id = smCur.timeline.id;
     $('sm_frameimg').src = '/sim-frame/' + smJob + '/' + id + '?t=' + t.toFixed(3) + '&w=640&v=' + encodeURIComponent(smCur.evaluation && smCur.evaluation.frames ? smCur.evaluation.frames.length : 0);
+    // the frame carries its own burnt-in readout; the caption only says what is wrong
     const f = simFrameAt(t);
-    $('sm_frametext').innerHTML = f ? 't ' + Number(f.t).toFixed(2) + ' s · ' + Math.round(f.focal_mm || 0) + ' mm · ' + esc(String(f.shot_size || '')) + (f.distance_m != null ? ' · ' + Number(f.distance_m).toFixed(1) + ' m' : '')
-      + ((f.problems || []).length ? ' · <span class="error">' + f.problems.map(esc).join('; ') + '</span>' : '') : '';
+    $('sm_frametext').innerHTML = f && (f.problems || []).length ? '<span class="error">' + f.problems.map(esc).join('; ') + '</span>' : '';
   }, 300);
 }
 
@@ -661,7 +706,7 @@ function renderMove() {
   const id = smCur.timeline.id;
   $('sm_render').disabled = true; $('sm_video').innerHTML = ''; $('sm_log').innerHTML = '';
   smLog('rendering the move…');
-  fetch('/sim/' + smJob + '/' + id + '/render', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({width_px: 640})})
+  fetch('/sim/' + smJob + '/' + id + '/render', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({width_px: 960})})
     .then(r => r.json()).then(r => {
       if (!r.run) { smLog(r.error || 'could not start', 'error'); $('sm_render').disabled = false; return; }
       smRun = r.run;
@@ -698,19 +743,30 @@ function paintSimVideos() {
   const base = '/sim-file/' + smJob + '/' + smCur.timeline.id + '/';
   const v = Date.now();
   const parts = [];
-  if (files.move_mp4) parts.push('<figure><video controls src="' + base + 'move.mp4?v=' + v + '"></video><figcaption>measured move · <a href="' + base + 'move.mp4" download="move.mp4">download</a></figcaption></figure>');
-  if (files.move_finished_mp4) parts.push('<figure><video controls src="' + base + 'move_finished.mp4?v=' + v + '"></video><figcaption>finished with Muse Image · a render, not a measurement · <a href="' + base + 'move_finished.mp4" download="move_finished.mp4">download</a></figcaption></figure>');
+  const dl = [];
+  if (files.move_mp4) { parts.push('<figure><video src="' + base + 'move.mp4?v=' + v + '" loop muted playsinline preload="metadata" title="measured move"></video></figure>'); dl.push('<a href="' + base + 'move.mp4" download="move.mp4">download</a>'); }
+  if (files.move_finished_mp4) { parts.push('<figure><video src="' + base + 'move_finished.mp4?v=' + v + '" loop muted playsinline preload="metadata" title="finished with Muse Image: a render, not a measurement"></video><span class="st_stamp">finished · Muse Image · a render</span></figure>'); dl.push('<a href="' + base + 'move_finished.mp4" download="move_finished.mp4">download finished</a>'); }
   $('sm_video').innerHTML = parts.length ? '<div class="sm_pair' + (parts.length === 1 ? ' single' : '') + '">' + parts.join('') + '</div>' : '';
+  const dlbox = $('sm_dl'); if (dlbox) dlbox.innerHTML = dl.join('');
+  $('sm_video').querySelectorAll('video').forEach(vid => { vid.onclick = toggleSimPlay; vid.onplay = () => { const b = $('sm_play'); if (b) b.textContent = 'Pause'; }; vid.onpause = () => { const b = $('sm_play'); if (b && ![...$('sm_video').querySelectorAll('video')].some(x => !x.paused)) b.textContent = 'Play'; }; });
+  setSimView(files.move_mp4 ? 'rendered' : 'measured');
   const acts = $('sm_finishacts');
   if (!acts) return;
   if (files.rendered && stStatus.finish) {
-    acts.innerHTML = '<button class="lensbtn" id="sm_finish">' + (files.move_finished_mp4 ? 'Finish the move again' : 'Finish the move with Muse Image') + '</button>'
-      + '<span class="dim">every 12th rendered frame, held between</span>';
+    acts.innerHTML = '<button class="plain" id="sm_finish">' + (files.move_finished_mp4 ? 'Finish the move again' : 'Finish the move') + '</button>';
     $('sm_finish').onclick = () => finishMove(!!files.move_finished_mp4);
     $('sm_finish').disabled = !!smFinishRun;
   } else if (files.rendered) {
     acts.innerHTML = '<span class="dim">no Meta key on this studio: the measured move stands</span>';
   } else acts.innerHTML = '';
+}
+
+// One word plays and pauses every video in the slot together.
+function toggleSimPlay() {
+  const vids = [...$('sm_video').querySelectorAll('video')];
+  if (!vids.length) return;
+  const playing = vids.some(v => !v.paused);
+  vids.forEach(v => { if (playing) v.pause(); else v.play().catch(() => {}); });
 }
 
 function finishMove(force) {
@@ -754,8 +810,8 @@ function initWorld(id) {
   wdJob = id; wdRun = null; wdCurrent = null; wdWorlds = []; wdMode = 'world';
   const d = $('d_shoot_date');
   $('wd_date').value = (d && d.value) || new Date().toISOString().slice(0, 10);
-  if (d) d.addEventListener('change', () => { if (d.value) $('wd_date').value = d.value; });
-  $('wd_hour').oninput = paintWorldHour; paintWorldHour();
+  if (d) d.addEventListener('change', () => { if (d.value) { $('wd_date').value = d.value; paintWorldHour(); } });
+  $('wd_hour').oninput = paintWorldHour; $('wd_date').onchange = paintWorldHour; paintWorldHour();
   $('wd_build').onclick = buildWorld;
   $('wd_build').disabled = false;
   $('wd_dressing').onkeydown = e => { if (e.key === 'Enter') buildWorld(); };
@@ -770,7 +826,10 @@ function wdClock(h) {
   const m = Math.round(Number(h || 0) * 60);
   return String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
 }
-function paintWorldHour() { $('wd_hourout').textContent = wdClock($('wd_hour').value); }
+function paintWorldHour() {
+  $('wd_hourout').textContent = wdClock($('wd_hour').value);
+  const when = $('wd_when'); if (when) when.textContent = ($('wd_date').value || 'no date') + ', ' + wdClock($('wd_hour').value) + ' solar';
+}
 function wdLog(text, cls) {
   const d = document.createElement('div'); d.textContent = text; if (cls) d.className = cls;
   $('wd_log').appendChild(d); $('wd_log').scrollTop = 1e9;
@@ -785,6 +844,7 @@ function wdProgress(text, frac, cls) {
 function loadWorlds() {
   fetch('/worlds/' + wdJob).then(r => r.json()).then(r => {
     wdWorlds = (r.worlds || []).filter(w => w.state === 'done');
+    if (typeof paintJobMeta === 'function' && wdWorlds.length) { jobFacts.worlds = wdWorlds.length + (wdWorlds.length === 1 ? ' world' : ' worlds'); paintJobMeta(); }
     paintWorldList();
     // Coming back to a room shows its latest world without a click.
     if (!wdCurrent && !wdRun && wdWorlds.length) openWorld(wdWorlds[wdWorlds.length - 1]);
@@ -808,6 +868,7 @@ function buildWorld() {
   if (wdRun) return;
   const body = {date: $('wd_date').value || null, hour: Number($('wd_hour').value), dressing: $('wd_dressing').value.trim()};
   wdRun = {}; $('wd_build').disabled = true; $('wd_log').innerHTML = '';
+  const fold = $('wd_fold'); if (fold) fold.open = true;
   wdProgress('starting…', 0);
   fetch('/world/' + wdJob, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)})
     .then(r => r.json()).then(r => {
@@ -859,8 +920,15 @@ function openWorld(w) {
       ? 'direct sun through window ' + light.windows_lit.map(i => i + 1).join(', ')
       : (light.elevation_deg > 0 ? 'no direct sun through a window' : 'sun below the horizon'))
     : 'no georeference: the light as described';
-  $('wd_meta').textContent = (w.date || '') + ' at ' + wdClock(w.hour) + ' solar · ' + sun
-    + (w.dressing ? ' · ' + w.dressing : '') + ' · ' + (w.finished || 0) + ' of ' + (w.views || 0) + ' views finished';
+  const sunShort = light ? (light.windows_lit && light.windows_lit.length ? 'window ' + light.windows_lit.map(i => i + 1).join(', ')
+      : (light.elevation_deg > 0 ? 'no direct sun' : 'sun below the horizon')) : 'light as described';
+  $('wd_meta').textContent = (w.date || '') + ' · ' + wdClock(w.hour) + ' solar · ' + sunShort;
+  const note = $('wd_dressnote');
+  if (note) note.textContent = (w.dressing ? 'dressing: ' + w.dressing + ' · ' : '') + sun + ' · ' + (w.finished || 0) + ' of ' + (w.views || 0) + ' views finished';
+  // the fold's date and hour are the ones this world was built for, not today's
+  if (w.date) $('wd_date').value = w.date;
+  if (w.hour != null) $('wd_hour').value = Number(w.hour);
+  paintWorldHour(); if (typeof dateEmpty === 'function') dateEmpty();
   paintWorldFrame();
   paintWorldList();
   const strip = $('wd_strip');

@@ -2009,11 +2009,8 @@ def serve(
 
 
 LOGO_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
-  <defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1">
-    <stop offset="0" stop-color="#6ea8fe"/><stop offset="1" stop-color="#a78bfa"/>
-  </linearGradient></defs>
-  <path d="M11 4H8a4 4 0 0 0-4 4v3M21 4h3a4 4 0 0 1 4 4v3M28 21v3a4 4 0 0 1-4 4h-3M11 28H8a4 4 0 0 1-4-4v-3" fill="none" stroke="url(#lg)" stroke-width="2.6" stroke-linecap="round"/>
-  <rect x="11" y="11" width="10" height="10" rx="2.6" transform="rotate(45 16 16)" fill="url(#lg)"/>
+  <rect x="3" y="3" width="26" height="26" rx="7" fill="none" stroke="#ffffff" stroke-width="2.6"/>
+  <circle cx="16" cy="16" r="5" fill="#ffffff"/>
 </svg>
 """
 
@@ -2024,7 +2021,10 @@ PAGE = """<!doctype html>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <style>
   /* The system: black, white, two greys, one hairline, one warm tone that
-     only ever marks a render. One sans for words, one mono for numbers. */
+     only ever marks a render. A serif for the few words that are big, the
+     system sans for every other word and number, a monospace only in logs.
+     The page is a gallery: pictures at full width, one caption line each,
+     one control bar, and everything else folded until asked for. */
   :root {
     --bg: #000000; --surface: #0a0a0a; --surface2: #111111; --line: #1f1f1f; --line2: #2a2a2a;
     --ink: #ffffff; --dim: #9a9a9a; --mute: #5a5a5a;
@@ -2032,397 +2032,509 @@ PAGE = """<!doctype html>
     --ok: #ffffff; --warn: #9a9a9a; --bad: #ffffff;
     --r: 12px; --r2: 8px; --r3: 6px; --gap: 64px; --pad: 24px;
     --sans: -apple-system, "Helvetica Neue", Inter, sans-serif;
+    --ui: system-ui, -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+    --serif: ui-serif, "Iowan Old Style", Charter, Georgia, serif;
     --mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --measure: 560px; --col: 1280px; --edge: 40px; --strip-h: 72px;
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
-  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.55 var(--ui); -webkit-font-smoothing: antialiased; }
   a { color: inherit; }
   .hidden { display: none !important; }
-  main { max-width: 1200px; margin: 0 auto; padding: 0 32px 120px; }
+  main { max-width: var(--col); margin: 0 auto; padding: 0 var(--edge) 160px; }
   button, input, select, textarea { font: inherit; color: inherit; }
-  h1, h2, h3, h4 { margin: 0; font-weight: 600; }
-  .dim { color: var(--dim); font-size: 13px; }
-  .num, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  h1, h2, h3, h4 { margin: 0; font-weight: 500; }
+  b, strong { font-weight: 500; }
+  .dim { color: var(--dim); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .num { font-variant-numeric: tabular-nums; }
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  @media (max-width: 720px) { main { padding: 0 20px 96px; } }
 
-  /* -- controls: one primary, one secondary, one small control -- */
+  /* -- controls: one white button per section, hairline buttons, grey words, small controls -- */
   .primary, #st_run, #planbtn, #pkg .acts .primary, .lprow .primary, .sm_acts .primary, #drop .btn {
     display: inline-flex; align-items: center; justify-content: center; gap: 6px; background: var(--ink); color: var(--bg);
-    border: 1px solid var(--ink); border-radius: var(--r2); padding: 8px 16px; font-weight: 600; font-size: 13px;
+    border: 1px solid var(--ink); border-radius: var(--r3); height: 36px; padding: 0 16px; font: 500 13px/1 var(--ui);
     cursor: pointer; text-decoration: none; white-space: nowrap; }
   .primary:hover, #st_run:hover, #planbtn:hover, #drop .btn:hover { background: #e6e6e6; border-color: #e6e6e6; }
   .primary:disabled, #st_run:disabled, #planbtn:disabled { opacity: .4; cursor: default; }
-  .lensbtn, #send, #vfbar .exit, #pkg .acts a, #pkg .acts button, #planlinks a, #planlinks button, .lprow button, .st_runrow .lensbtn {
+  .lensbtn, #send, #vfbar .exit, #pkg .acts a, #pkg .acts button, .lprow button, .st_runrow .lensbtn {
     display: inline-flex; align-items: center; gap: 6px; background: transparent; color: var(--ink); border: 1px solid var(--ink);
-    border-radius: var(--r2); padding: 7px 14px; font-size: 13px; cursor: pointer; text-decoration: none; white-space: nowrap; }
-  .lensbtn:hover, #send:hover, #pkg .acts a:hover, #pkg .acts button:hover, #planlinks a:hover, #planlinks button:hover, .lprow button:hover { background: var(--surface2); }
+    border-radius: var(--r3); height: 36px; padding: 0 14px; font: 500 13px/1 var(--ui); cursor: pointer; text-decoration: none; white-space: nowrap; }
+  .lensbtn:hover, #send:hover, #pkg .acts a:hover, #pkg .acts button:hover, .lprow button:hover { background: var(--surface2); }
   .lensbtn:disabled, #send:disabled { opacity: .4; cursor: default; }
   .lensbtn[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
-  .ctl, .st_x, .st_nudge button, .chip button, #vfbar .lens, #pkg .hours button, .room .gal button, #galbtn, #chips button, .st_toggle button {
-    background: transparent; color: var(--dim); border: 1px solid var(--line2); border-radius: var(--r3); padding: 3px 9px;
-    font-size: 12px; cursor: pointer; white-space: nowrap; line-height: 1.4; }
-  .st_x:hover, .st_nudge button:hover, .chip button:hover, #vfbar .lens:hover, #pkg .hours button:hover, #galbtn:hover, #chips button:hover { color: var(--ink); border-color: var(--dim); }
-  input, select, textarea { background: var(--bg); color: var(--ink); border: 1px solid var(--line2); border-radius: var(--r2); padding: 8px 10px; outline: none; font-size: 13px; }
+  .ghost, #heroactions a, .wd_bar a, .wd_prev a, #st_prev a, .st_runrow a, .st_links a, #sm_links a, #prevplans a, #planlinks a, #example,
+  #top .right a.quiet, #top #galbtn, .lprow #lpcancel, #pkg .acts #d_save, #st_finishmore #st_finishall, .st_runfold a {
+    background: transparent; border: 0; padding: 0; height: auto; font: 400 13px/1.5 var(--ui); color: var(--dim); text-decoration: none; cursor: pointer; }
+  .ghost:hover, #heroactions a:hover, .wd_bar a:hover, .st_links a:hover, #sm_links a:hover, #planlinks a:hover, #example:hover,
+  #top .right a.quiet:hover, #top #galbtn:hover, .lprow #lpcancel:hover, #pkg .acts #d_save:hover, #st_finishmore #st_finishall:hover, .st_runfold a:hover { color: var(--ink); }
+  /* a plain action: an ink word, no box. The secondary actions of a section that already has its one white button. */
+  .plain, #sm_new, .sm_cap #sm_twin, #sm_finishacts #sm_finish, .sechead .acts #labelbtn, .sechead .acts #detectbtn, #st_frame .st_acts .lensbtn, #st_finishmore .lensbtn, #st_framemore .lensbtn, #st_play, #sm_play, #sm_directbtn {
+    background: transparent; border: 0; padding: 0; height: auto; font: 500 13px/1.5 var(--ui); color: var(--ink); cursor: pointer;
+    text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 4px; text-decoration-thickness: 1px; transition: text-decoration-color .12s; }
+  .plain:hover, #sm_new:hover, .sm_cap #sm_twin:hover, #sm_finishacts #sm_finish:hover, .sechead .acts #labelbtn:hover, .sechead .acts #detectbtn:hover, #st_frame .st_acts .lensbtn:hover, #st_play:hover, #sm_play:hover, #sm_directbtn:hover { color: var(--ink); background: transparent; text-decoration-color: var(--ink); }
+  .plain:disabled, #sm_new:disabled, #sm_finishacts #sm_finish:disabled, #sm_directbtn:disabled, .sechead .acts #detectbtn:disabled { opacity: .4; cursor: default; text-decoration-color: transparent; }
+  .plain.dimword, #sm_play { color: var(--dim); font-weight: 400; }
+  .sechead .acts #labelbtn[aria-pressed="true"] { background: transparent; color: var(--ink); text-decoration-color: var(--ink); border-radius: 0; }
+  /* Direct is grey until there is an instruction to give; Render is the section's white button */
+  #sm_directbtn { color: var(--dim); }
+  #sm_directbtn.ready:not(:disabled) { color: var(--ink); }
+  .ctl, .st_x, .st_nudge button, #vfbar .lens, #pkg .hours button, .room .gal button, .st_toggle button, .st_file, .st_nudge .lensbtn {
+    background: transparent; color: var(--dim); border: 1px solid var(--line2); border-radius: 6px; height: 28px; padding: 0 10px;
+    font: 400 12px/1 var(--ui); font-variant-numeric: tabular-nums; cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; }
+  .ctl:hover, .st_x:hover, .st_nudge button:hover, #vfbar .lens:hover, #pkg .hours button:hover, .st_file:hover { color: var(--ink); border-color: var(--dim); }
+  #vfbar .lens[aria-pressed="true"], #pkg .hours button[aria-pressed="true"] { color: var(--bg); background: var(--ink); border-color: var(--ink); }
+  .st_toggle { display: inline-flex; gap: 16px; border: 0; border-radius: 0; overflow: visible; }
+  .st_toggle button { border: 0; border-radius: 0; height: 24px; padding: 0; color: var(--dim); font-size: 13px; border-bottom: 1px solid transparent; }
+  .st_toggle button + button { border-left: 0; }
+  .st_toggle button.on { background: transparent; color: var(--ink); border-bottom-color: var(--ink); }
+  .st_toggle button:disabled { opacity: .4; cursor: default; }
+
+  /* -- inputs -- */
+  input, select, textarea { background: var(--bg); color: var(--ink); border: 1px solid var(--line2); border-radius: var(--r3); height: 36px; padding: 0 12px;
+    font: 400 14px/1.4 var(--ui); font-variant-numeric: tabular-nums; outline: none; max-width: 100%; min-width: 0; }
+  textarea { height: auto; padding: 10px 12px; line-height: 1.55; resize: vertical; width: 100%; }
   input:focus, select:focus, textarea:focus { border-color: var(--ink); }
   input::placeholder, textarea::placeholder { color: var(--mute); }
-  input[type=range] { padding: 0; border: 0; accent-color: #fff; }
-  input[type=checkbox] { accent-color: #fff; padding: 0; }
-  label.dim { display: inline-flex; align-items: center; gap: 6px; }
-  .pill { font: 11px/1.4 var(--mono); color: var(--dim); border: 1px solid var(--line2); border-radius: var(--r3); padding: 3px 8px; white-space: nowrap; letter-spacing: .02em; }
-  .pill.on { color: var(--ink); }
-  .st_tag { display: inline-block; font: 10.5px/1.4 var(--sans); letter-spacing: .08em; text-transform: uppercase; color: var(--render); margin-left: 6px; }
+  input[type=date]:invalid, input[type=time]:invalid { color: var(--mute); }
+  /* an empty date reads as a placeholder, not a value: the script marks it .empty */
+  input.empty::-webkit-datetime-edit, input.empty::-webkit-datetime-edit-text, input.empty::-webkit-datetime-edit-year-field, input.empty::-webkit-datetime-edit-month-field, input.empty::-webkit-datetime-edit-day-field, input.empty::-webkit-datetime-edit-hour-field, input.empty::-webkit-datetime-edit-minute-field { color: var(--mute); }
+  input[type=date]::-webkit-calendar-picker-indicator, input[type=time]::-webkit-calendar-picker-indicator { filter: invert(1); opacity: .5; }
+  select.astext { appearance: none; -webkit-appearance: none; border: 0; background: transparent; color: var(--dim); font: 400 13px/1.5 var(--ui); height: auto; padding: 0; cursor: pointer; width: auto; max-width: 100%; }
+  select.astext:hover { color: var(--ink); }
+  select.astext:disabled { opacity: .4; cursor: default; }
+  input[type=range] { height: auto; padding: 0; border: 0; accent-color: #fff; width: 140px; }
+  input[type=checkbox] { height: auto; width: auto; accent-color: #fff; padding: 0; }
+  label.dim { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--dim); white-space: nowrap; }
+  .pill { font: 13px/1.5 var(--ui); color: var(--dim); border: 0; padding: 0; white-space: nowrap; letter-spacing: 0; }
+  .pill::before { content: ' \\00b7\\00a0'; color: var(--dim); }
+  .pill.on { color: var(--dim); }
+  .st_tag { display: inline-block; font: 500 11px/1.4 var(--ui); letter-spacing: .08em; text-transform: uppercase; color: var(--render); margin-left: 6px; }
   .st_tag.dim { color: var(--dim); }
-  .g { display: inline-block; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--render); margin-right: 8px; font-weight: 500; }
+  .g { display: inline-block; font: 500 11px/1.4 var(--ui); letter-spacing: .08em; text-transform: uppercase; color: var(--render); margin-right: 8px; }
 
   /* -- top bar -- */
-  #top { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 20px; height: 56px; margin: 0 -32px 32px; padding: 0 32px; background: var(--bg); border-bottom: 1px solid var(--line); }
-  #top .brand { font-weight: 600; font-size: 15px; letter-spacing: -0.01em; text-decoration: none; display: inline-flex; align-items: center; gap: 8px; }
+  #top { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 24px; height: 56px; margin: 0 calc(-1 * var(--edge)) 0; padding: 0 var(--edge); background: var(--bg); border-bottom: 1px solid var(--line); }
+  #top .brand { display: inline-flex; align-items: center; gap: 8px; font: 500 15px/1 var(--ui); color: var(--ink); text-decoration: none; }
   #top .brand .mark { flex: none; }
-  #top .loc { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
-  #top .loc b { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #top .loc span { color: var(--dim); font: 12px/1.4 var(--mono); white-space: nowrap; }
-  #top .right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
-  #top .topnav { display: flex; gap: 18px; margin-left: 4px; }
+  #top .loc { min-width: 0; display: none; gap: 12px; align-items: baseline; overflow: hidden; }
+  #top.scrolled .loc { display: flex; }
+  #top .loc b { font-weight: 500; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #top .loc span { font: 13px/1.4 var(--ui); font-variant-numeric: tabular-nums; color: var(--dim); white-space: nowrap; }
+  #top .right { margin-left: auto; display: flex; align-items: center; gap: 20px; }
+  #top .topnav { display: flex; gap: 24px; }
   #top .topnav a { color: var(--dim); text-decoration: none; font-size: 13px; }
   #top .topnav a:hover { color: var(--ink); }
-  #top .right a.quiet { color: var(--dim); font-size: 13px; text-decoration: none; }
-  #top .right a.quiet:hover { color: var(--ink); }
-  #galbtn.on { color: var(--ink); }
-  @media (max-width: 720px) { #top .topnav { display: none; } }
+  #top #galbtn.on { color: var(--ink); }
+  #top .right > * { white-space: nowrap; }
+  @media (max-width: 720px) { #top { margin: 0 -20px 0; padding: 0 20px; gap: 16px; overflow: hidden; } #top .topnav { display: none; } #top .right { gap: 14px; } }
+  @media (max-width: 560px) { #top.scrolled .loc { display: none; } }
 
   /* -- state 1: landing -- */
-  #landing { min-height: calc(100vh - 88px); display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding-bottom: 6vh; }
-  #landing h1 { font-size: 40px; letter-spacing: -0.03em; margin: 0 0 10px; }
-  #landing p.lead { color: var(--dim); font-size: 15px; margin: 0 0 36px; max-width: 520px; }
-  #drop { width: min(680px, 100%); border: 1px solid var(--line2); border-radius: var(--r); padding: 56px 24px 48px; cursor: pointer; background: var(--surface); }
+  #landing { min-height: calc(100vh - 56px); display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 64px 0 6vh; }
+  #landing h1 { font: 400 48px/1.05 var(--serif); letter-spacing: -0.015em; margin: 0 0 12px; }
+  #landing p.lead { color: var(--dim); font-size: 17px; margin: 0 0 40px; max-width: 44ch; text-wrap: balance; }
+  #drop { width: 100%; max-width: 680px; display: flex; align-items: center; gap: 16px; text-align: left; border: 1px solid var(--line2); border-radius: 0; padding: 24px; cursor: pointer; background: transparent; }
   #drop.hot { border-color: var(--ink); }
-  #drop b { display: block; font-size: 17px; margin-bottom: 8px; font-weight: 600; }
+  #drop b { font: 500 15px/1.4 var(--ui); margin: 0; display: block; }
   #drop span { color: var(--dim); font-size: 13px; display: block; }
-  #drop .btn { margin-top: 24px; padding: 10px 20px; }
-  #geo { display: flex; gap: 8px; align-items: center; margin-top: 20px; color: var(--dim); font-size: 13px; cursor: pointer; }
-  #landing .steps { display: flex; gap: 40px; margin-top: 64px; color: var(--mute); font-size: 13px; }
-  #landing .steps b { display: block; color: var(--dim); font-weight: 500; margin-bottom: 2px; }
-  #library { width: min(1020px, 100%); margin-top: 64px; text-align: left; }
-  .libhead { color: var(--dim); font-size: 13px; letter-spacing: .08em; text-transform: uppercase; margin: 0 0 16px; font-weight: 500; }
-  #rooms { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
-  .room { display: block; position: relative; text-decoration: none; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
-  .room:hover { border-color: var(--dim); }
-  .room .thumb { display: block; aspect-ratio: 16 / 9; background: var(--bg); }
+  #drop .btn { margin: 0 0 0 auto; flex: none; }
+  #drop > div { flex: 1; min-width: 0; }
+  #geo { display: flex; gap: 8px; align-items: center; margin-top: 16px; color: var(--dim); font-size: 13px; cursor: pointer; }
+  #landing .steps { display: flex; gap: 40px; margin-top: 72px; color: var(--mute); font-size: 13px; flex-wrap: wrap; justify-content: center; }
+  #landing .steps b { display: inline; color: var(--dim); font-weight: 500; margin-right: 6px; }
+  #library { width: 100%; margin-top: 72px; text-align: left; }
+  .libhead { color: var(--dim); font-size: 13px; letter-spacing: 0; text-transform: none; margin: 0 0 16px; font-weight: 500; }
+  #rooms { display: grid; grid-template-columns: repeat(3, 1fr); gap: 32px 24px; }
+  .room { display: block; position: relative; text-decoration: none; color: var(--ink); background: transparent; border: 0; border-radius: 0; }
+  .room .thumb { display: block; aspect-ratio: 16 / 9; background: var(--surface); overflow: hidden; }
   .room .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  .room .rbody { display: block; padding: 12px 16px 14px; }
-  .room .rbody b { display: block; font-size: 14px; font-weight: 500; margin-bottom: 2px; }
-  .room .rmeta { color: var(--dim); font: 12px/1.4 var(--mono); }
-  .libfoot { color: var(--mute); font-size: 13px; margin: 20px 0 0; max-width: 720px; }
-  .room .gal { position: absolute; top: 10px; right: 10px; display: flex; gap: 6px; }
-  .room .gal button { background: rgba(0,0,0,.8); }
+  .room .rbody { display: block; padding: 10px 0 0; }
+  .room .rbody b { display: block; font: 500 15px/1.4 var(--ui); }
+  .room .rmeta { color: var(--dim); font: 13px/1.5 var(--ui); font-variant-numeric: tabular-nums; }
+  .libfoot { color: var(--mute); font-size: 13px; margin: 0; max-width: var(--measure); }
+  .room .gal { position: absolute; top: 8px; right: 8px; display: flex; gap: 6px; opacity: 0; transition: opacity .15s; }
+  .room:hover .gal, .room:focus-within .gal { opacity: 1; }
+  .room .gal button { background: rgba(0,0,0,.7); }
   .room .gal .in { color: var(--ink); cursor: default; }
+  @media (hover: none) { .room .gal { opacity: 1; } }
+  @media (max-width: 1000px) { #rooms { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 720px) { #landing h1 { font-size: 36px; } #rooms { grid-template-columns: 1fr; } #drop { flex-wrap: wrap; } #drop .btn { margin: 8px 0 0; width: 100%; } }
 
   /* -- state 2: working -- */
   #working { max-width: 680px; margin: 14vh auto 0; }
-  #stageline { display: flex; align-items: center; gap: 12px; font-size: 15px; min-height: 24px; }
+  #stageline { display: flex; align-items: center; gap: 14px; font: 400 22px/1.3 var(--serif); min-height: 28px; }
   #stageline .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ink); animation: pulse 1.2s ease-in-out infinite; flex: none; }
   @keyframes pulse { 50% { opacity: .25; } }
-  .bar { height: 2px; background: var(--line); margin: 16px 0 12px; overflow: hidden; }
-  .bar i { display: block; height: 100%; width: 0; background: var(--ink); transition: width .5s; }
-  details#logbox { margin-top: 12px; }
-  details#logbox summary { color: var(--mute); font-size: 13px; cursor: pointer; }
-  #log { margin-top: 10px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r2); padding: 14px 16px; max-height: 260px; overflow-y: auto; font: 12px/1.7 var(--mono); }
+  #working .bar { height: 1px; background: var(--line); margin: 16px 0 12px; overflow: hidden; display: block; }
+  #working .bar i { display: block; height: 100%; width: 0; background: var(--ink); transition: width .5s; }
+  #log { margin-top: 10px; background: transparent; border: 0; padding: 0; max-height: 260px; overflow-y: auto; font: 12.5px/1.7 var(--ui); font-variant-numeric: tabular-nums; color: var(--dim); }
   #log div { display: flex; gap: 10px; }
   #log .t { color: var(--mute); min-width: 40px; text-align: right; flex: none; }
   .note { color: var(--dim); }
   .error { color: var(--ink); }
 
+  /* -- folds: one per section, closed until asked for -- */
+  details.fold, #trace, details#logbox { margin-top: 16px; border-top: 1px solid var(--line); border-bottom: 0; background: transparent; border-radius: 0; padding: 0; }
+  details.fold + details.fold { margin-top: 0; }
+  details.fold > summary, #trace > summary, details#logbox > summary { cursor: pointer; list-style: none; display: flex; align-items: baseline; gap: 10px; padding: 12px 0; font: 500 13px/1.4 var(--ui); color: var(--dim); letter-spacing: 0; text-transform: none; flex-wrap: wrap; }
+  details.fold > summary b { color: var(--ink); font-weight: 500; font-variant-numeric: tabular-nums; }
+  details.fold[open] { padding-bottom: 8px; }
+  details.fold > summary::-webkit-details-marker, .moretools > summary::-webkit-details-marker, #trace > summary::-webkit-details-marker, details#logbox > summary::-webkit-details-marker { display: none; }
+  details.fold > summary::before, #trace > summary::before, details#logbox > summary::before { content: '\\25B8'; color: var(--mute); font-size: 10px; }
+  details.fold[open] > summary::before, #trace[open] > summary::before, details#logbox[open] > summary::before { content: '\\25BE'; }
+  details.fold > summary:hover, #trace > summary:hover, details#logbox > summary:hover { color: var(--ink); }
+  details.fold > *:not(summary) { margin-top: 12px; }
+  details.fold > .dim, details.fold > p { max-width: var(--measure); font-size: 13px; color: var(--dim); }
+  details.fold > summary span { color: var(--mute); font-weight: 400; }
+  details.fold > p.sub { margin: 4px 0 12px; }
+  @media (max-width: 720px) { details.fold > summary { display: block; } details.fold > summary b { display: block; margin-top: 4px; } details.fold > summary > span { display: none; } }
+
   /* -- state 3: the location -- */
-  #hero { border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; background: var(--bg); }
-  #viewerwrap { height: min(66vh, 760px); min-height: 420px; background: var(--bg); }
-  #viewerwrap iframe { width: 100%; height: 100%; border: 0; display: block; }
-  #scoutcap { padding: 12px 20px; border-top: 1px solid var(--line); font-size: 13px; display: flex; gap: 12px; align-items: baseline; }
-  #scoutcap b { font-weight: 600; white-space: nowrap; }
+  #jobhead { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 40px; align-items: end; padding: 40px 0 20px; }
+  #jobtitle { grid-column: 1; grid-row: 1; margin: 0; font: 400 40px/1.1 var(--serif); letter-spacing: -0.01em; overflow-wrap: anywhere; }
+  #jobhead .num { grid-column: 2; grid-row: 1; text-align: right; white-space: nowrap; font: 400 40px/1 var(--serif); letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+  #jobhead .num small { font-size: 20px; color: var(--dim); margin-left: 4px; }
+  #jobhead .num:empty { display: none; }
+  #jobfacts { grid-column: 1 / -1; grid-row: 2; margin-top: 10px; font-size: 13px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  #jobmeta { display: inline; }
+  @media (max-width: 720px) { #jobhead { grid-template-columns: 1fr; padding: 24px 0 12px; } #jobtitle { font-size: 30px; } #jobhead .num { grid-column: 1; grid-row: 2; text-align: left; font-size: 28px; margin-top: 6px; } #jobfacts { grid-row: 3; } }
+
+  #hero { margin: 0 calc(-1 * var(--edge)); border: 0; border-radius: 0; background: var(--bg); overflow: hidden; }
+  #viewerwrap, #wd_wrap { height: min(72vh, 820px); min-height: 420px; background: var(--bg); border: 0; border-radius: 0; overflow: hidden; }
+  #viewerwrap iframe, #wd_wrap iframe { width: 100%; height: 100%; border: 0; display: block; }
+  #scoutcap, #vfbar { padding: 12px var(--edge); border: 0; border-top: 1px solid var(--line); font-size: 13px; color: var(--dim); display: flex; gap: 12px; align-items: center; flex-wrap: wrap; background: transparent; }
+  #scoutcap b, #vfbar b { color: var(--ink); font-weight: 500; white-space: nowrap; }
   #scoutcap span { color: var(--dim); }
-  #vfbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 10px 20px; border-top: 1px solid var(--line); font-size: 13px; color: var(--dim); }
-  #vfbar b { color: var(--ink); font-weight: 600; margin-right: 4px; }
-  #vfbar > span:not(.near) { font-family: var(--mono); font-size: 12px; margin-right: 8px; }
-  #vfbar .lens[aria-pressed="true"] { color: var(--ink); border-color: var(--ink); }
-  #vfbar .near { margin-left: auto; font: 12px/1.5 var(--mono); }
-  #heroactions { display: flex; gap: 20px; justify-content: flex-end; padding: 10px 4px 0; font-size: 12px; }
-  #heroactions a { color: var(--mute); text-decoration: none; }
-  #heroactions a:hover { color: var(--ink); }
+  #vfbar > span { font-variant-numeric: tabular-nums; }
+  #vfbar .near { margin-left: auto; }
+  #heroactions { display: flex; justify-content: space-between; gap: 24px; padding: 12px 0 0; font: 400 13px/1.5 var(--ui); font-variant-numeric: tabular-nums; color: var(--dim); flex-wrap: wrap; }
+  #heroactions .cap b { color: var(--ink); font-weight: 500; }
+  #heroactions .links { display: flex; gap: 20px; margin-left: auto; }
+  @media (max-width: 720px) { #hero { margin: 0 -20px; } #viewerwrap, #wd_wrap { height: 64vw; min-height: 300px; } #scoutcap, #vfbar { padding: 12px 20px; } }
 
   section { margin-top: var(--gap); }
-  .sechead { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 20px; }
+  #result > section, #result > .moretools, .moretools > section { margin-top: 56px; }
+  section { border-top: 1px solid var(--line); padding-top: 0; }
+  .sechead { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 20px; position: relative; padding-top: 42px; }
+  .sechead .n { position: absolute; top: 24px; left: 0; font: 500 12px/1 var(--ui); letter-spacing: .04em; font-variant-numeric: tabular-nums; color: var(--mute); }
   .sechead h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.015em; line-height: 1.25; }
-  .sechead p { margin: 6px 0 0; color: var(--dim); font-size: 14px; max-width: 720px; }
-  .sechead .sub { display: flex; flex-direction: column; min-width: 0; }
-  .sechead .acts { display: flex; gap: 8px; align-items: center; flex: none; }
-  .panelbox { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: var(--pad); min-width: 0; }
-  .panelbox h4, .ptitle { font-size: 13px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); margin: 0 0 14px; }
+  /* the serif title that renders: the rule above is the system's base, kept for the tests */
+  #result .sechead h2 { font-family: var(--serif); font-weight: 400; font-size: 28px; line-height: 1.15; letter-spacing: -0.005em; }
+  .sechead p { margin: 8px 0 0; color: var(--dim); font-size: 15px; max-width: 34ch; }
+  .sechead .sub { display: block; min-width: 0; }
+  .sechead .acts { display: flex; gap: 12px; align-items: center; flex: none; flex-wrap: wrap; }
+  @media (min-width: 720px) { #result .sechead h2 { font-size: 32px; } }
+  @media (max-width: 720px) { #result > section, #result > .moretools { margin-top: 40px; } .sechead { flex-direction: column; align-items: flex-start; gap: 12px; } }
+  .panelbox { background: transparent; border: 0; border-top: 1px solid var(--line); border-radius: 0; padding: var(--pad); padding-left: 0; padding-right: 0; min-width: 0; }
+  .panelbox h4, .ptitle { font-size: 13px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); margin: 0 0 12px; }
   .panelbox h4 + h4, .panelbox .mt { margin-top: 20px; }
-  .panelbox p { margin: 6px 0 0; }
-  .st_log { font: 12px/1.7 var(--mono); color: var(--dim); max-height: 160px; overflow-y: auto; margin-top: 10px; }
+  .panelbox p { margin: 6px 0 0; max-width: var(--measure); }
+  .st_log { font: 12.5px/1.7 var(--ui); font-variant-numeric: tabular-nums; color: var(--dim); max-height: 160px; overflow-y: auto; margin-top: 12px; }
   .st_log:empty { display: none; }
-  .st_row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+  .bar, .st_row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .bar { margin-top: 24px; }
+  .st_row { margin-top: 16px; }
   .st_row:first-child { margin-top: 0; }
-  .st_links { display: flex; gap: 20px; margin-top: 16px; font-size: 12px; }
-  .st_links a { color: var(--mute); }
-  .st_links a:hover { color: var(--ink); }
-  .st_hint { font-size: 12px; margin-top: 10px; color: var(--mute); }
+  .st_links { display: flex; gap: 20px; margin-top: 16px; font-size: 13px; flex-wrap: wrap; }
+  .st_hint { font-size: 13px; margin-top: 10px; color: var(--dim); max-width: var(--measure); }
   .st_hint:empty { display: none; }
-  .st_toggle { display: inline-flex; border: 1px solid var(--line2); border-radius: var(--r3); overflow: hidden; }
-  .st_toggle button { border: 0; border-radius: 0; padding: 4px 12px; }
-  .st_toggle button + button { border-left: 1px solid var(--line2); }
-  .st_toggle button.on { background: var(--ink); color: var(--bg); }
-  .st_toggle button:disabled { opacity: .4; cursor: default; }
 
   /* -- the world: the room as it will be on the day -- */
-  .wd_controls label input[type=range] { width: 160px; vertical-align: middle; margin-left: 4px; }
-  .wd_controls #wd_hourout { font: 13px/1 var(--mono); color: var(--ink); margin-left: 6px; }
-  .wd_controls .wd_solar { font-size: 11px; color: var(--mute); }
-  .wd_controls .wd_dressing { flex: 1; min-width: 240px; }
+  .wd_controls label input[type=range] { width: 140px; vertical-align: middle; }
+  .wd_controls #wd_hourout { font: 400 13px/1 var(--ui); font-variant-numeric: tabular-nums; color: var(--ink); }
+  .wd_controls .wd_solar { font-size: 12px; color: var(--mute); }
+  .wd_controls .wd_dressing { flex: 1 1 240px; min-width: min(240px, 100%); }
   .wd_controls .primary { margin-left: auto; }
+  .wd_when { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
   .wd_progress { color: var(--dim); font-size: 13px; margin-top: 12px; min-height: 1.4em; }
   .wd_progress:empty { display: none; }
   .wd_progress.error { color: var(--ink); }
-  .wd_meter { height: 2px; background: var(--line); margin-top: 8px; overflow: hidden; }
+  .wd_meter { height: 1px; background: var(--line); margin-top: 8px; overflow: hidden; }
   .wd_meter i { display: block; height: 100%; width: 0; background: var(--ink); transition: width .3s; }
-  .wd_prev { margin-top: 10px; font-size: 12px; }
-  .wd_prev a { color: var(--mute); margin-right: 14px; text-decoration: none; }
-  .wd_prev a:hover, .wd_prev a.active { color: var(--ink); }
-  .wd_bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 20px 0 10px; font-size: 13px; }
+  .wd_prev { font-size: 13px; line-height: 1.8; }
+  .wd_prev a, #st_prev a, #prevplans a { margin-right: 14px; text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--line2); }
+  .wd_prev a.active { color: var(--ink); }
+  .wd_bar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin: 12px 0 0; font: 400 13px/1.5 var(--ui); font-variant-numeric: tabular-nums; color: var(--dim); }
   .wd_bar .st_tag { margin: 0; }
-  .wd_bar a { margin-left: auto; color: var(--mute); font-size: 12px; text-decoration: none; }
-  .wd_bar a:hover { color: var(--ink); }
-  #wd_wrap { height: min(66vh, 760px); min-height: 420px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
-  #wd_wrap iframe { width: 100%; height: 100%; border: 0; display: block; }
-  .wd_strip img { opacity: .8; }
+  .wd_bar #wd_meta { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wd_bar a { margin-left: auto; }
 
   /* -- the scene in this room -- */
-  #st_status { margin: -8px 0 16px; font-size: 12px; color: var(--mute); }
-  .st_grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
-  .st_grid2 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-top: 24px; }
+  #st_status { margin: 0 0 12px; font-size: 13px; color: var(--dim); max-width: var(--measure); }
+  .st_grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0 40px; }
+  .st_grid2 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0 40px; }
   @media (max-width: 1000px) { .st_grid, .st_grid2 { grid-template-columns: 1fr; } }
-  .st_list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+  .st_list { display: flex; flex-direction: column; margin-bottom: 16px; }
   .st_list:empty { display: none; }
-  .st_row input, .st_row select { font-size: 13px; }
-  #st_name { flex: 1; min-width: 100px; }
-  #st_height { width: 110px; }
-  .st_runrow { margin-top: 12px; }
-  .st_runrow a { color: var(--mute); font-size: 12px; }
-  .st_runrow a:hover { color: var(--ink); }
+  #st_name { flex: 1 1 160px; min-width: min(100px, 100%); }
+  #st_height { width: 96px; }
+  .st_runrow { margin-top: 16px; }
   .st_runrow .primary { margin-left: auto; }
-  .st_actor, .st_piece { display: flex; gap: 12px; align-items: flex-start; border: 1px solid var(--line); border-radius: var(--r2); padding: 12px; background: var(--bg); font-size: 13px; }
+  .st_actor, .st_piece { display: flex; gap: 16px; align-items: flex-start; padding: 14px 0; border: 0; border-top: 1px solid var(--line); background: transparent; border-radius: 0; font-size: 15px; }
+  .st_actor:first-child, .st_piece:first-child { border-top: 0; padding-top: 0; }
   .st_piece { justify-content: space-between; }
   .st_piece > div:first-child { flex: 1; min-width: 0; }
-  .st_piece b { font-weight: 500; }
-  .st_head { width: 44px; height: 44px; border-radius: var(--r3); object-fit: cover; flex: none; display: block; }
+  .st_piece b, .st_actorbody b { font-weight: 500; }
+  .st_actorbody .dim, .st_piece .dim { font-size: 13px; font-variant-numeric: tabular-nums; }
+  .st_head { width: 48px; height: 48px; border-radius: 0; object-fit: cover; flex: none; display: block; }
   .st_blank { opacity: .35; }
   .st_actorbody { flex: 1; min-width: 0; }
-  .st_actorbody b { font-weight: 500; }
-  .st_acts { display: flex; gap: 8px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
-  .st_file { font-size: 12px; color: var(--dim); border: 1px solid var(--line2); border-radius: var(--r3); padding: 3px 9px; cursor: pointer; }
-  .st_file:hover { color: var(--ink); border-color: var(--dim); }
+  .st_acts { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
   .st_file input { display: none; }
   .st_nudge { display: grid; grid-template-columns: repeat(4, 30px); gap: 4px; align-content: start; }
-  .st_nudge button { padding: 3px 0; text-align: center; }
+  .st_nudge button { padding: 0; justify-content: center; }
   .st_nudge [data-reset], .st_nudge .lensbtn, .st_nudge .st_x { grid-column: span 2; }
-  .st_nudge .lensbtn { padding: 3px 0; justify-content: center; font-size: 12px; border-color: var(--line2); color: var(--dim); }
-  .st_moved { color: var(--ink); font-size: 12px; }
+  .st_moved { color: var(--ink); font-size: 13px; }
   .st_planbox svg { width: 100%; height: auto; display: block; }
-  .st_words { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
-  .st_words input { width: 100%; font-size: 12px; padding: 4px 8px; }
-  .st_scenebox { margin-top: 16px; }
-  #st_scene { width: 100%; background: var(--bg); color: var(--ink); border: 1px solid var(--line2); border-radius: var(--r2); padding: 12px 14px; font: 13px/1.6 var(--mono); outline: none; resize: vertical; min-height: 150px; }
-  #st_scene:focus { border-color: var(--ink); }
-  #st_prev { margin-top: 10px; font-size: 12px; }
-  #st_prev a { color: var(--mute); margin-right: 12px; text-decoration: none; }
-  #st_prev a:hover { color: var(--ink); }
-  #st_out { margin-top: 40px; }
-  .st_head2 { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; margin: 0 0 12px; font-size: 16px; }
-  .st_head2 b { font-weight: 600; }
-  .st_head2 span { color: var(--dim); font-size: 13px; }
-  .st_finishbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 0 0 12px; font-size: 13px; }
-  .st_finishbar label { color: var(--dim); font-size: 12px; display: inline-flex; align-items: center; gap: 6px; }
-  .st_finishbar .st_progress { color: var(--dim); font-size: 12px; margin-left: auto; font-family: var(--mono); }
-  .st_finishbar .st_progress.error { color: var(--ink); }
-  .st_framerow { display: grid; grid-template-columns: 1fr; gap: 16px; align-items: start; }
-  .st_framerow.has_fin { grid-template-columns: minmax(0, 1fr) 300px; }
-  @media (max-width: 1000px) { .st_framerow.has_fin { grid-template-columns: 1fr; } }
-  .st_framerow img { width: 100%; border-radius: var(--r2); display: block; background: var(--surface); }
-  .st_framerow .dim { margin-top: 8px; font-size: 12px; }
+  .st_words { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+  .st_words input { width: 100%; height: 32px; font-size: 13px; padding: 0 10px; }
+  .st_scenebox { margin-top: 32px; padding-bottom: 0; }
+  #st_scene { width: 100%; padding: 10px 12px; font: 400 14px/1.6 var(--ui); min-height: 150px; }
+  #st_setup, .w64 { width: 72px; }
+  #st_prev { margin-top: 12px; font-size: 13px; line-height: 1.8; }
+  #st_out { margin-top: 0; }
+  .st_head2 { display: block; margin: 0 0 16px; font-size: 13px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .st_head2:empty { display: none; }
+  .st_head2 b { display: block; font: 400 22px/1.2 var(--serif); color: var(--ink); letter-spacing: -0.005em; margin-bottom: 4px; }
+  .st_ctl { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 12px; }
+  .st_finishbar { display: contents; }
+  .st_finishbar .st_toggle { order: 0; }
+  .st_ctl #st_play { order: 1; }
+  .st_ctl #st_scrub { order: 2; }
+  #st_finishstatus { font-size: 13px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  #st_finishstatus .st_progress { display: block; margin-top: 8px; }
+  #st_finishstatus .st_progress:empty { display: none; }
+  #st_finishstatus .st_progress.error { color: var(--ink); }
+  #st_finishmore { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; font-size: 13px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  #st_finishmore label { color: var(--dim); font-size: 13px; display: inline-flex; align-items: center; gap: 6px; }
+  #st_framemore:empty { display: none; }
+  /* the finished frame takes the whole column; the measurement it came from is an inset in its corner */
+  .st_framerow { display: block; }
+  .st_framerow.has_fin { position: relative; }
+  .st_framerow img { width: 100%; border-radius: 0; display: block; background: var(--surface); }
+  .st_framerow .dim { margin-top: 12px; font-size: 13px; }
+  /* the measured frame carries a caption strip and the finished one a corner stamp, both burnt in by the
+     renderer at a fixed height; the page shows its own tag instead and crops the burnt-in one */
+  .st_framerow .pic { overflow: hidden; }
+  .st_framerow .pic img { margin-bottom: -3.45%; }
+  .st_ribbon { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-top: 12px; }
+  .st_ribbon .dim { margin: 0; flex: 1 1 320px; }
+  .st_ribbon #st_look { margin-left: auto; }
+  .st_framerow.has_fin #st_finished { position: absolute; right: 12px; bottom: 44px; width: 220px; border: 1px solid var(--line); background: var(--bg); }
+  .st_framerow.has_fin #st_finished img { background: var(--bg); }
+  .st_framerow.has_fin #st_finished .pic img { margin-bottom: -3.45%; }
+  .st_framerow.has_fin #st_finished .dim { display: none; margin: 0; padding: 6px 8px; font-size: 12px; }
+  .st_framerow.has_fin #st_finished:hover .dim { display: block; }
+  #st_finished:empty { display: none; }
+  #st_finished .error, #st_finished > .dim:only-child { font-size: 13px; padding: 6px 8px; }
+  @media (max-width: 720px) { .st_framerow.has_fin #st_finished { width: 120px; bottom: 40px; right: 8px; } }
   .st_frame_finished { position: relative; }
-  .st_frame_finished .st_stamp { position: absolute; top: 10px; left: 10px; font: 10.5px/1.4 var(--sans); letter-spacing: .08em; text-transform: uppercase; color: var(--render); background: rgba(0,0,0,.7); border-radius: 4px; padding: 3px 8px; }
-  #st_frame .st_acts { margin-top: 14px; }
+  .st_frame_finished .st_stamp { position: absolute; top: 12px; left: 12px; font: 500 11px/1.4 var(--ui); letter-spacing: .08em; text-transform: uppercase; color: var(--render); background: rgba(0,0,0,.6); border-radius: 0; padding: 4px 8px; }
+  #st_frame .st_acts { margin-top: 12px; }
+  #st_frame .st_acts.st_ribbon { margin-top: 12px; }
   #st_play { flex: none; }
-  #st_scrub { flex: 1; }
-  .st_strip { display: flex; gap: 6px; overflow-x: auto; padding: 8px 0 4px; }
-  .st_strip:empty { display: none; }
-  .st_strip img { height: 64px; border-radius: 4px; cursor: pointer; opacity: .55; border: 2px solid transparent; flex: none; }
+  #st_scrub { flex: 1; min-width: 120px; width: auto; }
+  .st_runfold .st_row { margin-top: 0; }
+  .st_strip, .wd_strip, .sm_looks { display: flex; gap: 2px; overflow-x: auto; -webkit-overflow-scrolling: touch; padding: 8px 0 0; margin-top: 8px; scrollbar-width: thin; }
+  .st_strip:empty, .wd_strip:empty, .sm_looks:empty { display: none; }
+  .st_strip img, .wd_strip img { height: var(--strip-h); width: auto; border-radius: 0; cursor: pointer; opacity: .55; border: 2px solid transparent; flex: none; display: block; }
   .st_strip img.finished { opacity: .85; }
   .st_strip img.active { opacity: 1; border-color: var(--ink); }
-  .st_shot { border-top: 1px solid var(--line); padding: 10px 0; font-size: 13px; }
+  .wd_strip img { opacity: .8; }
+  .st_shot { border-top: 1px solid var(--line); padding: 12px 0; font-size: 14px; }
   .st_shot:first-child { border-top: 0; padding-top: 0; }
-  .st_shot b { font-weight: 500; }
-  .relax { color: var(--dim); font-size: 12px; margin-top: 4px; }
-  #st_sched div, #st_notes p { font-size: 13px; }
-  #st_sched b { font-family: var(--mono); font-weight: 500; font-size: 12px; margin-right: 6px; }
+  .st_shot b { font-weight: 500; font-variant-numeric: tabular-nums; }
+  .relax { color: var(--dim); font-size: 13px; margin-top: 4px; }
+  #st_sched div { display: grid; grid-template-columns: 110px 1fr; gap: 12px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 14px; }
+  #st_sched div:first-of-type { border-top: 0; }
+  #st_sched div.dim { display: block; font-size: 13px; }
+  #st_sched b { font-weight: 500; font-size: 13px; font-variant-numeric: tabular-nums; }
+  #st_notes p { font-size: 14px; max-width: var(--measure); }
   #st_problems h4 { margin-top: 20px; }
   #st_blocking svg { width: 100%; height: auto; display: block; }
 
   /* -- simulate the camera -- */
-  .sm_list { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .sm_bar { margin-top: 0; }
+  .sm_bar #sm_instruction { flex: 1 1 260px; min-width: min(260px, 100%); }
+  .sm_bar #sm_instruction:disabled { opacity: .5; }
+  #sm_status { margin-top: 10px; }
+  #sm_status:empty { display: none; }
+  #sm_head { margin-bottom: 16px; }
+  .sm_list { display: flex; flex-direction: column; }
   .sm_list:empty { display: none; }
-  .sm_item { display: inline-flex; gap: 10px; align-items: center; border: 1px solid var(--line2); border-radius: var(--r2); padding: 7px 10px 7px 12px; font-size: 13px; cursor: pointer; }
-  .sm_item:hover { border-color: var(--dim); }
-  .sm_item.active { border-color: var(--ink); }
+  .sm_item { display: flex; gap: 16px; align-items: baseline; border: 0; border-top: 1px solid var(--line); border-radius: 0; padding: 12px 0; font-size: 15px; cursor: pointer; }
+  .sm_item:first-child { border-top: 0; padding-top: 0; }
   .sm_item b { font-weight: 500; }
-  .sm_item .sm_probs { color: var(--dim); font-size: 12px; }
-  .sm_item .st_x { padding: 0 6px; border: 0; }
-  #sm_fromreh { max-width: 320px; }
-  #sm_open { margin-top: 16px; }
-  .sm_direct .st_row { margin-top: 0; }
-  .sm_direct input { flex: 1; min-width: 260px; }
-  .sm_looks { display: flex; gap: 10px; overflow-x: auto; margin-top: 12px; }
-  .sm_looks:empty { display: none; }
-  .sm_looks figure { margin: 0; flex: none; width: 220px; font-size: 11.5px; color: var(--dim); }
-  .sm_looks img { width: 220px; border-radius: var(--r3); display: block; }
+  .sm_item.active b { text-decoration: underline; text-underline-offset: 4px; text-decoration-thickness: 1px; }
+  .sm_item .sm_probs { color: var(--dim); font-size: 13px; }
+  .sm_item .st_x { margin-left: auto; border: 0; }
+  #sm_fromreh { max-width: 100%; }
+  .sm_frame .sm_slot:not(.show_frame) > img { display: none; }
+  .sm_frame .sm_slot:not(.show_video) > .sm_video { display: none; }
+  .sm_cap { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 12px; font-size: 13px; color: var(--dim); }
+  .sm_cap .sm_right { margin-left: auto; display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+  .sm_cap .sm_dl { display: inline-flex; gap: 16px; }
+  .sm_cap .sm_dl a, .sm_cap .sm_dl:empty { color: var(--dim); text-decoration: none; }
+  .sm_cap .sm_dl a:hover { color: var(--ink); }
+  .sm_cap .sm_dl:empty { display: none; }
+  #sm_finishacts:empty { display: none; }
+  #sm_finishacts .dim { font-size: 13px; }
+  #sm_frametext { margin-top: 10px; }
+  #sm_frametext:empty { display: none; }
+  #sm_open { margin-top: 24px; }
+  .sm_looks { gap: 12px; margin-top: 0; margin-bottom: 16px; }
+  .sm_looks figure { margin: 0; flex: none; width: 160px; font: 400 12px/1.4 var(--ui); color: var(--dim); }
+  .sm_looks img { width: 160px; border-radius: 0; display: block; }
   .sm_looks b { color: var(--ink); font-weight: 500; }
-  .sm_grid { display: grid; grid-template-columns: 1.3fr 1fr; gap: 16px; margin-top: 16px; }
-  @media (max-width: 1000px) { .sm_grid { grid-template-columns: 1fr; } }
-  .sm_frame img { width: 100%; border-radius: var(--r2); display: block; background: var(--bg); min-height: 120px; }
-  .sm_frame .dim { margin-top: 8px; font-size: 12px; }
-  .sm_rig { font-size: 13px; }
+  .sm_frame img { width: 100%; border-radius: 0; display: block; background: var(--surface); min-height: 120px; }
+  .sm_frame .dim { font-size: 13px; }
+  .sm_rig { font-size: 14px; }
   .sm_rig b { font-weight: 500; }
-  .sm_rig p { margin: 8px 0 0; color: var(--dim); font-size: 13px; }
-  .sm_seg { display: flex; gap: 10px; align-items: baseline; font-size: 12.5px; padding: 5px 0; border-top: 1px solid var(--line); color: var(--dim); }
+  .sm_rig p { margin: 8px 0 0; color: var(--dim); font-size: 14px; max-width: var(--measure); }
+  .sm_seg { display: flex; gap: 12px; align-items: baseline; font-size: 13px; padding: 8px 0; border-top: 1px solid var(--line); color: var(--dim); }
   .sm_seg:first-child { border-top: 0; padding-top: 0; }
-  .sm_seg b { font-family: var(--mono); font-weight: 500; white-space: nowrap; font-size: 12px; }
+  .sm_seg b { font-weight: 500; white-space: nowrap; font-variant-numeric: tabular-nums; }
   .sm_seg.red { color: var(--ink); }
   .sm_seg.amber { color: var(--dim); }
-  .sm_summary { font-size: 13px; color: var(--dim); margin-top: 10px; }
-  .sm_summary b { color: var(--ink); font-weight: 500; font-family: var(--mono); font-size: 12.5px; }
-  .sm_acts { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 14px; }
-  .sm_acts:empty { display: none; }
-  .sm_video video { width: 100%; border-radius: var(--r2); display: block; margin-top: 12px; background: var(--bg); }
-  .sm_video .sm_pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .sm_summary { margin-top: 16px; }
+  .sm_summary div { display: grid; grid-template-columns: 1fr auto; gap: 12px; padding: 6px 0; border-top: 1px solid var(--line); font-size: 13px; color: var(--dim); }
+  .sm_summary b { color: var(--ink); font-weight: 500; font-variant-numeric: tabular-nums; }
+  .sm_video { margin-top: 0; }
+  .sm_video:empty { display: none; }
+  .sm_video video { width: 100%; border-radius: 0; display: block; background: var(--surface); }
+  .sm_video .sm_pair { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
   .sm_video .sm_pair.single { grid-template-columns: 1fr; }
-  .sm_video figure { margin: 0; }
-  .sm_video figcaption { color: var(--dim); font-size: 12px; margin-top: 6px; }
-  .sm_howto { font-size: 12px; color: var(--mute); margin-top: 10px; }
+  .sm_video figure { margin: 0; position: relative; }
+  .sm_video figure .st_stamp { position: absolute; top: 12px; left: 12px; font: 500 11px/1.4 var(--ui); letter-spacing: .08em; text-transform: uppercase; color: var(--render); background: rgba(0,0,0,.6); padding: 4px 8px; }
+  .sm_howto { font-size: 13px; color: var(--dim); margin-top: 12px; max-width: var(--measure); }
+  #sm_directnote { max-width: var(--measure); }
+  @media (max-width: 720px) { .sm_video .sm_pair { grid-template-columns: 1fr; } .sm_bar #sm_instruction { flex-basis: 100%; } .sm_cap .sm_right { margin-left: 0; width: 100%; } }
 
   /* -- what is in the room -- */
-  .labelchips { display: flex; flex-wrap: wrap; gap: 8px; }
-  .chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line2); border-radius: var(--r3); padding: 4px 6px 4px 12px; font-size: 13px; cursor: default; }
-  .chip.model { color: var(--dim); }
-  .chip .k { color: var(--mute); font-size: 11px; }
-  .chip button { border: 0; padding: 1px 5px; font-size: 12px; }
-  .chip button.ok:hover { color: var(--ink); }
+  .labelchips { display: block; line-height: 1.9; font-size: 15px; }
+  .chip { display: inline; white-space: nowrap; border: 0; padding: 0; font-size: 15px; cursor: default; background: transparent; }
+  .labelchips .sep { color: var(--mute); }
+  .chip.model { color: rgba(255,255,255,.5); }
+  .chip .k { color: var(--mute); font-size: 12px; font-variant-numeric: tabular-nums; margin-left: 3px; }
+  .chip .act { display: inline-block; border: 0; height: auto; padding: 0 1px; margin-left: 4px; font: 400 12px/1.4 var(--ui); color: var(--dim); opacity: 0; transition: opacity .12s; background: transparent; cursor: pointer; vertical-align: baseline; }
+  .chip:hover .act, .chip:focus-within .act { opacity: 1; }
+  .chip .act:hover { color: var(--ink); border: 0; }
+  @media (hover: none) { .chip .act { opacity: .6; } }
   #labelpick { margin-top: 20px; border-top: 1px solid var(--line); padding-top: 20px; }
-  .crops { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 12px 0 14px; }
+  .crops { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 12px 0 16px; }
   @media (max-width: 900px) { .crops { grid-template-columns: 1fr 1fr; } }
-  .crops img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: var(--r2); border: 2px solid transparent; cursor: pointer; background: var(--bg); }
+  .crops img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 0; border: 2px solid transparent; cursor: pointer; background: var(--surface); display: block; }
   .crops img.on { border-color: var(--ink); }
-  .crops .cap { color: var(--mute); font: 11px/1.4 var(--mono); margin-top: 4px; }
-  .lprow { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-  .lprow input { flex: 1; min-width: 220px; }
+  .crops .cap { color: var(--mute); font: 12px/1.4 var(--ui); font-variant-numeric: tabular-nums; margin-top: 4px; }
+  .lprow { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+  .lprow input { flex: 1 1 220px; min-width: min(220px, 100%); }
   #lstatus { margin-top: 12px; }
   #lstatus:empty { display: none; }
 
   /* -- the scouting tools, folded -- */
-  .moretools { margin-top: var(--gap); border-top: 1px solid var(--line); padding-top: 24px; }
-  .moretools > summary { cursor: pointer; list-style: none; display: flex; align-items: baseline; gap: 12px; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); font-weight: 500; }
-  .moretools > summary::-webkit-details-marker { display: none; }
-  .moretools > summary::before { content: '\\25B8'; color: var(--mute); font-size: 11px; }
-  .moretools[open] > summary::before { content: '\\25BE'; }
-  .moretools > summary span { text-transform: none; letter-spacing: 0; color: var(--mute); font-weight: 400; }
-  .moretools > summary:hover { color: var(--ink); }
-  .moretools > section:first-of-type { margin-top: 40px; }
+  .moretools { border-top: 1px solid var(--line); padding-top: 0; }
+  .moretools > summary { cursor: pointer; list-style: none; position: relative; padding: 42px 0 0; display: block; font: 400 28px/1.15 var(--serif); letter-spacing: -0.005em; color: var(--ink); }
+  .moretools > summary::before { content: '05'; position: absolute; top: 24px; left: 0; font: 500 12px/1 var(--ui); letter-spacing: .04em; color: var(--mute); }
+  .moretools > summary:hover { color: var(--dim); }
+  .moretools > summary .sub { display: block; font: 400 13px/1.5 var(--ui); color: var(--mute); margin-top: 6px; letter-spacing: 0; }
+  .moretools[open] > summary .sub { display: none; }
+  .moretools .toolsnav { display: flex; gap: 24px; flex-wrap: wrap; margin-top: 10px; font-size: 13px; }
+  .moretools .toolsnav a { color: var(--dim); text-decoration: none; }
+  .moretools .toolsnav a:hover { color: var(--ink); }
+  @media (min-width: 720px) { .moretools > summary { font-size: 32px; } }
 
   /* -- the location package -- */
-  #pkg .pkgrow { display: grid; grid-template-columns: 1.1fr 1fr; gap: 16px; }
-  @media (max-width: 900px) { #pkg .pkgrow { grid-template-columns: 1fr; } }
-  #pkg .field { margin-bottom: 12px; }
-  #pkg label { display: block; color: var(--dim); font-size: 12px; margin-bottom: 4px; }
+  #pkg .pkgrow { display: grid; grid-template-columns: 1fr; gap: 0; }
+  #pkg .field { margin-bottom: 16px; }
+  #pkg label { display: block; color: var(--dim); font-size: 13px; margin-bottom: 6px; }
   #pkg input, #pkg textarea { width: 100%; }
-  #pkg .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  #pkg .three { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
-  #pkg .acts { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
-  #pkg .acts .st { color: var(--mute); font-size: 12px; }
-  #pkg .sunprev { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
-  #pkg .sunprev img { width: 100%; display: block; }
-  #pkg .hours { display: flex; gap: 6px; padding: 12px 16px; border-top: 1px solid var(--line); align-items: center; flex-wrap: wrap; }
-  #pkg .hours button { font-family: var(--mono); font-size: 11.5px; }
-  #pkg .hours button[aria-pressed="true"] { color: var(--bg); background: var(--ink); border-color: var(--ink); }
-  #pkg .hours .sunline { margin-left: auto; color: var(--dim); font-size: 12px; }
-  #pkg .sharebox { margin-top: 12px; color: var(--dim); font-size: 12px; word-break: break-all; }
+  #pkg .two { display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; }
+  #pkg .three { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0 24px; }
+  @media (max-width: 720px) { #pkg .two, #pkg .three { grid-template-columns: 1fr; } }
+  #pkg .acts { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-top: 24px; }
+  #pkg .acts .st { color: var(--dim); font-size: 13px; }
+  #pkg .acts .primary { margin-left: auto; }
+  #pkg .sunprev { background: transparent; border: 0; border-radius: 0; }
+  #pkg .sunprev img { width: 100%; display: block; border-radius: 0; background: var(--surface); }
+  #pkg .hours { display: flex; gap: 6px; padding: 12px 0 0; align-items: center; flex-wrap: wrap; }
+  #pkg .hours .sunline { margin-left: auto; color: var(--dim); font-size: 13px; font-variant-numeric: tabular-nums; }
+  #pkg .sharebox { margin-top: 12px; color: var(--dim); font-size: 13px; word-break: break-all; }
   #pkg .sharebox a { color: var(--ink); }
 
   /* -- coverage -- */
-  #briefwrap { display: grid; grid-template-columns: 1fr; gap: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: var(--pad); }
-  #brief { width: 100%; padding: 12px 14px; font: 14px/1.6 var(--sans); resize: vertical; min-height: 124px; }
-  #planrow { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
-  #modenote { color: var(--mute); font-size: 12px; flex: 1; min-width: 200px; }
-  #example { color: var(--dim); font-size: 12px; text-decoration: none; border-bottom: 1px solid var(--line2); }
-  #example:hover { color: var(--ink); }
-  #prevplans { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; color: var(--mute); font-size: 12px; }
-  #prevplans a { color: var(--dim); text-decoration: none; }
-  #prevplans a:hover { color: var(--ink); }
-  #trace { margin-top: 20px; color: var(--mute); font-size: 12px; }
-  #trace summary { cursor: pointer; }
-  #tracebody { margin-top: 10px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r2); padding: 12px 16px; max-height: 420px; overflow-y: auto; font: 12px/1.7 var(--mono); }
+  #briefwrap { display: grid; grid-template-columns: 1fr; gap: 12px; }
+  #brief { width: 100%; font: 400 15px/1.55 var(--ui); min-height: 124px; }
+  #planrow { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  #modenote { color: var(--mute); font-size: 13px; flex: 1; min-width: min(200px, 100%); }
+  #planrow #planbtn { margin-left: auto; }
+  #prevplans { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; color: var(--mute); font-size: 13px; }
+  #trace { margin-top: 24px; }
+  #tracebody { margin-top: 10px; max-height: 420px; overflow-y: auto; font: 12.5px/1.7 var(--ui); font-variant-numeric: tabular-nums; color: var(--dim); }
   #tracebody div { display: flex; gap: 10px; }
   #tracebody .t { color: var(--mute); min-width: 40px; text-align: right; flex: none; }
   #tracebody .ag { color: var(--ink); }
-  #tracebody pre { white-space: pre-wrap; word-break: break-word; margin: 2px 0 8px 50px; color: var(--dim); background: var(--surface2); border-radius: var(--r3); padding: 8px 10px; font: 11px/1.5 var(--mono); }
+  #tracebody .sql { color: var(--mute); }
+  #tracebody pre { white-space: pre-wrap; word-break: break-word; margin: 2px 0 8px 50px; color: var(--dim); background: transparent; border-left: 1px solid var(--line2); padding: 4px 12px; font: 11px/1.5 var(--mono); }
   #planout { margin-top: 32px; }
-  #planhead { display: flex; align-items: baseline; justify-content: space-between; margin: 0 0 14px; gap: 12px; flex-wrap: wrap; }
-  #planhead b { font-size: 16px; font-weight: 600; }
-  #planhead span { color: var(--dim); font-size: 13px; }
-  #shots { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+  #planhead { display: flex; align-items: baseline; justify-content: space-between; margin: 0 0 16px; gap: 16px; flex-wrap: wrap; font-size: 13px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  #planhead b { font: 500 17px/1.3 var(--ui); color: var(--ink); }
+  #shots { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 32px 24px; }
   @media (max-width: 1100px) { #shots { grid-template-columns: 1fr 1fr; } }
-  @media (max-width: 760px) { #shots { grid-template-columns: 1fr; } }
-  .shot { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
-  .shot.active { border-color: var(--ink); }
-  .shot.none { padding: 16px; color: var(--dim); }
-  .shot .frame { position: relative; aspect-ratio: 16 / 9; background: var(--bg); cursor: pointer; display: block; }
+  @media (max-width: 720px) { #shots { grid-template-columns: 1fr; } }
+  .shot { background: transparent; border: 0; border-radius: 0; }
+  .shot.active .frame { outline: 2px solid var(--ink); outline-offset: -2px; }
+  .shot.none { opacity: .55; color: var(--dim); }
+  .shot .frame { position: relative; aspect-ratio: 16 / 9; background: var(--surface); cursor: pointer; display: block; }
   .shot .frame img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  .shot .frame .look { position: absolute; right: 10px; bottom: 10px; background: rgba(0,0,0,.75); color: var(--ink); border: 1px solid var(--line2); border-radius: var(--r3); padding: 4px 9px; font-size: 11.5px; }
-  .shot .body { padding: 14px 16px 16px; }
-  .shot h3 { margin: 0 0 4px; font-size: 14px; font-weight: 600; }
-  .shot .meas { font: 12px/1.5 var(--mono); color: var(--dim); }
-  .shot .meas .warnc, .warnc { color: var(--dim); }
-  .shot .desc { margin-top: 8px; font-size: 13.5px; }
-  .shot .why { color: var(--dim); font-size: 12.5px; margin-top: 6px; line-height: 1.5; }
-  .shot .dim { color: var(--mute); font-size: 12px; margin-top: 4px; }
-  .shot .relax { color: var(--dim); font-size: 12px; margin-top: 2px; }
-  .shot .review { margin-top: 10px; padding: 8px 10px; border-radius: var(--r3); background: var(--surface2); font-size: 12.5px; }
-  .shot details { margin-top: 8px; font-size: 12px; color: var(--mute); }
-  .shot details pre { white-space: pre-wrap; word-break: break-word; font: 11px/1.5 var(--mono); background: var(--surface2); border-radius: var(--r3); padding: 8px 10px; margin: 6px 0 0; color: var(--dim); }
-  #planbelow { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px; }
+  .shot .frame .look { position: absolute; right: 8px; bottom: 8px; background: rgba(0,0,0,.75); color: var(--ink); border: 0; border-radius: 0; padding: 4px 8px; font-size: 12px; }
+  .shot .body { padding: 10px 0 0; }
+  .shot h3 { margin: 0 0 4px; font: 500 15px/1.4 var(--ui); }
+  .shot .meas { font: 400 13px/1.5 var(--ui); font-variant-numeric: tabular-nums; color: var(--dim); }
+  .shot .meas .warnc, .warnc { color: var(--ink); }
+  .shot .desc { margin-top: 6px; font-size: 15px; }
+  .shot .why { color: var(--dim); font-size: 13px; margin-top: 4px; line-height: 1.5; }
+  .shot .dim { color: var(--mute); font-size: 13px; margin-top: 4px; }
+  .shot .relax { color: var(--dim); font-size: 13px; margin-top: 2px; }
+  .shot .review { margin-top: 8px; padding: 8px 0 0; border-top: 1px solid var(--line); background: transparent; border-radius: 0; font-size: 13px; color: var(--dim); }
+  .shot details { margin-top: 8px; font-size: 13px; color: var(--mute); }
+  .shot details pre { white-space: pre-wrap; word-break: break-word; font: 11px/1.5 var(--mono); background: transparent; border-left: 1px solid var(--line2); padding: 4px 12px; margin: 6px 0 0; color: var(--dim); }
+  #planbelow { display: grid; grid-template-columns: 1fr 1fr; gap: 0 40px; margin-top: 24px; }
   @media (max-width: 900px) { #planbelow { grid-template-columns: 1fr; } }
-  #floorplan svg { width: 100%; height: auto; border-radius: var(--r2); display: block; }
-  #capacity table { border-collapse: separate; border-spacing: 3px; width: 100%; font: 12px/1.4 var(--mono); }
-  #capacity th { color: var(--dim); font-weight: 500; text-align: center; font-size: 11px; }
+  #floorplan svg { width: 100%; height: auto; border-radius: 0; display: block; }
+  #capacity { overflow-x: auto; }
+  #capacity table { border-collapse: separate; border-spacing: 2px; width: 100%; font: 400 12px/1.4 var(--ui); font-variant-numeric: tabular-nums; }
+  #capacity th { color: var(--dim); font-weight: 500; text-align: center; font-size: 12px; }
   #capacity th.row { text-align: left; }
-  #capacity td { text-align: center; border-radius: 4px; padding: 6px 2px; color: var(--ink); min-width: 34px; }
-  #capacity .foot { color: var(--mute); font-size: 12px; margin-top: 10px; font-family: var(--sans); }
+  #capacity td { text-align: center; border-radius: 0; padding: 6px 2px; color: var(--ink); min-width: 34px; }
+  #capacity .foot { color: var(--mute); font-size: 13px; margin-top: 10px; }
   #capacity .lead { font-size: 13px; margin-bottom: 10px; color: var(--dim); }
-  #capacity .lead b { color: var(--ink); font-family: var(--mono); font-weight: 500; }
-  #capacity ol { margin: 6px 0 0 18px; padding: 0; color: var(--dim); font-size: 12px; }
-  #planlinks { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+  #capacity .lead b { color: var(--ink); font-weight: 500; font-variant-numeric: tabular-nums; }
+  #capacity ol { margin: 6px 0 0 18px; padding: 0; color: var(--dim); font-size: 13px; }
+  #planlinks { display: flex; gap: 20px; flex-wrap: wrap; margin-top: 16px; font-size: 13px; }
 
-  /* -- chat -- */
-  #chat .ptitle { margin-bottom: 16px; }
-  #thread { display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px; }
+  /* -- chat: a transcript, not bubbles -- */
+  #chat .ptitle { margin-bottom: 8px; }
+  #thread { display: flex; flex-direction: column; gap: 0; margin-bottom: 16px; }
   #thread:empty { display: none; }
-  .msg { max-width: 78%; padding: 10px 14px; border-radius: var(--r); white-space: pre-wrap; border: 1px solid var(--line); font-size: 13.5px; }
-  .msg.user { align-self: flex-end; background: var(--surface2); }
-  .msg.agent { align-self: flex-start; background: var(--surface); }
-  .msg.agent img { max-width: 100%; border-radius: var(--r2); margin-top: 8px; display: block; }
-  .msg .tools { color: var(--mute); font: 11.5px/1.7 var(--mono); border-top: 1px solid var(--line); margin-top: 8px; padding-top: 6px; }
-  .msg.err { border-color: var(--line2); color: var(--dim); }
-  .thinking { color: var(--dim); font-size: 13px; }
-  #chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
-  #askrow { display: flex; gap: 8px; }
-  #ask { flex: 1; padding: 10px 14px; }
+  .msg { position: relative; max-width: none; width: 100%; padding: 14px 0 14px 72px; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: transparent; white-space: pre-wrap; font-size: 15px; }
+  .msg:first-child { border-top: 0; }
+  .msg::before { position: absolute; left: 0; top: 17px; font: 500 11px/1 var(--ui); letter-spacing: .08em; text-transform: uppercase; color: var(--mute); }
+  .msg.user::before { content: "You"; }
+  .msg.agent::before { content: "Scout"; }
+  .msg.user { color: var(--dim); }
+  .msg.agent { color: var(--ink); }
+  .msg.agent img { max-width: var(--measure); width: 100%; border-radius: 0; margin-top: 12px; display: block; }
+  .msg .tools { color: var(--mute); font: 12px/1.7 var(--ui); border-top: 1px solid var(--line); margin-top: 8px; padding-top: 6px; }
+  .msg.err { color: var(--dim); }
+  .thinking { color: var(--mute); font-size: 13px; padding: 14px 0 14px 72px; }
+  #chips { margin-bottom: 12px; }
+  #askrow { display: flex; gap: 12px; border-top: 1px solid var(--line); padding-top: 16px; }
+  #ask { flex: 1; }
+  @media (max-width: 720px) { .msg, .thinking { padding-left: 0; padding-top: 32px; } .msg::before { top: 12px; }
+    .wd_controls .wd_dressing { flex-basis: 100%; }
+    .wd_controls .primary, .st_runrow .primary, #planrow #planbtn, #pkg .acts .primary { margin-left: 0; width: 100%; } }
 </style>
 <main>
   <div id="top">
@@ -2431,7 +2543,6 @@ PAGE = """<!doctype html>
     <nav class="topnav"><a href="/projects">Projects</a><a href="/capture">Capture</a><a href="/pricing">Pricing</a></nav>
     <div class="right">
       <button class="hidden" id="galbtn"></button>
-      <span class="pill hidden" id="covpill">local sweep</span>
       <a class="quiet hidden" id="topagain" href="/">Scan another room</a>
     </div>
   </div>
@@ -2440,8 +2551,8 @@ PAGE = """<!doctype html>
     <h1>Locaish</h1>
     <p class="lead" id="lead">Scan a room with your phone. Plan the scene before anyone drives out.</p>
     <div id="drop">
-      <b>Drop a walkthrough video here</b>
-      <span>or a scan export &mdash; ply, glb, obj &mdash; or a saved .twin. Sixty seconds of walking is plenty.</span>
+      <div><b>Drop a walkthrough video here</b>
+      <span>or a scan export &mdash; ply, glb, obj &mdash; or a saved .twin. Sixty seconds of walking is plenty.</span></div>
       <span class="btn">Choose a file</span>
       <input id="file" type="file" accept="video/*,.ply,.obj,.glb,.gltf,.stl,.mov,.mp4,.mkv,.twin" class="hidden">
     </div>
@@ -2464,6 +2575,8 @@ PAGE = """<!doctype html>
   </div>
 
   <div id="result" class="hidden">
+    <header id="jobhead"><h1 id="jobtitle"></h1><div class="num"><span id="jobarea"></span></div>
+      <div id="jobfacts"><span id="jobmeta" class="dim"></span><span class="pill hidden" id="covpill">local sweep</span></div></header>
     <div id="hero">
       <div id="viewerwrap"><iframe id="viewer" title="digital twin"></iframe></div>
       <div id="scoutcap" class="hidden"></div>
@@ -2472,144 +2585,182 @@ PAGE = """<!doctype html>
     <div id="heroactions"></div>
 
     <section id="world">
-      <div class="sechead">
+      <div class="sechead"><span class="n">01</span>
         <div class="sub"><h2>Walk into it as it will be on the day</h2>
-          <p>Pick the shoot date and the hour. The measured room is rendered as it will be, with the sun where the ephemeris puts it, beside the one you scanned.</p></div>
-      </div>
-      <div class="panelbox">
-        <div class="st_row wd_controls">
-          <label class="dim">shoot date <input id="wd_date" type="date"></label>
-          <label class="dim">hour <input id="wd_hour" type="range" min="6" max="20" step="0.5" value="15"><b id="wd_hourout">15:00</b><span class="wd_solar">solar</span></label>
-          <input id="wd_dressing" class="wd_dressing" placeholder="dressing: the table laid for dinner, candles lit, white lilies in the window">
-          <button id="wd_build" class="primary">Build the world</button>
-        </div>
-        <div class="dim st_hint" id="wd_hint"></div>
-        <div id="wd_progress" class="wd_progress"></div>
-        <div id="wd_log" class="st_log"></div>
-        <div id="wd_prev" class="hidden dim wd_prev"></div>
+          <p>The room on the shoot date, sun included.</p></div>
       </div>
       <div id="wd_out" class="hidden">
+        <div id="wd_wrap"><iframe id="wd_frame" title="the room as it will be on the day"></iframe></div>
         <div class="wd_bar">
           <span class="st_toggle"><button id="wd_scanned" data-mode="scan">as scanned</button><button id="wd_asis" class="on" data-mode="world">as it will be</button></span>
           <span class="st_tag" id="wd_tag">render</span>
           <span class="dim" id="wd_meta"></span>
           <a id="wd_full" href="#" target="_blank">Full screen</a>
         </div>
-        <div id="wd_wrap"><iframe id="wd_frame" title="the room as it will be on the day"></iframe></div>
         <div id="wd_strip" class="st_strip wd_strip"></div>
       </div>
+      <div class="bar wd_controls">
+        <input id="wd_dressing" class="wd_dressing" placeholder="dressing: the table laid for dinner, candles lit, white lilies in the window">
+        <button id="wd_build" class="primary">Build the world</button>
+      </div>
+      <div id="wd_progress" class="wd_progress"></div>
+      <div id="wd_log" class="st_log"></div>
+      <details class="fold" id="wd_fold"><summary>Shoot date <b id="wd_when"></b> <span>notes and earlier worlds</span></summary>
+        <div class="wd_when">
+          <label class="dim">shoot date <input id="wd_date" type="date"></label>
+          <label class="dim">hour <input id="wd_hour" type="range" min="6" max="20" step="any" value="15"><b id="wd_hourout">15:00</b><span class="wd_solar">solar</span></label>
+        </div>
+        <p class="dim sub">Pick the shoot date and the hour. The measured room is rendered as it will be, with the sun where the ephemeris puts it, beside the one you scanned.</p>
+        <div class="dim" id="wd_dressnote"></div>
+        <div class="dim st_hint" id="wd_hint"></div>
+        <div id="wd_prev" class="hidden dim wd_prev"></div>
+      </details>
     </section>
 
     <section id="stage">
-      <div class="sechead">
-        <div class="sub"><h2>The scene in this room</h2>
-          <p>Cast it, dress it, paste the scene. Every frame is checked against the measured room, then finished as a photograph.</p></div>
-      </div>
-      <div class="dim" id="st_status"></div>
-      <div class="st_grid">
-        <div class="panelbox"><h4>Cast</h4>
-          <div id="st_cast" class="st_list"></div>
-          <div class="st_row"><input id="st_name" placeholder="name"><input id="st_height" type="number" step="0.01" min="1.2" max="2.2" placeholder="height, m"><button id="st_add" class="lensbtn">Add</button></div>
-          <div class="dim st_hint">Height is the measurement. Looks and wardrobe are what the finish dresses the stand-in in.</div>
-          <div class="dim" id="st_caststatus"></div>
-        </div>
-        <div class="panelbox"><h4>Set pieces</h4>
-          <div class="st_row"><select id="st_liftsel"></select><button id="st_lift" class="lensbtn">Lift into a set piece</button></div>
-          <div id="st_pieces" class="st_list"></div>
-          <div class="dim" id="st_piecestatus"></div>
-        </div>
-        <div class="panelbox st_planbox"><h4>The room as dressed</h4><div id="st_plan"></div></div>
-      </div>
-      <div class="panelbox st_scenebox">
-        <h4>The scene</h4>
-        <textarea id="st_scene" rows="7" placeholder="Paste the scene, or type beats: MARKS: A=(0.4,0.8) ... CAST: Maya=1.68 ... 1. Maya enters at A ..."></textarea>
-        <div class="st_row st_runrow">
-          <label class="dim">shoot date <input id="st_date" type="date"></label>
-          <label class="dim">first frame <input id="st_start" type="time" value="09:00"></label>
-          <label class="dim">minutes per setup <input id="st_setup" type="number" value="25" min="5" max="120" style="width:64px"></label>
-          <a id="st_example_typed" href="#">typed example</a><a id="st_example_prose" href="#">prose example</a>
-          <button id="st_run" class="primary">Rehearse the scene</button>
-        </div>
-        <div id="st_prev" class="hidden dim"></div>
-        <div id="st_log" class="st_log"></div>
+      <div class="sechead"><span class="n">02</span>
+        <div class="sub"><h2>The scene in this room</h2></div>
       </div>
       <div id="st_out" class="hidden">
         <div id="st_head" class="st_head2"></div>
-        <div id="st_finishbar" class="st_finishbar"></div>
         <div id="st_frame"></div>
-        <div class="st_row"><button id="st_play" class="lensbtn">Play</button><input id="st_scrub" type="range" min="0" max="0" value="0"></div>
+        <div class="st_row st_ctl"><div id="st_finishbar" class="st_finishbar"></div><button id="st_play" class="plain">Play</button><input id="st_scrub" type="range" min="0" max="0" value="0"></div>
+        <div id="st_finishstatus"></div>
         <div id="st_strip" class="st_strip"></div>
-        <div class="st_grid2">
-          <div class="panelbox"><h4>Setups</h4><div id="st_shots"></div><div id="st_problems"></div></div>
-          <div class="panelbox"><div id="st_sched"></div><div id="st_notes"></div></div>
-          <div class="panelbox"><h4>Blocking</h4><div id="st_blocking"></div></div>
-        </div>
-        <div id="st_links" class="st_links"></div>
+        <details class="fold" id="st_outfold"><summary>Finishing, setups, the shoot day, blocking</summary>
+          <div class="st_row" id="st_finishmore"></div>
+          <div class="st_row" id="st_framemore"></div>
+          <div class="st_grid2">
+            <div class="panelbox"><h4>Setups</h4><div id="st_shots"></div><div id="st_problems"></div></div>
+            <div class="panelbox"><div id="st_sched"></div><div id="st_notes"></div></div>
+            <div class="panelbox"><h4>Blocking</h4><div id="st_blocking"></div></div>
+          </div>
+          <div id="st_links" class="st_links"></div>
+        </details>
       </div>
+      <div class="panelbox st_scenebox">
+        <h4>The scene</h4>
+        <textarea id="st_scene" rows="7" placeholder="Paste the scene as prose, or type beats: MARKS: A=(0.4,0.8) ... CAST: Maya=1.68 ... 1. Maya enters at A ..."></textarea>
+        <div class="st_row st_runrow">
+          <button id="st_run" class="primary">Rehearse the scene</button>
+        </div>
+        <details class="fold st_runfold" id="st_runfold"><summary>Shoot day <b id="st_when"></b> <span>examples</span></summary>
+          <div id="st_prev" class="hidden dim"></div>
+          <div class="st_row">
+            <label class="dim">shoot date <input id="st_date" type="date"></label>
+            <label class="dim">first frame <input id="st_start" type="time" value="09:00"></label>
+            <label class="dim">minutes per setup <input id="st_setup" type="number" value="25" min="5" max="120" class="w64"></label>
+            <a id="st_example_typed" href="#">typed example</a><a id="st_example_prose" href="#">prose example</a>
+          </div>
+        </details>
+        <div id="st_log" class="st_log"></div>
+      </div>
+      <details class="fold" id="st_fold"><summary>Cast and set pieces</summary>
+        <p class="dim sub">Cast it, dress it, paste the scene. Every frame is checked against the measured room, then finished as a photograph.</p>
+        <div class="dim" id="st_status"></div>
+        <div class="st_grid">
+          <div class="panelbox"><h4>Cast</h4>
+            <div id="st_cast" class="st_list"></div>
+            <div class="st_row"><input id="st_name" placeholder="name"><input id="st_height" type="number" step="0.01" min="1.2" max="2.2" placeholder="height, m"><button id="st_add" class="lensbtn">Add</button></div>
+            <div class="dim st_hint">Height is the measurement. Looks and wardrobe are what the finish dresses the stand-in in.</div>
+            <div class="dim" id="st_caststatus"></div>
+          </div>
+          <div class="panelbox"><h4>Set pieces</h4>
+            <div class="st_row"><select id="st_liftsel"></select><button id="st_lift" class="lensbtn">Lift into a set piece</button></div>
+            <div id="st_pieces" class="st_list"></div>
+            <div class="dim" id="st_piecestatus"></div>
+          </div>
+          <div class="panelbox st_planbox"><h4>The room as dressed</h4><div id="st_plan"></div></div>
+        </div>
+      </details>
     </section>
     <section id="sim">
-      <div class="sechead">
-        <div class="sub"><h2>Simulate the camera</h2>
-          <p>Direct the camera, or key the move yourself in the twin. The engine runs it through the measured room on a real rig, frame by frame.</p></div>
+      <div class="sechead"><span class="n">03</span>
+        <div class="sub"><h2>Simulate the camera</h2></div>
       </div>
-      <div class="sm_list" id="sm_list"></div>
-      <div class="st_row"><button id="sm_new" class="lensbtn">New move</button><select id="sm_fromreh"><option value="">from rehearsal</option></select><span class="dim" id="sm_status"></span></div>
+      <div id="sm_head" class="st_head2"></div>
+      <div class="st_row sm_bar">
+        <button id="sm_new" class="plain">New move</button>
+        <select id="sm_fromreh" class="astext"><option value="">from rehearsal &#9662;</option></select>
+        <input id="sm_instruction" placeholder="push in on Maya over four seconds on the 50, low, as she sits" disabled>
+        <button id="sm_directbtn" class="plain">Direct</button>
+      </div>
+      <div class="dim" id="sm_status"></div>
       <div id="sm_open" class="hidden">
-        <div class="panelbox sm_direct"><h4>Direct the camera</h4>
-          <div class="st_row"><input id="sm_instruction" placeholder="push in on Maya over four seconds on the 50, low, as she sits"><button id="sm_directbtn" class="primary">Direct</button></div>
-          <div class="dim st_hint" id="sm_directnote"></div>
-          <div class="st_log" id="sm_directlog"></div>
-          <div class="sm_looks" id="sm_looks"></div>
-          <div id="sm_directnotes"></div>
-        </div>
-        <div class="sm_grid">
-          <div class="panelbox sm_frame"><h4>Frame at the playhead</h4><img id="sm_frameimg" alt="frame at the playhead"><div class="dim" id="sm_frametext"></div>
-            <div class="sm_acts"><button id="sm_twin" class="primary">Open in the twin</button><button id="sm_render" class="lensbtn">Render the move</button></div>
-            <div class="st_log" id="sm_log"></div>
-            <div class="sm_video" id="sm_video"></div>
-            <div class="sm_acts" id="sm_finishacts"></div>
-            <div class="dim" id="sm_finishline"></div>
+        <div class="sm_looks" id="sm_looks"></div>
+        <div class="sm_frame">
+          <div class="sm_slot show_frame" id="sm_slot"><img id="sm_frameimg" alt="frame at the playhead"><div class="sm_video" id="sm_video"></div></div>
+          <div class="sm_cap">
+            <span class="st_toggle" id="sm_view"><button data-v="measured" class="on">measured</button><button data-v="rendered" disabled>rendered</button></span>
+            <button id="sm_play" class="plain dimword hidden">Play</button>
+            <button id="sm_twin" class="primary">Open in the twin</button>
+            <span id="sm_dl" class="sm_dl"></span>
+            <span class="sm_right"><span id="sm_finishacts"></span><button id="sm_render" class="primary">Render the move</button></span>
           </div>
+          <div class="dim" id="sm_frametext"></div>
+          <div class="st_log" id="sm_log"></div>
+          <div class="dim" id="sm_finishline"></div>
+        </div>
+        <details class="fold" id="sm_fold"><summary>Rig, what does not work, hand-off</summary>
+          <p class="dim sub">Direct the camera, or key the move yourself in the twin. The engine runs it through the measured room on a real rig, frame by frame.</p>
+          <div class="dim st_hint" id="sm_directnote"></div>
           <div class="panelbox"><h4>Rig</h4><div class="sm_rig" id="sm_rig"></div>
             <h4 class="mt">What does not work</h4><div id="sm_problems"></div>
             <div class="sm_summary" id="sm_summary"></div>
             <h4 class="mt">Hand-off</h4>
             <div class="st_links" id="sm_links"></div>
-            <div class="sm_howto">The timeline and its evaluation, the video, the room as a mesh, and the camera as a script another package can read.</div>
+            <div class="sm_howto">The timeline and its evaluation, the video, the room as a mesh, and the camera as a script another package can read. A finished move puts every 12th rendered frame through Muse Image and holds it between.</div>
           </div>
-        </div>
+        </details>
+        <details class="fold" id="sm_fold_log"><summary>The operator&rsquo;s log and notes</summary>
+          <div class="st_log" id="sm_directlog"></div>
+          <div id="sm_directnotes"></div>
+        </details>
       </div>
+      <details class="fold hidden" id="sm_listfold"><summary>Moves <b id="sm_count"></b></summary>
+        <div class="sm_list" id="sm_list"></div>
+      </details>
     </section>
     <section id="contents">
-      <div class="sechead">
-        <div class="sub"><h2>What is in the room</h2>
-          <p>Named from the capture's own frames by the vision model, confirmed or corrected by you.</p></div>
-        <div class="acts"><button class="lensbtn" id="detectbtn">Name things with the vision model</button><button class="lensbtn" id="labelbtn">Label an object</button></div>
+      <div class="sechead"><span class="n">04</span>
+        <div class="sub"><h2>What is in the room</h2></div>
+        <div class="acts"><button class="plain" id="labelbtn">Label an object</button><button class="plain" id="detectbtn">Name things with the vision model</button></div>
       </div>
-      <div class="panelbox">
-        <div id="chips" class="labelchips"><span class="dim">nothing named yet</span></div>
-        <div id="labelpick" class="hidden">
-          <div class="dim" id="lpmeta"></div>
-          <div class="crops" id="crops"></div>
-          <div class="lprow">
-            <input id="lpname" list="lpnames" placeholder="what is it? e.g. fridge, radiator, piano" autocomplete="off">
-            <datalist id="lpnames"><option value="sofa"><option value="armchair"><option value="dining table"><option value="coffee table"><option value="bed"><option value="desk"><option value="bookshelf"><option value="cabinet"><option value="kitchen island"><option value="counter"><option value="sink"><option value="fridge"><option value="oven"><option value="radiator"><option value="fireplace"><option value="column"><option value="beam"><option value="window"><option value="door"><option value="curtain"><option value="pendant lamp"><option value="floor lamp"><option value="ceiling fan"><option value="plant"><option value="mirror"><option value="artwork"><option value="television"><option value="piano"><option value="electrical panel"><option value="socket"></datalist>
-            <select id="lpkind"><option value="furniture">furniture</option><option value="appliance">appliance</option><option value="fixture">fixture</option><option value="window">window</option><option value="door">door</option><option value="lighting">lighting</option><option value="plant">plant</option><option value="artwork">artwork</option><option value="equipment">equipment</option><option value="structure">structure</option><option value="other" selected>other</option></select>
-            <button id="lpsave" class="primary">Save label</button>
-            <button id="lpcancel">Cancel</button>
-          </div>
+      <div id="chips" class="labelchips"><span class="dim">nothing named yet</span></div>
+      <div id="labelpick" class="hidden">
+        <div class="dim" id="lpmeta"></div>
+        <div class="crops" id="crops"></div>
+        <div class="lprow">
+          <input id="lpname" list="lpnames" placeholder="what is it? e.g. fridge, radiator, piano" autocomplete="off">
+          <datalist id="lpnames"><option value="sofa"><option value="armchair"><option value="dining table"><option value="coffee table"><option value="bed"><option value="desk"><option value="bookshelf"><option value="cabinet"><option value="kitchen island"><option value="counter"><option value="sink"><option value="fridge"><option value="oven"><option value="radiator"><option value="fireplace"><option value="column"><option value="beam"><option value="window"><option value="door"><option value="curtain"><option value="pendant lamp"><option value="floor lamp"><option value="ceiling fan"><option value="plant"><option value="mirror"><option value="artwork"><option value="television"><option value="piano"><option value="electrical panel"><option value="socket"></datalist>
+          <select id="lpkind"><option value="furniture">furniture</option><option value="appliance">appliance</option><option value="fixture">fixture</option><option value="window">window</option><option value="door">door</option><option value="lighting">lighting</option><option value="plant">plant</option><option value="artwork">artwork</option><option value="equipment">equipment</option><option value="structure">structure</option><option value="other" selected>other</option></select>
+          <button id="lpsave" class="primary">Save label</button>
+          <button id="lpcancel">Cancel</button>
         </div>
-        <div class="dim" id="lstatus"></div>
       </div>
+      <div class="dim" id="lstatus"></div>
     </section>
-    <details id="more" class="moretools"><summary>Scouting tools <span>the location package, the coverage planner, the scout</span></summary>
+    <details id="more" class="moretools"><summary>Scouting tools<span class="sub">three tools: the location package, the coverage planner, the scout</span></summary>
+    <nav class="toolsnav"><a href="#pkg">The location package</a><a href="#coverage">The coverage planner</a><a href="#chat">The scout</a></nav>
     <section id="pkg">
-      <div class="sechead">
+      <div class="sechead"><span class="n">05.1</span>
         <div class="sub"><h2>Location package</h2>
-          <p>Dimensions, what fits, and the sun through every window on the shoot date, on one page a scout can send.</p></div>
+          <p>One page a scout can send.</p></div>
       </div>
       <div class="pkgrow">
-        <div class="panelbox">
+        <div class="sunprev">
+          <img id="sunimg" alt="floor plan with the sun's patch">
+          <div class="hours" id="hours"></div>
+        </div>
+        <div class="acts">
+          <button id="d_save">Save details</button>
+          <button id="pkgshare">Share link</button>
+          <span class="st" id="d_status"></span>
+          <a id="pkgopen" class="primary" href="#" target="_blank">Open the package</a>
+        </div>
+        <div class="sharebox hidden" id="sharebox"></div>
+        <details class="fold" id="pkg_fold"><summary>Details for the package <span>name, address, georeference, contact, power, access</span></summary>
+          <p class="dim sub">Dimensions, what fits, and the sun through every window on the shoot date, on one page a scout can send.</p>
           <div class="two">
             <div class="field"><label>Location name</label><input id="d_display_name" placeholder="The Fairfax kitchen"></div>
             <div class="field"><label>Shoot date</label><input id="d_shoot_date" type="date"></div>
@@ -2633,27 +2784,16 @@ PAGE = """<!doctype html>
             <div class="field"><label>Restrictions</label><input id="d_restrictions" placeholder="no shoots after 22:00"></div>
           </div>
           <div class="field"><label>Notes</label><textarea id="d_notes" rows="2"></textarea></div>
-          <div class="acts">
-            <button id="d_save">Save details</button>
-            <a id="pkgopen" class="primary" href="#" target="_blank">Open the package</a>
-            <button id="pkgshare">Share link</button>
-            <span class="st" id="d_status"></span>
-          </div>
-          <div class="sharebox hidden" id="sharebox"></div>
-        </div>
-        <div class="sunprev">
-          <img id="sunimg" alt="floor plan with the sun's patch">
-          <div class="hours" id="hours"></div>
-        </div>
+        </details>
       </div>
     </section>
     <section id="coverage">
-      <div class="sechead">
+      <div class="sechead"><span class="n">05.2</span>
         <div class="sub"><h2>Describe the scene</h2>
-          <p>Prose, or a shot list one per line. The scout places every shot in this room and draws the camera plan.</p></div>
+          <p>Every shot placed in this room, the plan drawn.</p></div>
       </div>
       <div id="briefwrap">
-        <textarea id="brief" rows="5" placeholder="INT. KITCHEN &ndash; DAY. MAYA stands at the counter, back to the window, when JON comes in&hellip;"></textarea>
+        <textarea id="brief" rows="5" placeholder="Prose, or a shot list one per line. INT. KITCHEN &ndash; DAY. MAYA stands at the counter, back to the window, when JON comes in&hellip;"></textarea>
         <div id="planrow">
           <span id="modenote"></span>
           <a id="example" href="#">example</a>
@@ -2673,10 +2813,13 @@ PAGE = """<!doctype html>
       </div>
     </section>
     <section id="chat">
-      <div class="ptitle">Ask the scout</div>
+      <div class="sechead"><span class="n">05.3</span>
+        <div class="sub"><h2>Ask the scout</h2>
+          <p>The scout answers from the twin itself.</p></div>
+      </div>
       <div id="thread"></div>
       <div id="askrow">
-        <input id="ask" placeholder="Ask the scout anything about this room&hellip;" autocomplete="off">
+        <input id="ask" placeholder="Ask about this room: measurements, the scout report, dolly checks&hellip;" autocomplete="off">
         <button id="send">Ask</button>
       </div>
     </section>
@@ -2686,6 +2829,10 @@ PAGE = """<!doctype html>
 <script>
 const $ = id => document.getElementById(id);
 const SHOWCASE = '__SHOWCASE__' === '1';
+// An empty date or time input shows its mask in the placeholder grey, not as a value.
+function dateEmpty() { document.querySelectorAll('input[type=date], input[type=time]').forEach(i => i.classList.toggle('empty', !i.value)); }
+['input', 'change'].forEach(ev => document.addEventListener(ev, e => { const i = e.target; if (i && (i.type === 'date' || i.type === 'time')) i.classList.toggle('empty', !i.value); }));
+dateEmpty();
 if (SHOWCASE) $('topagain').textContent = 'All locations';
 const drop = $('drop'), file = $('file'), working = $('working'), result = $('result');
 const landing = $('landing');
@@ -2841,25 +2988,41 @@ function show(id, s) {
   $('covpill').classList.remove('hidden');
   if (!SHOWCASE) initGalBtn(id);
 
-  // The top bar carries the room in one quiet line; the twin speaks for itself.
+  // The top bar carries the room in one quiet line, but only once the masthead
+  // that says the same thing in the serif has scrolled away.
   const loc = $('toploc');
   loc.classList.remove('hidden');
-  $('locname').textContent = s.name || '';
+  if (!jobHeadWatch && 'IntersectionObserver' in window) {
+    jobHeadWatch = new IntersectionObserver(es => { $('top').classList.toggle('scrolled', !es[0].isIntersecting); }, {rootMargin: '-56px 0px 0px 0px'});
+    jobHeadWatch.observe($('jobhead'));
+  }
+  const setName = n => { const t = String(n || '').replace(/\\.[a-z0-9]+$/i, '').replace(/_+/g, ' '); $('locname').textContent = t; $('jobtitle').textContent = t; };
+  setName(s.name || '');
   const meta = [];
   if (s.floor_area_m2 != null) meta.push(s.floor_area_m2 + ' m²');
   if (s.ceiling_height_m != null) meta.push(s.ceiling_height_m.toFixed(2) + ' m ceiling');
   if (s.openings) meta.push(s.openings + (s.openings === 1 ? ' window' : ' windows'));
   if (s.setups) meta.push(s.setups.toLocaleString() + ' setups swept');
   $('locmeta').textContent = meta.join(' · ');
+  // The masthead: the name and the one number, big; one line of facts beneath
+  // that the stage script adds to as it learns how many frames and worlds exist.
+  $('jobarea').innerHTML = s.floor_area_m2 != null ? s.floor_area_m2.toFixed(2) + '<small>m²</small>' : '';
+  jobFacts = {};
+  if (s.ceiling_height_m != null) jobFacts.ceiling = s.ceiling_height_m.toFixed(2) + ' m ceiling';
+  if (s.openings) jobFacts.windows = s.openings + (s.openings === 1 ? ' window' : ' windows');
+  if (s.points) jobFacts.points = (s.points >= 1e6 ? (s.points / 1e6).toFixed(1) + ' M' : Math.round(s.points / 1e3) + ' k') + ' points';
+  if (s.setups) jobFacts.setups = s.setups.toLocaleString() + ' setups swept';
+  paintJobMeta();
   fetch('/twin-info/' + id).then(r => r.json()).then(r => {
-    if (r.name && !s.name) $('locname').textContent = r.name;
+    if (r.name && !s.name) setName(r.name);
   }).catch(() => {});
   if (!s.setups) fetch('/capacity/' + id).then(r => r.json()).then(c => {
-    if (c && c.available && c.total) { meta.push(c.total.toLocaleString() + ' setups swept'); $('locmeta').textContent = meta.join(' · '); }
+    if (c && c.available && c.total) { meta.push(c.total.toLocaleString() + ' setups swept'); $('locmeta').textContent = meta.join(' · '); jobFacts.setups = c.total.toLocaleString() + ' setups swept'; paintJobMeta(); }
   }).catch(() => {});
 
-  $('heroactions').innerHTML = '<a href="/view/' + id + '" target="_blank">Full screen</a>'
-    + (SHOWCASE ? '' : '<a href="/twin/' + id + '">.twin</a>');
+  $('heroactions').innerHTML = '<span class="cap"><b>as scanned</b>' + (s.points ? ' · ' + s.points.toLocaleString() + ' points' : '') + ' · gravity-aligned, metric</span>'
+    + '<span class="links"><a href="/view/' + id + '" target="_blank">Full screen</a>'
+    + (SHOWCASE ? '' : '<a href="/twin/' + id + '">.twin</a>') + '</span>';
 
   // QA findings stay in the pipeline log, where a crew member who wants them looks.
   const checks = s.checks || {};
@@ -2889,6 +3052,15 @@ function addUser(text) {
 
 function esc(t) {
   const d = document.createElement('div'); d.textContent = t; return d.innerHTML;
+}
+
+// The one line of facts under the masthead, in a fixed order whoever adds to it.
+let jobFacts = {};
+let jobHeadWatch = null;
+function paintJobMeta() {
+  const order = ['windows', 'ceiling', 'frames', 'worlds', 'setups', 'points'];
+  const el = $('jobmeta'); if (!el) return;
+  el.textContent = order.filter(k => jobFacts[k]).map(k => jobFacts[k]).join(' · ');
 }
 
 function addAgent(text, trace, plain) {
@@ -3368,22 +3540,36 @@ function loadLabels() {
     else if (!r.gemini) { $('detectbtn').disabled = true; $('detectbtn').title = 'no vision model configured'; }
   }).catch(() => {});
 }
+// The names as one run of text joined by dots: a name never breaks, a line
+// only breaks after a dot, and the same name several times is one name with
+// a count. The actions act on every label behind the name.
 function paintChips() {
   const box = $('chips');
   if (!lblList.length) { box.innerHTML = '<span class="dim">nothing named yet</span>'; return; }
   box.innerHTML = '';
+  const groups = [];
   lblList.forEach(l => {
+    const key = String(l.label || '').trim().toLowerCase();
+    let g = groups.find(x => x.key === key);
+    if (!g) { g = {key, label: l.label, items: []}; groups.push(g); }
+    g.items.push(l);
+  });
+  groups.forEach((g, i) => {
+    if (i) { const sep = document.createElement('span'); sep.className = 'sep'; sep.textContent = '\\u00a0\\u00b7 '; box.appendChild(sep); }
+    const user = g.items.some(l => l.source === 'user');
+    const ids = g.items.map(l => l.id).join(',');
     const c = document.createElement('span');
-    c.className = 'chip' + (l.source === 'user' ? '' : ' model');
-    c.title = (l.source === 'user' ? 'named by a person' : 'named by the model in ' + (l.confidence || 1) + ' frame(s)') + ' · ' + l.xyz.map(v => Number(v).toFixed(2)).join(', ') + ' m';
-    c.innerHTML = esc(l.label) + (l.source === 'user' ? '' : '<span class="k">?</span>')
-      + (l.source === 'user' ? '' : '<button class="ok" data-ok="' + l.id + '" title="confirm">✓</button>')
-      + '<button data-look="' + l.id + '" title="show the photograph">◉</button>'
-      + '<button data-rm="' + l.id + '" title="remove">×</button>';
+    c.className = 'chip' + (user ? '' : ' model');
+    c.title = g.items.map(l => (l.source === 'user' ? 'named by a person' : 'named by the model in ' + (l.confidence || 1) + ' frame(s)') + ' · ' + l.xyz.map(v => Number(v).toFixed(2)).join(', ') + ' m').join('\\n');
+    c.innerHTML = esc(g.label) + (g.items.length > 1 ? '<span class="k">×' + g.items.length + '</span>' : '')
+      + (user ? '' : '<button class="act ok" data-ok="' + ids + '" title="the model named this; confirm it">confirm</button>')
+      + '<button class="act" data-look="' + g.items[0].id + '" title="show the photograph">◉</button>'
+      + '<button class="act" data-rm="' + ids + '" title="remove">×</button>';
     box.appendChild(c);
   });
-  box.querySelectorAll('[data-ok]').forEach(b => b.onclick = () => fetch('/labels/' + lblJob + '/' + b.dataset.ok + '/confirm', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'}).then(r => r.json()).then(r => { if (r.labels) { lblList = r.labels; paintChips(); postViewer({type: 'locaish:labels', labels: lblList}); } }));
-  box.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => fetch('/labels/' + lblJob + '/' + b.dataset.rm, {method: 'DELETE'}).then(() => loadLabels()));
+  const each = (list, f) => Promise.all(list.split(',').filter(Boolean).map(f));
+  box.querySelectorAll('[data-ok]').forEach(b => b.onclick = () => each(b.dataset.ok, id => fetch('/labels/' + lblJob + '/' + id + '/confirm', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'}).then(r => r.json())).then(rs => { const r = rs[rs.length - 1]; if (r && r.labels) { lblList = r.labels; paintChips(); postViewer({type: 'locaish:labels', labels: lblList}); } }));
+  box.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => each(b.dataset.rm, id => fetch('/labels/' + lblJob + '/' + id, {method: 'DELETE'})).then(() => loadLabels()));
   box.querySelectorAll('[data-look]').forEach(b => b.onclick = () => { const l = lblList.find(x => x.id === b.dataset.look); if (l) showPick(l.xyz, l); });
 }
 function detectLabels() {
@@ -3543,9 +3729,9 @@ function initGalBtn(id) {
     lib.classList.remove('hidden');
     lib.innerHTML = '<div class="libhead">' + (SHOWCASE ? 'Locations' : 'Scanned locations')
       + '</div><div id="rooms"></div>'
-      + (SHOWCASE ? '<p class="libfoot">Scanned with the Locaish pipeline — classical reconstruction, '
+      + (SHOWCASE ? '<details class="fold"><summary>About these scans</summary><p class="libfoot">Scanned with the Locaish pipeline — classical reconstruction, '
         + 'no neural models — then swept into ClickHouse and scouted by Gemini. '
-        + 'Scanning runs in the local studio; this gallery is the result.</p>' : '');
+        + 'Scanning runs in the local studio; this gallery is the result.</p></details>' : '');
     const rooms = document.getElementById('rooms');
     done.forEach(j => {
       const s = j.summary || {};
@@ -3599,7 +3785,11 @@ function initGalBtn(id) {
     const j = (r.jobs || []).find(x => x.id === want);
     if (!j || j.state !== 'done') { line('no finished job ' + want, 'error'); return; }
     landing.classList.add('hidden');
+    if (j.name && !(j.summary || {}).name) j.summary = Object.assign({}, j.summary, {name: j.name});
     show(j.id, j.summary);
+    // A link to something inside the folded tools (#pkg, #coverage, #chat) opens the fold.
+    const target = location.hash && document.querySelector(location.hash.replace(/[^#\\w-]/g, ''));
+    if (target && target.closest('#more')) { $('more').open = true; target.scrollIntoView({block: 'start'}); }
     if (qp.get('demo')) {
       $('brief').value = BRIEFS[1];
       setTimeout(startPlan, 800);
