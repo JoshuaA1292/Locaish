@@ -151,3 +151,11 @@ def test_a_sequence_finishes_setup_by_setup_and_a_later_frame_keeps_its_setups_b
     same = [p for p in prompts if "THIS SAME SETUP" in p]
     assert len(same) == 3, "frames 1, 3 and 4 each carry their own setup's previous finished frame"
     assert (tmp_path / "finish_frame_0004.json").exists()
+
+
+def test_a_frame_with_no_cast_is_judged_as_empty_of_people_whatever_the_marks_say():
+    fake = FakeMetaClient(image=_png(), chat_answers=[{"ok": True, "problems": []}])
+    F.review_finished(fake, _png(), _png(), _meta(), [], photos=[_png()])
+    text = fake.log[-1]["text"]
+    assert "there is any person, figure or part of a person in it (nobody is in this frame)" in text
+    assert "Maya" not in text and "exactly 2" not in text

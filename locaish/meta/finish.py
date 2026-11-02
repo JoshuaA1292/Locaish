@@ -429,8 +429,8 @@ REVIEW_SCHEMA = {
 _REVIEW = (
     "Image 1 is a finished photoreal film still. Image 2 is the rough 3D render it was made from, "
     "with flat coloured stand-in figures where the people go. {photos}{anchor}Judge image 1 and answer JSON "
-    '{{"ok": true/false, "problems": [...]}}. It FAILS when any of these is true: there are not '
-    "exactly {count} {people_word} in it{names}; a seated person has no chair or seat visibly under "
+    '{{"ok": true/false, "problems": [...]}}. It FAILS when any of these is true: {people_rule}; a '
+    "seated person has no chair or seat visibly under "
     "them, floats, or squats in mid-air; a person who should be on their feet is sitting, "
     "crouching, kneeling, squatting or perched on anything; anyone has an extra or missing limb, hand or face; a "
     "person stands where image 2 has no figure, or a figure's place has no person; the framing "
@@ -486,6 +486,11 @@ def review_finished(client, finished_png: bytes, measured_png: bytes, meta: dict
     said, so the reviewer holds the frame to the same contract."""
     present = meta.get("actors")
     names = list(present.keys()) if isinstance(present, dict) else [a.name for a in cast]
+    # only the cast can be in the picture: a world with no cast has nobody in
+    # it whatever marks the meta carries, and a stand-in missing from the
+    # render puts its actor out of frame
+    in_cast = {a.name for a in cast}
+    names = [n for n in names if n in in_cast]
     if boxes:
         names = [n for n in names if n in boxes]
     # the judge needs no more than 1024 px a side: five full-size stills is
@@ -507,9 +512,10 @@ def review_finished(client, finished_png: bytes, measured_png: bytes, meta: dict
         elif isinstance(staged, dict) and str(staged.get("pose") or "standing") in ("standing", "walking", "leaning"):
             seated.append(f"{name} must be on their feet, standing at full height, not sitting, crouching or kneeling")
     nums = (f"{photo_nums[0]}" if len(photo_nums) == 1 else " and ".join(str(n) for n in photo_nums))
+    people_rule = (f"there are not exactly {len(names)} {'person' if len(names) == 1 else 'people'} in it"
+                   + (" (" + ", ".join(names) + ")") if names else "there is any person, figure or part of a person in it (nobody is in this frame)")
     text = _REVIEW.format(
-        count=len(names), people_word="person" if len(names) == 1 else "people",
-        names=(" (" + ", ".join(names) + ")") if names else "",
+        people_rule=people_rule,
         photos=_REVIEW_PHOTOS.format(nums=nums).replace("Images " + nums + " are", "Image " + nums + " is") if len(photo_nums) == 1 else (_REVIEW_PHOTOS.format(nums=nums) if photo_nums else ""),
         anchor=_REVIEW_ANCHOR.format(n=anchor_n) if anchor_n else "",
         photo_fail=_REVIEW_PHOTO_FAIL if photo_nums else "",

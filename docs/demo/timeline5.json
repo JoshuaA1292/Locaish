@@ -92,7 +92,7 @@
    "in": 9.2,
    "xfade": 0.3,
    "voice": "build/v5/voice/08.wav",
-   "voice_at": 0.2
+   "voice_at": 1.6
   },
   {
    "video": "build/v5/titles/slug_dress/clip.mp4",
