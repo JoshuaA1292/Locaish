@@ -109,9 +109,10 @@ CARDS = {
     "slug_sweep": (2.4, lambda i: slug(i, "02", "THE SWEEP", "every camera position in the room, tested before anyone writes a shot", 2.4)),
     "slug_scene": (2.4, lambda i: slug(i, "03", "THE SCENE", "paste a scene · Muse Spark breaks it down · the room checks every shot", 2.4)),
     "slug_camera": (2.4, lambda i: slug(i, "04", "THE CAMERA", "Muse Wonder operates · Muse Spark reviews as a DP", 2.4)),
-    "slug_film": (2.4, lambda i: slug(i, "05", "THE FILM", "Muse Image finishes every frame from the measured render and the scan's own photographs", 2.4)),
-    "slug_dress": (2.4, lambda i: slug(i, "06", "THE SET", "SAM 3D lifts the furniture out of the scan · move it, and the room is swept again", 2.4)),
+    "slug_film": (2.4, lambda i: slug(i, "05", "THE FILM", "the cast placed into the scan's own photographs by the measured geometry · Muse Image paints only the people", 2.4)),
+    "slug_dress": (2.4, lambda i: slug(i, "06", "THE SET", "SAM 3.1 and SAM 3D lift the bunk bed out of the scan · move it, and the room is swept again", 2.4)),
     "slug_world": (2.4, lambda i: slug(i, "07", "THE DAY", "the shoot date and the hour · the sun where it will be", 2.4)),
+    "slug_run": (2.4, lambda i: slug(i, "08", "ONE RUN", "the studio, start to finish, sixty times faster · nothing staged", 2.4)),
     "end": (8.0, lambda i: end(i, 8.0)),
 }
 

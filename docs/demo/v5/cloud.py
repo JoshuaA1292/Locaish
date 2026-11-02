@@ -49,6 +49,7 @@ def load_scene(job: str, stride: int) -> None:
     twin = Twin.load(twin_path)
     M = np.asarray(twin.canonical_transform, np.float64)
     MR = M[:3, :3]
+    orig = np.arange(len(twin.points.xyz))[::stride]
     xyz = twin.points.xyz[::stride].astype(np.float32)
     rgb = twin.points.rgb[::stride].astype(np.uint8)
     # drop the stereo fuzz: a point whose 6 cm voxel holds fewer than a few
@@ -57,7 +58,7 @@ def load_scene(job: str, stride: int) -> None:
     key = (vox[:, 0].astype(np.int64) * 73856093) ^ (vox[:, 1].astype(np.int64) * 19349663) ^ (vox[:, 2].astype(np.int64) * 83492791)
     uniq, inv, cnt = np.unique(key, return_inverse=True, return_counts=True)
     dense = cnt[inv] >= max(2, 8 // stride)
-    xyz, rgb = xyz[dense], rgb[dense]
+    xyz, rgb, orig = xyz[dense], rgb[dense], orig[dense]
     man = json.load(open(jdir / "recon/manifest.json"))
     stamps = np.array(man["frames"]["timestamps_s"], np.float64)
     duration = float(man["video"]["duration_s"])
@@ -95,7 +96,7 @@ def load_scene(job: str, stride: int) -> None:
             first[ok] = k
         np.save(cache, first)
     keep = first < 10_000
-    xyz, rgb, first = xyz[keep], rgb[keep], first[keep]
+    xyz, rgb, first, orig = xyz[keep], rgb[keep], first[keep], orig[keep]
     labels = json.load(open(jdir / "labels.json"))["labels"]
     seen, lab = set(), []
     wanted = ("bunk bed", "study desk", "desk hutch", "wooden wardrobe", "tower fan", "wall poster",
@@ -106,7 +107,7 @@ def load_scene(job: str, stride: int) -> None:
         seen.add(l["label"]); lab.append((l["label"], np.array(l["xyz"], np.float64)))
     floor = float(twin.structure.floor_z)
     lo, hi = twin.points.xyz.min(0), twin.points.xyz.max(0)
-    G.update(xyz=xyz, rgb=rgb, first=first, cams=cams, Rcw=Rcw, hx=hx, hy=hy, stamps=stamps,
+    G.update(xyz=xyz, rgb=rgb, first=first, orig=orig, cams=cams, Rcw=Rcw, hx=hx, hy=hy, stamps=stamps,
              duration=duration, labels=lab, floor=floor, lo=lo, hi=hi, names=names,
              frames_dir=jdir / "recon/frames", n_points_total=int(len(twin.points.xyz)), stride=stride)
 

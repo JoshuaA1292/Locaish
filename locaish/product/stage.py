@@ -1230,6 +1230,7 @@ class Stage:
         out = finmod.finish_sequence(
             [(src.name, src.read_bytes(), meta)], client=client, cast=cast, headshots=heads, room_refs=self._room_refs(job),
             layout=self._layout_fn(job), photo_light=self._photo_light(job, client),
+            photo_base=None if str(body.get("base") or "photo") == "render" else self._photo_base_fn(job, cast),
             out_dir=run.workdir / "finish", workers=1, force=True,
             scene_light=str(body.get("light") or ""), mood=str(body.get("mood") or ""),
             progress=lambda e: errors.append(e["text"]) if e.get("kind") == "error" else None,
@@ -1384,6 +1385,120 @@ class Stage:
 
         return layout
 
+    def _photo_base_fn(self, job, cast):
+        """A callable the finisher asks for the scan's own photograph of a
+        frame's camera: the registered frame that stood nearest the planned
+        camera and looked its way (within 1.6 m and 60 degrees), cropped to
+        the planned lens around the planned aim, with the cast drawn in as
+        flat coloured stand-ins where the measured geometry puts them. The
+        painter then changes the people and nothing else. None when the scan
+        has no posed frames; the callable answers None when no frame is close
+        enough, and the render is the base as before."""
+        frames = self.studio.frames_of(job)
+        if frames is None or not len(frames.paths):
+            return None
+        twin = self.studio.twin_of(job)
+        floor = float(twin.structure.floor_z)
+        fwd = frames.extr[:, 2, :3] @ frames.R.T
+        fwd = fwd / np.maximum(np.linalg.norm(fwd, axis=1, keepdims=True), 1e-9)
+        people = {a.name: a for a in cast}
+        sensor_mm = {"super35": 24.89, "super35-4perf": 24.89, "fullframe": 36.0, "m43": 17.3, "phone-main": 9.8}
+        cache: dict[tuple, dict | None] = {}
+
+        def pick(meta: dict, aspect: float) -> dict | None:
+            import io
+            import math
+
+            from PIL import Image, ImageDraw
+
+            cam = meta.get("camera") or {}
+            pos = cam.get("pos") or meta.get("cam")
+            aim = cam.get("aim") or meta.get("aim")
+            if pos is None or aim is None:
+                return None
+            pos = np.asarray(pos, dtype=np.float64).reshape(3)
+            aim = np.asarray(aim, dtype=np.float64).reshape(3)
+            actors = meta.get("actors") if isinstance(meta.get("actors"), dict) else {}
+            key = (tuple(np.round(pos, 2)), tuple(np.round(aim, 2)), round(float(aspect), 3),
+                   tuple(sorted((n, tuple(np.round(v[:2], 2))) for n, v in actors.items() if n in people)))
+            if key in cache:
+                return cache[key]
+            want = aim - pos
+            want = want / max(float(np.linalg.norm(want)), 1e-9)
+            agree = fwd @ want
+            dist = np.linalg.norm(frames.centres_twin - pos, axis=1)
+            score = dist + 1.2 * (1.0 - agree)
+            ok = (agree > math.cos(math.radians(60))) & (dist < 1.6)
+            if not ok.any():
+                cache[key] = None
+                return None
+            i = int(np.argmin(np.where(ok, score, np.inf)))
+            im = Image.open(frames.paths[i]).convert("RGB")
+            K = frames.K[i]
+            fx, fy, cx, cy = float(K[0, 0]), float(K[1, 1]), float(K[0, 2]), float(K[1, 2])
+            sx = im.width / float(frames.size[0])          # the file may be larger than the posed size
+            sy = im.height / float(frames.size[1])
+            # the planned lens as a crop of the photograph, centred on the aim
+            focal = float(meta.get("focal_mm") or cam.get("focal_mm") or 35.0)
+            width_mm = sensor_mm.get(str(meta.get("sensor") or cam.get("sensor") or "super35"), 24.89)
+            hfov = 2.0 * math.atan(width_mm / 2.0 / focal)
+            cw = min(im.width, 2.0 * fx * sx * math.tan(hfov / 2.0))
+            ch = min(im.height, cw / max(float(aspect), 0.5))
+            cw = min(cw, ch * float(aspect))
+            u, v, z = frames.project(aim)
+            au, av = float(u[i]) * sx, float(v[i]) * sy
+            if not (z[i] > 0.1 and np.isfinite(au) and np.isfinite(av)):
+                au, av = im.width / 2, im.height / 2
+            x0 = min(max(au - cw / 2, 0.0), im.width - cw)
+            y0 = min(max(av - ch / 2, 0.0), im.height - ch)
+            crop = im.crop((int(x0), int(y0), int(x0 + cw), int(y0 + ch)))
+            draw = ImageDraw.Draw(crop)
+            boxes: dict[str, tuple[float, float, float, float]] = {}
+            for name, state in actors.items():
+                a = people.get(name)
+                if a is None:
+                    continue
+                try:
+                    ax, ay = float(state[0]), float(state[1])
+                except (TypeError, ValueError, IndexError):
+                    continue
+                h = float(a.height_m)
+                fu, fv, fz = frames.project(np.array([ax, ay, floor]))
+                hu, hv, hz = frames.project(np.array([ax, ay, floor + h]))
+                if not (fz[i] > 0.3 and hz[i] > 0.3):
+                    continue
+                fu_, fv_ = float(fu[i]) * sx - x0, float(fv[i]) * sy - y0
+                hu_, hv_ = float(hu[i]) * sx - x0, float(hv[i]) * sy - y0
+                depth = float(fz[i])
+                half = 0.21 * fx * sx / depth                 # shoulder half-width in pixels
+                head_r = 0.11 * fx * sx / depth
+                if fu_ + half < 0 or fu_ - half > crop.width or fv_ < 0 or hv_ > crop.height:
+                    continue                                  # off frame: not drawn, so out of frame
+                col = tuple(int(c) for c in a.colour)
+                # the body is a capsule along the feet-to-head line (the two
+                # project to different columns when the camera tilts), the
+                # head a disc at the head point
+                ax_, ay_ = hu_ - fu_, hv_ - fv_
+                n = math.hypot(ax_, ay_) or 1.0
+                su_, sv_ = hu_ - ax_ / n * 2.2 * head_r, hv_ - ay_ / n * 2.2 * head_r   # the shoulders
+                draw.line([(fu_, fv_), (su_, sv_)], fill=col, width=int(max(2, 2 * half)))
+                draw.ellipse([fu_ - half, fv_ - half * 0.5, fu_ + half, fv_ + half * 0.5], fill=col)
+                draw.ellipse([su_ - half, sv_ - half, su_ + half, sv_ + half], fill=col)
+                draw.ellipse([hu_ - head_r, hv_ - head_r, hu_ + head_r, hv_ + head_r], fill=col)
+                bx0 = max(0.0, (min(fu_, hu_) - half) / crop.width); bx1 = min(1.0, (max(fu_, hu_) + half) / crop.width)
+                by0 = max(0.0, (hv_ - head_r) / crop.height); by1 = min(1.0, (fv_ + half * 0.5) / crop.height)
+                boxes[name] = (bx0, by0, bx1, by1)
+            out_w = 1920 if crop.width >= 1920 else crop.width
+            crop = crop.resize((out_w, int(round(out_w / float(aspect)))), Image.LANCZOS)
+            buf = io.BytesIO()
+            crop.save(buf, format="PNG")
+            res = {"png": buf.getvalue(), "boxes": boxes, "frame": frames.names[i], "index": i,
+                   "agreement": float(agree[i]), "distance": float(dist[i])}
+            cache[key] = res
+            return res
+
+        return pick
+
     def _photo_light(self, job, client) -> dict | None:
         """What the scan's photographs were shot under, read once by Muse
         Spark from four of them spread along the walk and kept beside the job
@@ -1497,6 +1612,7 @@ class Stage:
             finished = finmod.finish_sequence(
                 frames, client=client, cast=cast, headshots=self._headshots(job, cast), room_refs=self._room_refs(job), out_dir=frun.workdir,
                 layout=self._layout_fn(job), photo_light=photo_light,
+                photo_base=None if str(body.get("base") or "photo") == "render" else self._photo_base_fn(job, cast),
                 workers=int(body.get("workers") or FINISH_WORKERS), force=bool(body.get("force")),
                 scene_light=str(body.get("light") or ""), mood=str(body.get("mood") or ""),
                 progress=lambda e: self._finish_progress(frun, f"/rehearsal-image/{job.id}/{run.id}", counter, e),
@@ -1567,6 +1683,7 @@ class Stage:
             finished = finmod.finish_sequence(
                 frames, client=client, cast=cast, headshots=self._headshots(job, cast), room_refs=self._room_refs(job), out_dir=frun.workdir,
                 layout=self._layout_fn(job), photo_light=self._photo_light(job, client),
+                photo_base=None if str(body.get("base") or "photo") == "render" else self._photo_base_fn(job, cast),
                 workers=int(body.get("workers") or FINISH_WORKERS), force=bool(body.get("force")),
                 scene_light=str(body.get("light") or ""), mood=str(body.get("mood") or ""),
                 progress=lambda e: self._finish_progress(frun, f"/sim-file/{job.id}/{sim_id}", counter, e),

@@ -243,6 +243,27 @@ _PHOTO_LIGHT = (
     "their lamps, their colour cast and what their windows show. "
 )
 
+# The photograph as the base: the scan's own frame nearest the planned
+# camera, cropped to the planned lens, with the stand-ins drawn into it by
+# the measured geometry. The painter then has one job: the people.
+_PHOTO_INSTRUCTION = (
+    "Photoreal film still. {shot}Image 1 is a PHOTOGRAPH of the real room taken on site from this very "
+    "camera, with flat coloured stand-in figures drawn where the people go. The output is image 1 "
+    "with the figures replaced by the real people and NOTHING else changed: every wall, window, door, "
+    "piece of furniture, object, fabric, the light and the time of day, the framing and the crop stay "
+    "EXACTLY as in image 1, pixel for pixel wherever no person is. {count}{people}{nobody}Each person "
+    "is lit by the room's light in image 1 and casts a soft shadow consistent with it; where a figure "
+    "overlaps furniture the person stands in front of it or behind it as the figure's feet say. Do "
+    "not clean up, tidy, re-dress or re-light the room; do not widen or crop; paint nothing that is "
+    "not in image 1 except the people.{mood} {continuity}Natural film look, correct skin, correct "
+    "hands. No text, no caption bar, no watermark, no extra people, no border."
+)
+
+_PHOTO_CONTINUITY = (
+    "Image {n} is another finished frame of this scene: match each person's face, hair and wardrobe "
+    "EXACTLY; the room comes from image 1, not from image {n}. "
+)
+
 _SAME_SETUP_AND_ANCHOR = (
     "Image {n} is the first photograph of this scene and the previous finished frame of THIS SAME "
     "SETUP, from the SAME camera: its background is this frame's background; every wall, window, "
@@ -427,8 +448,7 @@ REVIEW_SCHEMA = {
 }
 
 _REVIEW = (
-    "Image 1 is a finished photoreal film still. Image 2 is the rough 3D render it was made from, "
-    "with flat coloured stand-in figures where the people go. {photos}{anchor}Judge image 1 and answer JSON "
+    "Image 1 is a finished photoreal film still. {base}{photos}{anchor}Judge image 1 and answer JSON "
     '{{"ok": true/false, "problems": [...]}}. It FAILS when any of these is true: {people_rule}; a '
     "seated person has no chair or seat visibly under "
     "them, floats, or squats in mid-air; a person who should be on their feet is sitting, "
@@ -441,6 +461,14 @@ _REVIEW = (
     "what to change, as an instruction to the painter. Say nothing about the stand-in figures "
     "themselves and nothing about image quality or style. An empty list means ok."
 )
+
+_REVIEW_BASE_RENDER = ("Image 2 is the rough 3D render it was made from, with flat coloured stand-in figures "
+                       "where the people go. ")
+_REVIEW_BASE_PHOTO = ("Image 2 is the photograph of the real room it was made from, with flat coloured stand-in "
+                      "figures drawn where the people go: image 1 must be image 2 with the figures replaced by "
+                      "people and NOTHING else changed. ")
+_REVIEW_PHOTO_BASE_FAIL = ("; anything in the room differs from image 2 (a thing moved, added, removed, tidied, "
+                           "re-dressed or re-lit, the time of day changed, the framing changed)")
 
 _REVIEW_PHOTOS = (
     "Images {nums} are photographs of the real room taken on site from other positions: they say what "
@@ -477,7 +505,8 @@ def _small(png: bytes, side: int = 1024) -> bytes:
 
 def review_finished(client, finished_png: bytes, measured_png: bytes, meta: dict[str, Any], cast: list[Any],
                     *, model: str | None = None, photos: list[bytes] | None = None, anchor: bytes | None = None,
-                    boxes: dict[str, Any] | None = None, light_text: str = "", layout: str = "") -> tuple[bool, list[str]]:
+                    boxes: dict[str, Any] | None = None, light_text: str = "", layout: str = "",
+                    base_kind: str = "render") -> tuple[bool, list[str]]:
     """Muse Spark's verdict on a finished frame: (ok, problems). Problems are
     phrased as corrections for the next attempt. `photos` are the room's
     photographs the painter was given, `anchor` the scene's first finished
@@ -516,9 +545,10 @@ def review_finished(client, finished_png: bytes, measured_png: bytes, meta: dict
                    + (" (" + ", ".join(names) + ")") if names else "there is any person, figure or part of a person in it (nobody is in this frame)")
     text = _REVIEW.format(
         people_rule=people_rule,
+        base=_REVIEW_BASE_PHOTO if base_kind == "photo" else _REVIEW_BASE_RENDER,
         photos=_REVIEW_PHOTOS.format(nums=nums).replace("Images " + nums + " are", "Image " + nums + " is") if len(photo_nums) == 1 else (_REVIEW_PHOTOS.format(nums=nums) if photo_nums else ""),
         anchor=_REVIEW_ANCHOR.format(n=anchor_n) if anchor_n else "",
-        photo_fail=_REVIEW_PHOTO_FAIL if photo_nums else "",
+        photo_fail=(_REVIEW_PHOTO_FAIL if photo_nums else "") + (_REVIEW_PHOTO_BASE_FAIL if base_kind == "photo" else ""),
         layout_fail=(_REVIEW_LAYOUT_FAIL.format(layout=layout.strip()) if layout and layout.strip() else "")
                     + (_REVIEW_ANCHOR_FAIL.format(n=anchor_n) if anchor_n else ""),
         light_fail=_REVIEW_LIGHT_FAIL.format(light=light_text.strip().rstrip(".")) if light_text and light_text.strip() else "",
@@ -758,6 +788,29 @@ def build_sequence_prompt(
         layout=(layout.strip() + " ") if layout and layout.strip() else "",
         photo_light=photo_light_words(photo_light, room_index),
         focal_mm=focal, people=people, nobody=nobody, light=_light_words(meta, scene_light, light),
+        mood=(" " + mood.strip().rstrip(".") + ".") if mood.strip() else "", continuity=cont,
+    )
+    return " ".join(text.split())
+
+
+def build_photo_prompt(
+    *,
+    meta: dict[str, Any],
+    cast: list[Any],
+    headshot_index: dict[str, int],
+    boxes: dict[str, tuple[float, float, float, float]] | None = None,
+    continuity_index: int | None = None,
+    anchor_index: int | None = None,
+    mood: str = "",
+) -> str:
+    """The instruction for a frame whose base is the scan's own photograph
+    with the stand-ins drawn in (`photo_base` in `finish_sequence`): the
+    people from the figures, everything else from the photograph."""
+    count, people, nobody = _people_words(meta, cast, headshot_index, boxes)
+    refs = sorted({n for n in (continuity_index, anchor_index) if n})
+    cont = "".join(_PHOTO_CONTINUITY.format(n=n) for n in refs)
+    text = _PHOTO_INSTRUCTION.format(
+        shot=_shot_words(meta, boxes), count=count, people=people, nobody=nobody,
         mood=(" " + mood.strip().rstrip(".") + ".") if mood.strip() else "", continuity=cont,
     )
     return " ".join(text.split())
@@ -1026,8 +1079,15 @@ def finish_sequence(
     review_tries: int = 2,
     layout: Callable[[dict[str, Any]], str] | None = None,
     photo_light: dict[str, Any] | None = None,
+    photo_base: Callable[[dict[str, Any], float], dict[str, Any] | None] | None = None,
 ) -> list[FinishedFrame]:
     """Finish every frame of a sequence; the finished frames, in order.
+
+    `photo_base(meta, aspect)` returns, when the scan photographed this
+    camera closely enough, the scan's own frame cropped to the planned lens
+    with the stand-ins drawn where the people go (`png`, `boxes`, `frame`,
+    `agreement`, `distance`); that photograph is then image 1 and the
+    painter's only job is the people. None means the render is the base.
 
     `layout(meta)` returns the sentence that says what this frame's camera
     sees (`layout_words`); `photo_light` is what the scan's photographs were
@@ -1108,7 +1168,20 @@ def finish_sequence(
             present = meta.get("actors")
             names = list(present.keys()) if isinstance(present, dict) else None
             refs: list[bytes] = [strip_caption(png)]
-            boxes = figure_boxes(refs[0], cast)
+            base: dict[str, Any] | None = None
+            if photo_base is not None:
+                try:
+                    w0, h0 = _image_size(refs[0])
+                    base = photo_base(meta, w0 / max(h0, 1))
+                except Exception as exc:  # noqa: BLE001 - no photograph is the render as base, not a failed frame
+                    say(kind="note", index=i, name=name, text=f"{name}: no photograph for this camera ({exc})")
+                    base = None
+            if base and base.get("png"):
+                refs[0] = base["png"]
+                say(kind="note", index=i, name=name,
+                    text=f"{name}: the base is the scan's own {base.get('frame', 'frame')} "
+                         f"({float(base.get('distance', 0)):.2f} m from the planned camera)")
+            boxes = (dict(base.get("boxes") or {}) if base else None) or figure_boxes(refs[0], cast)
             # The finished frames this one is held to, decided first so their
             # slots are reserved: the nearest finished frame by camera (ties to
             # the most recent), and the anchor when it is a different frame
@@ -1142,7 +1215,7 @@ def finish_sequence(
                     index[a.name] = len(refs)
             room_index: list[int] = []
             photos: list[bytes] = []
-            if room_refs is not None:
+            if room_refs is not None and not base:
                 try:
                     for shot in list(room_refs(meta) or [])[:2]:
                         if shot and len(refs) < budget:
@@ -1161,16 +1234,21 @@ def finish_sequence(
                 else:
                     cont_index = len(refs)
             layout_text = ""
-            if layout is not None:
+            if layout is not None and not base:
                 try:
                     layout_text = str(layout(meta) or "")
                 except Exception as exc:  # noqa: BLE001 - no layout is a weaker prompt, not a failed frame
                     say(kind="note", index=i, name=name, text=f"{name}: no layout ({exc})")
-            prompt = build_sequence_prompt(meta=meta, cast=cast, headshot_index=index, continuity_index=cont_index,
-                                           scene_light=scene_light, mood=mood, boxes=boxes, room_index=room_index,
-                                           anchor_index=anchor_index, light=scene_sun, layout=layout_text,
-                                           photo_light=photo_light, same_setup=same_setup)
-            light_text = _light_words(meta, scene_light, scene_sun)
+            if base:
+                prompt = build_photo_prompt(meta=meta, cast=cast, headshot_index=index, boxes=boxes,
+                                            continuity_index=cont_index, anchor_index=anchor_index, mood=mood)
+                light_text = ""
+            else:
+                prompt = build_sequence_prompt(meta=meta, cast=cast, headshot_index=index, continuity_index=cont_index,
+                                               scene_light=scene_light, mood=mood, boxes=boxes, room_index=room_index,
+                                               anchor_index=anchor_index, light=scene_sun, layout=layout_text,
+                                               photo_light=photo_light, same_setup=same_setup)
+                light_text = _light_words(meta, scene_light, scene_sun)
             raw = crop_to_aspect(client.generate_image(prompt, references=refs, model=model), _image_size(refs[0]))
             verdicts: list[dict[str, Any]] = []
             attempts: list[tuple[int, bytes]] = []       # (problem count, picture), the best one is kept
@@ -1180,7 +1258,8 @@ def finish_sequence(
                 try:
                     ok, problems = review_finished(client, raw, refs[0], meta, cast, photos=photos,
                                                    anchor=(anchor.raw or anchor.png) if anchor is not None and anchor_i != i else None,
-                                                   boxes=boxes, light_text=light_text, layout=layout_text)
+                                                   boxes=boxes, light_text=light_text, layout=layout_text,
+                                                   base_kind="photo" if base else "render")
                 except Exception as exc:  # noqa: BLE001 - a review that fails is no verdict, not a failed frame
                     say(kind="note", index=i, name=name, text=f"{name}: the review did not answer ({exc})")
                     break
@@ -1205,11 +1284,17 @@ def finish_sequence(
                                raw=raw, meta={"headshots": len(index), "continuity": cont_index is not None,
                                               "anchor": anchor_index is not None, "room_photos": len(room_index),
                                               "same_setup": same_setup, "layout": layout_text,
+                                              "base": ({"kind": "photo", "frame": base.get("frame"),
+                                                        "distance_m": base.get("distance"), "agreement": base.get("agreement")}
+                                                       if base else {"kind": "render"}),
                                               "review": {"rejected": attempt, "verdicts": verdicts}})
             ff.save(dest)
             try:
                 dest.with_suffix(".json").write_text(json.dumps({"prompt": prompt, "review": ff.meta["review"],
-                                                                 "layout": layout_text, "light": light_text}, indent=1))
+                                                                 "layout": layout_text, "light": light_text,
+                                                                 "base": ff.meta["base"]}, indent=1))
+                if base:
+                    dest.with_name(dest.stem + "_base.png").write_bytes(refs[0])
             except OSError:
                 pass
             say(kind="done", index=i, name=name, file=dest.name, text=f"finished {name}")

@@ -17,10 +17,11 @@ world 5b86571e, set piece 2beb74c2.
 | 5 | scene (22 s) | scene_hud.py | The scene types in; Muse Spark's 8-beat breakdown; the shot table with the room's verdicts, each with its measured frame; Shot 4's dolly fails (needs 68 cm, has 30); the shoot day against the sun. |
 | 6 | bodies (12 s) | bodies.py | The simulation: red Maya, blue Theo at their heights on their marks inside the crisp cloud, every shot's camera drawn, the live measured frame inset, the lines as they land. |
 | 7 | operator (14 s) | operator_hud.py | Muse Wonder's tool calls and Muse Spark's DP verdicts streamed from the real run (4 minutes in 14 s), with the frames it looked at. |
-| 8 | film (17 s) | film.py | Shot by shot: the measured frame holds, a scan wipe reveals Muse Image's finish, slates and lines; "A RENDER" on every finished frame. |
-| 9 | move (13 s) | move_hud.py | The bunk bed on the plan with its SAM 3.1 mask; moved 0.5 m north (+176 clear setups), south (−2,706), reset. |
-| 10 | world (14 s) | world_hud.py | Sixty measured views wipe into Muse Image's finished photographs for 14 November 16:40; one fills the frame. |
-| 11 | end (8 s) | titles.py | LOCAISH · nothing a model says becomes a measurement · which model does what · the repo. |
+| 8 | film (15 s) | film.py | Shot by shot, side by side: the measured bodies on the left, the scan's own photograph with the stand-ins placed by the geometry on the right; the photograph wipes into the people and fills the frame; slates and lines; "A RENDER" on every finished frame. Rehearsal c03fdb72, the one the time-lapse recorded. |
+| 9 | lift (12.5 s) | lift_hud.py | The bunk bed's own points (the set piece's SAM 3.1 mask) glow in the cloud, rise out of the scan, move 0.5 m north, settle; the shot table's answer (+176 clear setups). |
+| 10 | world (10 s) | world_hud.py | Sixty measured views wipe into Muse Image's finished photographs for 14 November 16:40; one fills the frame. |
+| 11 | run (14 s) | timelapse.py | One real run of the studio page, polled every 2 s and played at 20×: the scene in, Muse Spark's breakdown, the shots, the frames finished and reviewed. |
+| 12 | end (7 s) | titles.py | LOCAISH · nothing a model says becomes a measurement · which model does what · the repo. |
 
 Narration (docs/demo/build/v5/voice/lines.txt), one line per beat from 3 to 11.
 Timeline: docs/demo/timeline5.json; music: build/v5/bed.wav (mix.py in the
@@ -73,3 +74,15 @@ session scratch, Epoch family at 122 BPM, −18 LUFS, ducked under the voice).
   it, and the answer is centre-cropped to the render's aspect.
 - The same contract for the world's sixty views, with a review and one
   retry per view.
+- The photograph as the base (`stage._photo_base_fn`, `finish.build_photo_prompt`):
+  the scan's own frame nearest the planned camera (within 1.6 m and 60
+  degrees), cropped to the planned lens around the planned aim, with the
+  cast drawn in as flat stand-ins where the measured geometry puts them
+  (the photograph's pose is known, so they land where the people stand).
+  Muse Image then changes the people and nothing else; the reviewer holds
+  the frame to the photograph. The base is saved beside the frame as
+  `finish_<name>_base.png`. With no close photograph the render is the base
+  as before.
+- The reviewer counts only the cast: a world with no cast has nobody in it,
+  whatever marks the meta carries (the first world re-run painted two
+  strangers into every view because of this).

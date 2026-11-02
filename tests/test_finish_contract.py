@@ -159,3 +159,35 @@ def test_a_frame_with_no_cast_is_judged_as_empty_of_people_whatever_the_marks_sa
     text = fake.log[-1]["text"]
     assert "there is any person, figure or part of a person in it (nobody is in this frame)" in text
     assert "Maya" not in text and "exactly 2" not in text
+
+
+def test_a_photograph_base_makes_the_people_the_painters_only_job(tmp_path):
+    cast = _cast()
+    base_png = _png(320, 180, (120, 110, 100), figures=[((230, 80, 60), (0.4, 0.2, 0.55, 0.9))])
+    fake = FakeMetaClient(image=_png(320, 180), chat_answers=[{"ok": True, "problems": []}] * 4)
+    frames = [("frame_0000.png", _png(figures=[((230, 80, 60), (0.3, 0.3, 0.6, 0.9))]), _meta())]
+
+    def photo_base(meta, aspect):
+        assert abs(aspect - 160 / 90) < 0.01
+        return {"png": base_png, "boxes": {"Maya": (0.4, 0.2, 0.55, 0.9)}, "frame": "frame_0123.jpg",
+                "agreement": 0.97, "distance": 0.31}
+
+    out = F.finish_sequence(frames, client=fake, cast=cast, out_dir=tmp_path, workers=1, photo_base=photo_base,
+                            room_refs=lambda m: [_png(), _png()], layout=lambda m: "LAYOUT", photo_light={"time": "night", "source": "artificial", "windows": "black"})
+    call = [e for e in fake.log if e["kind"] == "image"][0]
+    p = call["prompt"]
+    assert p.startswith("Photoreal film still.") and "Image 1 is a PHOTOGRAPH of the real room" in p
+    assert "NOTHING else changed" in p and "The RED figure is Maya" in p
+    assert "Theo is in the room but OUT OF FRAME" in p
+    assert "LAYOUT" not in p and "photographs were taken" not in p, "the photograph is the base: no layout, no photo light"
+    assert call["references"] == 1, "only the base rides: no room photographs, the base is one"
+    rev = [e for e in fake.log if e["kind"] == "chat_json"][0]
+    assert "Image 2 is the photograph of the real room it was made from" in rev["text"] and rev["images"] == 2
+    assert out[0].meta["base"]["kind"] == "photo" and out[0].meta["base"]["frame"] == "frame_0123.jpg"
+    assert (tmp_path / "finish_frame_0000_base.png").exists()
+    # the callable may decline: the render is then the base as before
+    fake2 = FakeMetaClient(image=_png(320, 180))
+    F.finish_sequence(frames, client=fake2, cast=cast, out_dir=tmp_path / "b", workers=1, review=False,
+                      photo_base=lambda m, a: None, room_refs=lambda m: [_png()])
+    p2 = [e for e in fake2.log if e["kind"] == "image"][0]["prompt"]
+    assert "Image 1 is a rough 3D render" in p2
