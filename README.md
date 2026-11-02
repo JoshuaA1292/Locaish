@@ -55,8 +55,7 @@ toggle away and every finished frame is stamped a render.
 
 ## What is new for the Meta hackathon
 
-Locaish is a startup entry: the reconstruction is pre-existing work, the
-scene layer is new. To be exact:
+
 
 | Pre-existing (built June to September 2026 for Agentic Cinema) | New for this hackathon (24 October to 4 November 2026) |
 |---|---|
