@@ -24,7 +24,7 @@
   },
   {
    "video": "build/twin_b/clip.mp4",
-   "seconds": 7.0,
+   "seconds": 9.0,
    "in": 0.3,
    "caption": "a measured twin \u00b7 every centimetre traceable to the footage",
    "caption_at": [
@@ -46,9 +46,9 @@
   },
   {
    "video": "build/scene_run/clip.mp4",
-   "seconds": 11.0,
+   "seconds": 13.0,
    "in": 0.0,
-   "speed": 6.0,
+   "speed": 5.0,
    "caption": "Muse Spark breaks the scene into beats \u00b7 placed from the measured shot table",
    "caption_at": [
     0.5,
@@ -59,7 +59,7 @@
   },
   {
    "video": "build/scene_run/clip.mp4",
-   "seconds": 8.0,
+   "seconds": 9.0,
    "in": 200.0,
    "speed": 4.0,
    "caption": "bodies at their real heights \u00b7 the shoot day against the sun",
@@ -70,7 +70,7 @@
   },
   {
    "video": "build/sim_a/clip.mp4",
-   "seconds": 8.5,
+   "seconds": 9.0,
    "in": 2.5,
    "caption": "a camera move keyed on a real rig, in the measured room",
    "caption_at": [
@@ -81,19 +81,19 @@
    "voice_at": 0.3
   },
   {
-   "video": "build/operator/clip.mp4",
-   "seconds": 8.5,
-   "in": 0.0,
-   "speed": 8.0,
+   "video": "build/operator/clip_zoom.mp4",
+   "seconds": 12.0,
+   "in": 10.0,
+   "speed": 24.0,
    "caption": "Muse Wonder operates the camera \u00b7 Muse Spark reviews as a DP",
    "caption_at": [
     0.4,
-    8.0
+    11.5
    ]
   },
   {
    "video": "build/sim_a/clip.mp4",
-   "seconds": 6.5,
+   "seconds": 7.0,
    "in": 9.0,
    "caption": "when a dolly does not fit, the room says so",
    "caption_at": [
@@ -103,9 +103,9 @@
   },
   {
    "video": "build/scene_run/clip.mp4",
-   "seconds": 9.0,
+   "seconds": 10.0,
    "in": 420.0,
-   "speed": 10.0,
+   "speed": 9.0,
    "caption": "Muse Image finishes every frame from the scan's own photographs",
    "caption_at": [
     0.4,
@@ -116,8 +116,8 @@
   },
   {
    "video": "build/scene_frames/clip.mp4",
-   "seconds": 8.0,
-   "in": 0.0,
+   "seconds": 12.0,
+   "in": 1.0,
    "caption": "a render \u00b7 the measured frame one toggle away",
    "caption_at": [
     0.4,
@@ -126,54 +126,65 @@
   },
   {
    "video": "build/world_build2/clip.mp4",
-   "seconds": 9.0,
+   "seconds": 13.0,
    "in": 0.0,
-   "speed": 60.0,
+   "speed": 42.0,
    "caption": "pick the date and the hour \u00b7 sixty views finished with the sun where it will be",
    "caption_at": [
     0.4,
-    8.6
+    12.5
    ],
    "voice": "build/voice/06.wav",
    "voice_at": 0.3
   },
   {
    "video": "build/world_a/clip.mp4",
-   "seconds": 16.0,
+   "seconds": 20.0,
    "in": 0.0,
    "caption": "walk into the location as it will be on the day",
    "caption_at": [
     0.4,
-    15.6
+    19.5
    ]
   },
   {
    "video": "build/lift3d/clip_zoom.mp4",
-   "seconds": 9.0,
+   "seconds": 12.0,
    "in": 2.0,
-   "speed": 14.0,
+   "speed": 11.0,
    "caption": "SAM 3.1 masks it \u00b7 SAM 3D Objects lifts it \u00b7 fitted to the measured footprint",
    "caption_at": [
     0.4,
-    7.6
+    11.5
    ],
    "voice": "build/voice/06b.wav",
    "voice_at": 0.3
   },
   {
    "image": "build/sam3d/chair_alone_0.png",
-   "seconds": 4.0,
+   "seconds": 5.0,
    "zoom": 1.08,
    "caption": "the real chair, as a solid you can move",
    "caption_at": [
     0.3,
-    3.7
+    4.6
+   ],
+   "label": "a render"
+  },
+  {
+   "image": "build/sam3d/sam3d_sheet.png",
+   "seconds": 5.0,
+   "zoom": 1.05,
+   "caption": "SAM 3D Body \u00b7 a person from one photograph, at their height",
+   "caption_at": [
+    0.3,
+    4.6
    ],
    "label": "a render"
   },
   {
    "video": "build/twin_b/clip.mp4",
-   "seconds": 6.0,
+   "seconds": 7.0,
    "in": 1.0,
    "caption": "nothing a model says becomes a measurement",
    "caption_at": [
@@ -184,9 +195,9 @@
    "voice_at": 0.2
   },
   {
-   "video": "build/world_a/clip.mp4",
-   "seconds": 6.5,
-   "in": 14.0
+   "video": "build/rec_test_headed/clip.mp4",
+   "seconds": 7.5,
+   "in": 3.0
   },
   {
    "end": {

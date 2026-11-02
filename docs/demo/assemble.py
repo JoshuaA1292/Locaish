@@ -156,43 +156,52 @@ def build_segment(seg: dict, i: int, W: int, H: int, fps: int, root: Path, work:
         vf.append(f"[{last}][{n_in}:v]overlay=0:0:format=auto[v{n_in}]")
         last = f"v{n_in}"
         n_in += 1
-    # ---- audio: the narration at its offset, silence otherwise
-    if seg.get("voice"):
-        at = float(seg.get("voice_at", 0.3))
-        inputs += ["-i", str(root / seg["voice"])]
-        vf.append(f"[{n_in}:a]adelay={int(at * 1000)}|{int(at * 1000)},apad,atrim=duration={secs:.3f},asetpts=PTS-STARTPTS,"
-                  f"volume=1.0[a]")
-        n_in += 1
-    else:
-        inputs += ["-f", "lavfi", "-t", f"{secs:.3f}", "-i", "anullsrc=r=48000:cl=stereo"]
-        vf.append(f"[{n_in}:a]atrim=duration={secs:.3f}[a]")
-        n_in += 1
-    cmd = ["ffmpeg", "-y", "-v", "error"] + inputs + ["-filter_complex", ";".join(vf), "-map", f"[{last}]", "-map", "[a]",
-           "-c:v", "libx264", "-crf", "17", "-preset", "medium", "-r", str(fps), "-c:a", "aac", "-b:a", "192k",
-           "-ar", "48000", "-t", f"{secs:.3f}", str(out)]
+    # Video only: the narration is laid on the finished picture as one
+    # track, so a sentence may run past the segment it starts in.
+    cmd = ["ffmpeg", "-y", "-v", "error"] + inputs + ["-filter_complex", ";".join(vf), "-map", f"[{last}]",
+           "-c:v", "libx264", "-crf", "17", "-preset", "medium", "-r", str(fps), "-an", "-t", f"{secs:.3f}", str(out)]
     run(cmd)
     return out
 
 
-def concat(segs: list[Path], out: Path, xfade: float = 0.4) -> Path:
+def concat(segs: list[Path], out: Path, xfade: float = 0.4) -> tuple[Path, list[float]]:
+    """Crossfade the video segments into one silent picture. Returns the
+    output and each segment's start time on the finished timeline."""
+    durs = [probe_seconds(s) for s in segs]
+    starts = [0.0]
+    for k in range(1, len(segs)):
+        starts.append(starts[-1] + durs[k - 1] - xfade)
     if len(segs) == 1:
         out.write_bytes(segs[0].read_bytes())
-        return out
+        return out, starts
     inputs: list[str] = []
     for s in segs:
         inputs += ["-i", str(s)]
-    durs = [probe_seconds(s) for s in segs]
     vf: list[str] = []
-    vprev, aprev = "0:v", "0:a"
-    offset = 0.0
+    vprev = "0:v"
     for k in range(1, len(segs)):
-        offset += durs[k - 1] - xfade
-        vf.append(f"[{vprev}][{k}:v]xfade=transition=fade:duration={xfade}:offset={offset:.3f}[v{k}]")
-        vf.append(f"[{aprev}][{k}:a]acrossfade=d={xfade}[a{k}]")
-        vprev, aprev = f"v{k}", f"a{k}"
-    run(["ffmpeg", "-y", "-v", "error"] + inputs + ["-filter_complex", ";".join(vf), "-map", f"[{vprev}]", "-map", f"[{aprev}]",
-         "-c:v", "libx264", "-crf", "17", "-preset", "medium", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
-         "-movflags", "+faststart", str(out)])
+        vf.append(f"[{vprev}][{k}:v]xfade=transition=fade:duration={xfade}:offset={starts[k]:.3f}[v{k}]")
+        vprev = f"v{k}"
+    run(["ffmpeg", "-y", "-v", "error"] + inputs + ["-filter_complex", ";".join(vf), "-map", f"[{vprev}]",
+         "-c:v", "libx264", "-crf", "17", "-preset", "medium", "-pix_fmt", "yuv420p", "-an", str(out)])
+    return out, starts
+
+
+def lay_voices(video: Path, voices: list[tuple[float, Path]], out: Path) -> Path:
+    """One narration track over the picture: each clip at its absolute
+    second, mixed without normalisation so a sentence keeps its level."""
+    total = probe_seconds(video)
+    inputs = ["-i", str(video), "-f", "lavfi", "-t", f"{total:.3f}", "-i", "anullsrc=r=48000:cl=stereo"]
+    vf = ["[1:a]anull[s0]"]
+    labels = ["s0"]
+    for k, (at, path) in enumerate(voices):
+        inputs += ["-i", str(path)]
+        ms = int(round(at * 1000))
+        vf.append(f"[{k + 2}:a]aformat=sample_rates=48000:channel_layouts=stereo,adelay={ms}|{ms}[n{k}]")
+        labels.append(f"n{k}")
+    vf.append("".join(f"[{l}]" for l in labels) + f"amix=inputs={len(labels)}:normalize=0:duration=first[a]")
+    run(["ffmpeg", "-y", "-v", "error"] + inputs + ["-filter_complex", ";".join(vf), "-map", "0:v", "-map", "[a]",
+         "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-movflags", "+faststart", str(out)])
     return out
 
 
@@ -204,7 +213,16 @@ def main() -> None:
     work.mkdir(parents=True, exist_ok=True)
     W, H, fps = int(tl.get("width", 1920)), int(tl.get("height", 1080)), int(tl.get("fps", 30))
     segs = [build_segment(s, i, W, H, fps, root, work) for i, s in enumerate(tl["segments"])]
-    concat(segs, out, float(tl.get("xfade", 0.4)))
+    silent, starts = concat(segs, work / "picture.mp4", float(tl.get("xfade", 0.4)))
+    voices = [(starts[i] + float(s.get("voice_at", 0.3)), root / s["voice"])
+              for i, s in enumerate(tl["segments"]) if s.get("voice")]
+    lay_voices(silent, voices, out)
+    for (at, path), i in zip(voices, [i for i, s in enumerate(tl["segments"]) if s.get("voice")]):
+        end = at + probe_seconds(path)
+        nxt = next((starts[j] + float(tl["segments"][j].get("voice_at", 0.3))
+                    for j in range(i + 1, len(tl["segments"])) if tl["segments"][j].get("voice")), None)
+        if nxt is not None and end > nxt:
+            print(f"warning: {path.name} runs {end - nxt:.1f} s into the next narration")
     print(out, f"{probe_seconds(out):.1f} s")
 
 
