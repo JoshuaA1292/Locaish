@@ -112,7 +112,7 @@ CARDS = {
     "slug_film": (2.4, lambda i: slug(i, "05", "THE FILM", "the cast placed into the scan's own photographs by the measured geometry · Muse Image paints only the people", 2.4)),
     "slug_dress": (2.4, lambda i: slug(i, "06", "THE SET", "SAM 3.1 and SAM 3D lift the bunk bed out of the scan · move it, and the room is swept again", 2.4)),
     "slug_world": (2.4, lambda i: slug(i, "07", "THE DAY", "the shoot date and the hour · the sun where it will be", 2.4)),
-    "slug_run": (2.4, lambda i: slug(i, "08", "ONE RUN", "the studio, start to finish, sixty times faster · nothing staged", 2.4)),
+    "slug_run": (2.4, lambda i: slug(i, "08", "ONE RUN", "the studio recorded live, start to finish · nothing staged", 2.4)),
     "end": (8.0, lambda i: end(i, 8.0)),
 }
 

@@ -18,7 +18,7 @@
   },
   {
    "video": "build/v5/cloud/clip.mp4",
-   "seconds": 24.0,
+   "seconds": 25.0,
    "in": 1.0,
    "xfade": 0.4,
    "voice": "build/v5/voice/02.wav",
@@ -59,8 +59,8 @@
   },
   {
    "video": "build/sim_w/clip.mp4",
-   "seconds": 8.0,
-   "in": 2.5,
+   "seconds": 10.5,
+   "in": 3.5,
    "xfade": 0.4,
    "voice": "build/v5/voice/05b.wav",
    "voice_at": 0.4
@@ -81,14 +81,15 @@
   {
    "video": "build/v5/titles/slug_film/clip.mp4",
    "seconds": 2.4,
-   "xfade": 0.0
+   "xfade": 0.0,
+   "voice_at": 0.3
   },
   {
    "video": "build/v5/film/clip.mp4",
    "seconds": 15.0,
    "xfade": 0.0,
    "voice": "build/v5/voice/07.wav",
-   "voice_at": 0.4
+   "voice_at": 0.3
   },
   {
    "video": "build/v5/titles/slug_dress/clip.mp4",
@@ -97,7 +98,7 @@
   },
   {
    "video": "build/v5/lift/clip.mp4",
-   "seconds": 12.5,
+   "seconds": 13.5,
    "in": 0.5,
    "xfade": 0.0,
    "voice": "build/v5/voice/09.wav",

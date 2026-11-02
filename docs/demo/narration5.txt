@@ -1,0 +1,12 @@
+02|So this is a dorm room. Someone walked through it once with a phone, about fifty seconds. From that, Locaish works out exactly where the phone was for every frame, and builds a measured model of the room around that path. Then Muse Spark, Meta's vision model, looks at the frames and names what's in there, and each name gets pinned to a real point in the room.
+03|Before anyone writes a shot, we sweep the room. Nine and a half thousand camera positions, and for each one we check the lens, the shot size, whether the sightline is clear, and whether a dolly would even fit.
+04|Then you paste in a scene. Muse Spark breaks it into beats and picks the shots, and the room checks every one of them. Here, shot four wanted a doorway dolly. It needs sixty-eight centimetres of clear floor, and there's only thirty. So you find that out now, not on the day.
+05|The cast are stood in the room at their real heights, on their marks, and the furniture gets in the way exactly where it would.
+05b|You can key the rig yourself and look through the lens. Everything in that frame is in metres.
+06|Or you just tell the operator what you want. Muse Wonder drives the camera through the engine, and Muse Spark watches every frame like a DP, and sends it back until it holds.
+07|Now the pictures. We take the scan's own photo from nearest the planned camera, crop it to the lens, and drop the measured bodies in. Muse Image only has to paint the people. Then Muse Spark checks that nothing else in the room has changed.
+08|That's the scene, in the real room.
+09|The furniture's real too. SAM three point one picks the bunk bed out of the frame that saw it best, and SAM 3D lifts it into a solid. Move it half a metre, and the room gets swept again. A hundred and seventy-six more clear setups.
+10|Pick your shoot day and the hour, and Muse Image finishes sixty views of the room with the sun where it will actually be.
+12|And none of this is staged. This is one run of the studio, recorded live. The scene goes in, Muse Spark breaks it down, the room places the shots, and the frames come back finished and checked.
+11|Nothing a model says ever becomes a measurement. That's Locaish.
