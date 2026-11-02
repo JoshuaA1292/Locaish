@@ -44,7 +44,9 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("job"); ap.add_argument("rid"); ap.add_argument("out")
     ap.add_argument("--hold", type=float, default=1.3)
+    ap.add_argument("--skip-shots", default="", help="comma list of shot numbers to leave out")
     a = ap.parse_args()
+    skip = {int(x) for x in a.skip_shots.split(",") if x.strip()}
     d = ROOT / "twins/studio" / a.job / "rehearsals" / a.rid
     reh = json.loads((d / "rehearsal.json").read_text())
     shots = {int(s["number"]): s for s in reh["rehearsal"]["shots"]}
@@ -78,6 +80,8 @@ def main() -> None:
         mea = cv2.cvtColor(cv2.imread(str(mea_p)), cv2.COLOR_BGR2RGB)
         cam = f.get("camera") or {}
         shot_no = cam.get("shot")
+        if shot_no is not None and int(shot_no) in skip:
+            continue
         shot = shots.get(int(shot_no)) if shot_no is not None else {}
         st = shot.get("setup") or {}
         size = ""

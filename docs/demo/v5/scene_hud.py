@@ -89,13 +89,14 @@ def render(i: int, beats, shots, thumbs, reh):
     a = hud.ease((t - 4.0) / 0.6)
     if a > 0:
         ov.text((rx, 52), "MUSE SPARK  ·  BREAKDOWN", kind="mono", size=18, color=hud.ICE, alpha=int(255 * a))
-        ov.text((rx + 420, 52), f"{len(beats)} beats · 3 marks · {len(shots)} setups", kind="mono", size=18, color=hud.DIM, alpha=int(255 * a))
+        marks = len({b.get("to_mark") for b in beats if b.get("to_mark")})
+        ov.text((rx + 420, 52), f"{len(beats)} beats · {marks} marks · {len(shots)} setups", kind="mono", size=18, color=hud.DIM, alpha=int(255 * a))
         for n, b in enumerate(beats):
             ab = hud.ease_out((t - 4.4 - n * 0.35) / 0.4)
             if ab <= 0:
                 continue
             col = hud.RED if b["actor"] == "Maya" else hud.BLUE
-            yy = 100 + n * 34
+            yy = 100 + n * 30
             ov.rect([rx, yy + 4, rx + 6, yy + 22], fill=col, alpha=int(255 * ab))
             line = f"{b['number']}  " + beat_line(b)
             if len(line) > 82:
@@ -105,7 +106,7 @@ def render(i: int, beats, shots, thumbs, reh):
     ts = 8.0
     a2 = hud.ease((t - ts) / 0.6)
     if a2 > 0:
-        ty = 345
+        ty = 100 + len(beats) * 30 + 26
         ov.text((rx, ty), "THE ROOM CHECKS EVERY SHOT", kind="mono", size=18, color=hud.ICE, alpha=int(255 * a2))
         ov.line([(rx, ty + 30), (rx + 950, ty + 30)], hud.DIM, 1, int(120 * a2))
         for n, s in enumerate(shots):
@@ -113,10 +114,10 @@ def render(i: int, beats, shots, thumbs, reh):
             if ash <= 0:
                 continue
             st = s["setup"]
-            yy = ty + 48 + n * 134
+            yy = ty + 46 + n * 128
             # thumbnail
             th = thumbs.get(s["number"])
-            tw, thh = 200, 120
+            tw, thh = 190, 114
             if th is not None:
                 im = cv2.resize(th, (tw, thh), interpolation=cv2.INTER_AREA)
                 frame[yy:yy + thh, rx:rx + tw] = (im * ash).astype(np.uint8)
