@@ -67,14 +67,19 @@ walls where they were measured and takes only the light from the finish.
 
 ## Built during the window
 
-The Meta layer (`locaish/meta/`, `locaish/agent/sim.py`,
-`locaish/agent/rehearsal.py`, `locaish/product/{cast,figures,setpieces,
-stage,world}.py`, `locaish/film/{sim,rehearsal}.py`, the studio's stage and
-the viewer's simulate and walk modes) was built 26 October to 4 November
-2026 on branch `meta-hackathon`. The reconstruction pipeline and the shot
-sweep predate it (they won the Google Agentic Cinema hackathon); the
-Official Rules' statement on pre-existing work is what we read before
-submitting.
+Locaish is a startup entry built on an existing codebase, and the line is
+drawn in the README ("What is new for the Meta hackathon"). Pre-existing:
+the 3D reconstruction from phone video and scan files, the twin and its QA,
+the scout report, the shot sweep and its ClickHouse table, the Gemini
+coverage planner, the location package, projects and share links (built
+June to September 2026, the Agentic Cinema entry). New for this hackathon,
+24 October to 4 November 2026, 32 commits on branch `meta-hackathon`:
+the whole Meta layer (`locaish/meta/`), the rehearsal, the camera simulator
+and operator, the cast as bodies, the set pieces, the world, the studio's
+scene page, and the finish contract (`locaish/agent/{rehearsal,sim}.py`,
+`locaish/film/{rehearsal,sim,render}.py`,
+`locaish/product/{stage,cast,figures,labels,setpieces,world}.py`,
+`locaish/viewer/stage.js`). `git log --since=2026-10-24` lists it.
 
 ## Try it
 

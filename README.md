@@ -53,6 +53,19 @@ shots, dolly fits), the scan's photographs (the finish), or another model
 acting as judge that sends work back. The measured frame is always one
 toggle away and every finished frame is stamped a render.
 
+## What is new for the Meta hackathon
+
+Locaish is a startup entry: the reconstruction is pre-existing work, the
+scene layer is new. To be exact:
+
+| Pre-existing (built June to September 2026 for Agentic Cinema) | New for this hackathon (24 October to 4 November 2026) |
+|---|---|
+| The 3D reconstruction from phone video and scan files: COLMAP, GLOMAP, OpenMVS, the MoGe-2 metric anchor, the canonical twin, structure and QA (`locaish/video/`, `locaish/scan/`, `locaish/geom/`, `locaish/formats/`) | Everything that reads, plans, directs, paints and lifts inside the twin with Meta's models (`locaish/meta/`): Muse Spark labels pinned to geometry, the scene breakdown and the review of frames, Muse Wonder as camera operator, Muse Image finishing (the photograph base, the day's sixty views), SAM 3.1 masks, SAM 3D on Modal |
+| The scout report, the shot sweep and its ClickHouse table, the Gemini coverage planner, the location package, projects, share links, the WebGL viewer (`locaish/film/{sweep,report,coverage}.py`, `locaish/warehouse.py`, `locaish/agent/{core,coverage}.py`, `locaish/product/{package,pages,store}.py`) | The rehearsal (a scene placed, timed and walked inside the room with the cast as bodies), the camera simulator and real rigs, the set pieces, the world, the studio's scene page, and the finish contract that holds the painter to the measurement and the photographs (`locaish/agent/{rehearsal,sim}.py`, `locaish/film/{rehearsal,sim,render}.py`, `locaish/product/{stage,cast,figures,labels,setpieces,world}.py`, `locaish/viewer/stage.js`) |
+
+The new work is 32 commits from 24 October onwards; `git log --since=2026-10-24` lists them, and
+[docs/META_HACKATHON.md](docs/META_HACKATHON.md) carries the day-by-day status table.
+
 ## Run it
 
 ```bash
@@ -102,6 +115,6 @@ Docs: [reconstruction](docs/RECONSTRUCTION.md) · [cinematography rules](docs/CI
 · [how to film a room](CAPTURE.md) · [SAM 3D on Modal](docs/SAM3D_MODAL.md)
 · [hackathon plan and status](docs/META_HACKATHON.md) · [business plan](BUSINESS_PLAN.md)
 
-Built for [Agentic Cinema](https://agentic-cinema.devpost.com/) (won its
-track) and the Meta Global AI Developer Hackathon, 26 October to 4 November
-2026. MIT.
+The reconstruction was built for [Agentic Cinema](https://agentic-cinema.devpost.com/)
+(won its track); the scene layer for the Meta Global AI Developer Hackathon,
+October to November 2026. MIT.
