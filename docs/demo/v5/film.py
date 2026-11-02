@@ -40,8 +40,13 @@ def measured_look(im: np.ndarray) -> np.ndarray:
     return hud.scanlines(f, 3, 0.86)
 
 
-def read(p: Path):
-    im = cv2.imread(str(p))
+def read(p: Path, strip: bool = False):
+    if strip:
+        from locaish.meta.finish import strip_caption
+        buf = np.frombuffer(strip_caption(p.read_bytes()), np.uint8)
+        im = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+    else:
+        im = cv2.imread(str(p))
     return cv2.cvtColor(im, cv2.COLOR_BGR2RGB) if im is not None else None
 
 
@@ -51,6 +56,8 @@ def main() -> None:
     ap.add_argument("--hold", type=float, default=1.3)
     ap.add_argument("--skip-shots", default="")
     ap.add_argument("--max-per-shot", type=int, default=0, help="frames held per setup (0 = all)")
+    ap.add_argument("--render-based", default="skip", choices=["skip", "keep"],
+                    help="a frame finished from the render rather than a photograph: skip it when the setup has photograph-based frames")
     a = ap.parse_args()
     skip = {int(x) for x in a.skip_shots.split(",") if x.strip()}
     d = ROOT / "twins/studio" / a.job / "rehearsals" / a.rid
@@ -109,7 +116,9 @@ def main() -> None:
                 info = {}
         base_info = (f"the scan's own {str(info.get('frame') or '').replace('.jpg', '')}  ·  {float(info.get('distance_m') or 0):.2f} m from the planned camera"
                      if info.get("kind") == "photo" else "finished from the measured render")
-        fin = read(fin_p); mea = read(mea_p); base = read(base_p) if base_p.exists() else None
+        if a.render_based == "skip" and info.get("kind") != "photo":
+            continue
+        fin = read(fin_p); mea = read(mea_p, strip=True); base = read(base_p) if base_p.exists() else None
         fin_fit = fit(fin)
         new_shot = shot_no != prev_shot
         if not new_shot:
