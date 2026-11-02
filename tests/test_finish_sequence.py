@@ -29,6 +29,12 @@ from locaish.product import cast as castmod
 RED, BLUE = (230, 80, 60), (60, 130, 230)
 
 
+
+def _images(client):
+    """The image calls only: the review's vision calls sit between them in the log."""
+    return [e for e in client.log if e["kind"] == "image"]
+
+
 def _png(w=80, h=50, colour=(90, 120, 200)) -> bytes:
     buf = io.BytesIO()
     Image.new("RGB", (w, h), colour).save(buf, format="PNG")
@@ -140,12 +146,12 @@ def test_first_frame_goes_alone_then_continuity_rides_along_and_files_land(tmp_p
                             out_dir=tmp_path / "fin", workers=2, progress=events.append)
     assert [f.name for f in out] == [f"frame_{i:04d}.png" for i in range(5)]
     assert all((tmp_path / "fin" / f"finish_frame_{i:04d}.png").exists() for i in range(5))
-    assert fake.calls == 5 and all(e["kind"] in ("start", "done") for e in events)
+    assert len(_images(fake)) == 5 and all(e["kind"] in ("start", "done") for e in events)
     assert sum(1 for e in events if e["kind"] == "done") == 5 and events[0]["total"] == 5
-    first = fake.log[0]
+    first = _images(fake)[0]
     assert "20 mm" in first["prompt"], "the first frame is finished first, before any parallel chunk"
     assert "previous finished frame" not in first["prompt"] and first["references"] == 2  # the frame + Theo's headshot
-    for call in fake.log[1:]:
+    for call in _images(fake)[1:]:
         assert "previous finished frame" in call["prompt"] and call["references"] == 3
         assert "image 2 is Theo's headshot" in call["prompt"] and "Image 3 is the previous finished frame" in call["prompt"]
     assert out[0].references == 1 and out[1].references == 2 and out[1].meta["continuity"] is True and out[0].meta["continuity"] is False
@@ -156,9 +162,9 @@ def test_first_frame_goes_alone_then_continuity_rides_along_and_files_land(tmp_p
     # Cache: a second run touches nothing; force redoes it all.
     events.clear()
     again = F.finish_sequence(_frames(5), client=fake, cast=_cast(), headshots={}, out_dir=tmp_path / "fin", progress=events.append)
-    assert fake.calls == 5 and all(f.cached for f in again) and all(e["kind"] == "skip" for e in events)
+    assert len(_images(fake)) == 5 and all(f.cached for f in again) and all(e["kind"] == "skip" for e in events)
     forced = F.finish_sequence(_frames(5), client=fake, cast=_cast(), headshots={}, out_dir=tmp_path / "fin", force=True)
-    assert fake.calls == 10 and not any(f.cached for f in forced)
+    assert len(_images(fake)) == 10 and not any(f.cached for f in forced)
     assert F.finish_sequence([], client=fake, cast=_cast(), headshots={}, out_dir=tmp_path / "fin") == []
 
 
@@ -178,15 +184,15 @@ def test_a_failing_frame_leaves_no_file_and_is_reported_and_the_run_goes_on(tmp_
     assert not (tmp_path / "fin" / "finish_frame_0002.png").exists()
     errs = [e for e in events if e["kind"] == "error"]
     assert len(errs) == 1 and errs[0]["name"] == "frame_0002.png" and "fell over" in errs[0]["text"]
-    assert fake.calls == 5
+    assert len(_images(fake)) == 4   # the failed call is not logged
     # The frame after the failure still has a continuity reference: the last one that finished.
-    assert "previous finished frame" in fake.log[-1]["prompt"]
+    assert "previous finished frame" in _images(fake)[-1]["prompt"]
 
 
 def test_no_continuity_means_no_extra_reference(tmp_path):
     fake = FakeMetaClient(image=_png())
     F.finish_sequence(_frames(3), client=fake, cast=_cast(), headshots={}, out_dir=tmp_path / "fin", continuity=False, workers=3)
-    assert all(c["references"] == 1 and "previous finished frame" not in c["prompt"] for c in fake.log)
+    assert all(c["references"] == 1 and "previous finished frame" not in c["prompt"] for c in _images(fake))
 
 
 # ---------------------------------------------------------------------------
@@ -300,7 +306,7 @@ def test_finish_all_refuses_without_a_key_then_finishes_the_rehearsal(fin_url, m
     frames = [e for e in ev if e["kind"] == "frame"]
     assert len(frames) == 4 and frames[0]["url"] == "/rehearsal-image/cleanroom/abc12345/finish_frame_0000.png"
     assert "The RED figure is Maya" in done["prompt"] and "dark green jumper" in done["prompt"]
-    assert fake.calls == 4 and fake.log[0]["references"] == 1 and fake.log[1]["references"] == 2
+    assert len(_images(fake)) == 4 and _images(fake)[0]["references"] == 1 and _images(fake)[1]["references"] == 2
     status, raw = _call(f"{url}/rehearsal-image/cleanroom/abc12345/finish_frame_0002.png")
     assert status == 200 and raw[:8] == b"\x89PNG\r\n\x1a\n"
     status, r = _json(f"{url}/rehearsal/cleanroom/abc12345/finished")
@@ -308,12 +314,12 @@ def test_finish_all_refuses_without_a_key_then_finishes_the_rehearsal(fin_url, m
     # Again: everything is cached, the model is not called; a reconnect replays done.
     status, r2 = _json(f"{url}/rehearsal/cleanroom/abc12345/finish-all", method="POST", body={})
     ev2 = _sse(f"{url}{r2['events']}")
-    assert ev2[-1]["kind"] == "done" and ev2[-1]["cached"] == 4 and fake.calls == 4
+    assert ev2[-1]["kind"] == "done" and ev2[-1]["cached"] == 4 and len(_images(fake)) == 4
     assert _sse(f"{url}{first_events}")[-1]["kind"] == "done"
     assert _json(f"{url}/rehearsal-finish-events/cleanroom/abc12345/nope")[0] == 404
     # The one-frame button uses the same instruction and lands in the same place.
     status, r = _json(f"{url}/rehearsal/cleanroom/abc12345/finish/frame_0001.png", method="POST", body={})
-    assert status == 200 and r["file"] == "finish_frame_0001.png" and "BLUE figure is Theo" in r["prompt"] and fake.calls == 5
+    assert status == 200 and r["file"] == "finish_frame_0001.png" and "BLUE figure is Theo" in r["prompt"] and len(_images(fake)) == 5
 
 
 def test_sim_finish_after_a_render_makes_the_held_video(fin_url, monkeypatch):
@@ -351,7 +357,7 @@ def test_sim_finish_after_a_render_makes_the_held_video(fin_url, monkeypatch):
     if (rend["frames"] - 1) not in expect:
         expect.append(rend["frames"] - 1)
     assert done["files"] == [f"finish_frame_{i:05d}.png" for i in expect] and done["every"] == 8
-    assert fake.calls == len(expect) and "SAME CROP" in done["prompt"]
+    assert len(_images(fake)) == len(expect) and "SAME CROP" in done["prompt"]
     d = studio.jobs["cleanroom"].workdir / "sims" / sid
     assert (d / "finish" / "finish_frame_00000.png").exists()
     status, raw = _call(f"{url}/sim-file/cleanroom/{sid}/finish_frame_00000.png")
@@ -395,7 +401,7 @@ def test_room_photographs_ride_as_references_and_the_prompt_says_what_they_fix(t
     out = F.finish_sequence([("frame_0001.png", frame, meta)], client=fake, cast=cast, headshots={},
                             out_dir=tmp_path, room_refs=room_refs, continuity=False)
     assert seen and out and out[0].meta["room_photos"] == 2
-    assert fake.log[-1]["references"] == 3                      # the frame plus two photographs
+    assert _images(fake)[-1]["references"] == 3                      # the frame plus two photographs
     assert "THIS EXACT ROOM" in out[0].prompt and "Image 2 and image 3 are" in out[0].prompt
     # A reference source that fails leaves the frame finished without photographs.
     fake2 = FakeMetaClient(image=png(64, 36, (80, 90, 100)))

@@ -57,7 +57,10 @@ room*:
   render, the scan's own photographs of that view, and the cast's looks:
   the real room, these people, this angle, consistent from frame to frame.
   The measured frame stays one toggle away and every finished frame is
-  stamped a render. A move is cut to video both ways.
+  stamped a render. A move is cut to video both ways. Muse Spark then
+  reviews each finished frame beside its render (the head count, a seated
+  person on a visible seat, the framing, the furniture where it was) and a
+  frame it rejects is finished again with the correction in the prompt.
 - **Walk into the location as it will be on the day.** Pick a date and an
   hour and say how the room will be dressed. Sixty views of the measured
   room, chosen to cover every wall, are finished by Muse Image with the

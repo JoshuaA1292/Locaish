@@ -319,8 +319,15 @@ def _staging_words(meta: dict[str, Any], name: str) -> tuple[str, str] | None:
     business = str(staged.get("business") or "").strip().rstrip(".")
     eyeline = str(staged.get("eyeline") or "").strip()
     bits = []
-    bits.append({"sitting": "SITTING down", "leaning": "LEANING with their weight on one side",
-                 "walking": "mid-stride, walking", "standing": "standing"}.get(pose, pose))
+    if pose == "sitting":
+        # The render shows a seated figure and nothing under it, and left to
+        # itself the model paints a person squatting in mid-air: name the seat.
+        bits.append(f"SITTING on {_seat_words(business)}, their full weight on it, the seat plainly "
+                    "visible under them (a real chair or seat of this room, never floating, never a "
+                    "crouch in mid-air)")
+    else:
+        bits.append({"leaning": "LEANING with their weight on one side",
+                     "walking": "mid-stride, walking", "standing": "standing"}.get(pose, pose))
     if business:
         bits.append(business if business.lower().startswith(("with ", "hands", "arms", "leaning", "looking", "typing", "turning", "holding"))
                     else business)
@@ -336,6 +343,88 @@ def _staging_words(meta: dict[str, Any], name: str) -> tuple[str, str] | None:
             bits.append(f"looking at {eyeline if eyeline[:1].isupper() else 'the ' + eyeline}, not at the camera")
     posture = ", ".join(bits)
     return posture, _expression(meta, name, eyeline)
+
+
+_SEATS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("desk", "laptop", "typing", "keyboard", "writing"), "the desk chair at the desk"),
+    (("bed", "mattress", "bunk"), "the edge of the bed"),
+    (("sofa", "couch", "settee"), "the sofa"),
+    (("armchair",), "the armchair"),
+    (("stool",), "the stool"),
+    (("bench",), "the bench"),
+    (("sill", "window"), "the window sill"),
+    (("floor", "carpet", "rug"), "the floor"),
+    (("stairs", "step"), "the step"),
+)
+
+
+def _seat_words(business: str) -> str:
+    """What a seated person sits on, read off the beat's business: the desk
+    chair when they type at the desk, the edge of the bed, the sofa; a chair
+    when the beat does not say."""
+    low = business.lower()
+    for keys, seat in _SEATS:
+        if any(k in low for k in keys):
+            return seat
+    return "a chair"
+
+
+# The review: Muse Spark looks at the finished frame beside the render and
+# names what the model invented, so the frame can be finished again with the
+# correction in the prompt. It fails a frame for what a producer would see
+# at once and a diff of pixels never would: a person with no seat under
+# them, the wrong head count, a hand too many, the furniture rearranged.
+REVIEW_SCHEMA = {
+    "type": "object",
+    "properties": {"ok": {"type": "boolean"}, "problems": {"type": "array", "items": {"type": "string"}}},
+    "required": ["ok", "problems"],
+}
+
+_REVIEW = (
+    "Image 1 is a finished photoreal film still. Image 2 is the rough 3D render it was made from, "
+    "with flat coloured stand-in figures where the people go. Judge image 1 and answer JSON "
+    '{{"ok": true/false, "problems": [...]}}. It FAILS when any of these is true: there are not '
+    "exactly {count} {people_word} in it{names}; a seated person has no chair or seat visibly under "
+    "them, floats, or squats in mid-air; anyone has an extra or missing limb, hand or face; a "
+    "person stands where image 2 has no figure, or a figure's place has no person; the framing "
+    "differs from image 2 (image 1 shows more or less of the room, the camera stepped back or in, "
+    "or a person is clearly smaller or larger in the frame than their figure in image 2); the room's "
+    "furniture is moved, added or removed compared with image 2; there is text, a caption bar or a "
+    "watermark. {seated}Each problem is one short sentence saying what to change, as an instruction "
+    "to the painter. Say nothing about the stand-in figures themselves and nothing about image "
+    "quality, style or light. An empty list means ok."
+)
+
+
+def review_finished(client, finished_png: bytes, measured_png: bytes, meta: dict[str, Any], cast: list[Any],
+                    *, model: str | None = None) -> tuple[bool, list[str]]:
+    """Muse Spark's verdict on a finished frame: (ok, problems). Problems are
+    phrased as corrections for the next attempt."""
+    present = meta.get("actors")
+    names = list(present.keys()) if isinstance(present, dict) else [a.name for a in cast]
+    seated = []
+    for name in names:
+        staged = (meta.get("staging") or {}).get(name) if isinstance(meta.get("staging"), dict) else None
+        if isinstance(staged, dict) and str(staged.get("pose") or "") == "sitting":
+            seated.append(f"{name} must be sitting on {_seat_words(str(staged.get('business') or ''))}")
+    text = _REVIEW.format(
+        count=len(names), people_word="person" if len(names) == 1 else "people",
+        names=(" (" + ", ".join(names) + ")") if names else "",
+        seated=(" ".join(s + "." for s in seated) + " ") if seated else "",
+    )
+    ans = client.chat_json(text, [finished_png, measured_png], model=model, schema=REVIEW_SCHEMA, max_tokens=400)
+    if not isinstance(ans, dict):
+        return True, []
+    problems = [str(p).strip() for p in (ans.get("problems") or []) if str(p).strip()]
+    ok = bool(ans.get("ok", not problems)) and not problems
+    return ok, problems
+
+
+def correction_words(problems: list[str]) -> str:
+    """The sentence a rejected frame's prompt gains for its second attempt."""
+    fixes = " ".join(p.rstrip(".") + "." for p in problems)
+    return (" CORRECTION, from a review of the previous attempt at this frame: " + fixes +
+            " Fix exactly these and change nothing else.")
 
 
 def _expression(meta: dict[str, Any], name: str, eyeline: str) -> str:
@@ -630,8 +719,16 @@ def finish_sequence(
     stamp: bool = True,
     model: str | None = None,
     room_refs: Callable[[dict[str, Any]], list[bytes]] | None = None,
+    review: bool = True,
+    review_tries: int = 2,
 ) -> list[FinishedFrame]:
     """Finish every frame of a sequence; the finished frames, in order.
+
+    With `review`, Muse Spark judges each finished frame beside its render
+    (`review_finished`) and a rejected frame is finished again, up to
+    `review_tries` more times, with the review's corrections appended to the
+    prompt; the last attempt stands either way, and the verdicts are kept in
+    the frame's meta under "review".
 
     `frames` are (name, measured PNG, meta) in sequence order; each finished
     PNG lands at `out_dir/finish_<name>`. A frame whose finished file already
@@ -739,10 +836,27 @@ def finish_sequence(
                                            scene_light=scene_light, mood=mood, boxes=boxes, room_index=room_index,
                                            anchor_index=anchor_index, light=scene_sun)
             raw = client.generate_image(prompt, references=refs, model=model)
+            verdicts: list[dict[str, Any]] = []
+            attempt = 0
+            while review and attempt < max(0, int(review_tries)) and hasattr(client, "chat_json"):
+                try:
+                    ok, problems = review_finished(client, raw, refs[0], meta, cast)
+                except Exception as exc:  # noqa: BLE001 - a review that fails is no verdict, not a failed frame
+                    say(kind="note", index=i, name=name, text=f"{name}: the review did not answer ({exc})")
+                    break
+                verdicts.append({"ok": ok, "problems": problems})
+                if ok:
+                    break
+                attempt += 1
+                say(kind="note", index=i, name=name,
+                    text=f"{name}: Muse Spark sent it back ({'; '.join(problems)[:160]}), finishing again")
+                prompt = prompt + correction_words(problems)
+                raw = client.generate_image(prompt, references=refs, model=model)
             out = stamp_render(raw) if stamp else raw
             ff = FinishedFrame(png=out, prompt=prompt, model=model, references=len(refs) - 1, name=name, path=dest,
                                raw=raw, meta={"headshots": len(index), "continuity": cont_index is not None,
-                                              "anchor": anchor_index is not None, "room_photos": len(room_index)})
+                                              "anchor": anchor_index is not None, "room_photos": len(room_index),
+                                              "review": {"rejected": attempt, "verdicts": verdicts}})
             ff.save(dest)
             say(kind="done", index=i, name=name, file=dest.name, text=f"finished {name}")
             return ff

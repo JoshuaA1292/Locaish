@@ -15,3 +15,6 @@ target/
 deploy/ctx/
 deploy/rooms/
 deploy/data/
+
+# cloud run env file written by deploy/deploy.sh
+deploy/.env.cloudrun.yaml

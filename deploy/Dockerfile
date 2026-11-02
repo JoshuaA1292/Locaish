@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY pyproject.toml LICENSE README.md ./
 COPY locaish ./locaish
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir . meta-sam-parser
 
 COPY rooms /app/rooms
 # The baked viewer pages must read as newer than the installed template

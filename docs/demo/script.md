@@ -1,4 +1,4 @@
-# Locaish demo, Meta Global AI Developer Hackathon (v3, about 2:50)
+# Locaish demo, Meta Global AI Developer Hackathon (v4, about 3:10)
 
 The point of the film: Meta's models read a 3D reconstruction of a real room
 and work inside it, and every claim is shown through a worked example from
@@ -7,7 +7,7 @@ on screen only as the thing the models are reading: the labelled dollhouse,
 the floor plan, the bodies and the camera rail. What fills the screen is what
 the models understand, plan, place, direct, move, lift and paint.
 
-Voice: Jamie (Premium) at 150 wpm, short sentences, one idea each. Captions
+Voice: Samantha (en_US) at 168 wpm, short sentences, one idea each. Captions
 name the model doing the work. Every finished picture carries the product's
 own "a render" tag.
 
@@ -20,7 +20,8 @@ own "a render" tag.
 | 5 | 0:47 | The studio: the scene pasted, Muse Spark's breakdown in the log, the shot table. The two problems highlighted. Caption: *Muse Spark breaks the scene into shots · the room checks every one*. | Now paste a scene. Muse Spark breaks it into beats and picks the shots. Then the room checks each one. Shot one wanted a wide on Theo from the door. No camera position holds it with a clear sightline, so it says so. Shot eight has Theo crossing in front of Maya at nine point eight seconds. Nothing is hidden. |
 | 6 | 1:09 | The red and blue bodies on their marks in the twin, then the measured frame with the body in it. Caption: *bodies at real heights on real marks*. | Maya is one sixty-eight. Theo is one eighty-four. They stand as bodies at those heights, on their marks, cut by the real furniture, in the real frame. |
 | 7 | 1:20 | Simulate: the frustum and the rail in the twin, then the operator's log: Muse Wonder's tool calls, Muse Spark's DP notes. Caption: *Muse Wonder operates the camera · Muse Spark reviews every frame as a DP*. | Tell the operator what you want. A slow push-in on Theo from the doorway. Muse Wonder drives the rig through the engine. Muse Spark watches every frame as a DP. Headroom. Eye line. Look room. It sends the move back until it holds. |
-| 8 | 1:38 | The measured frame, then the same frame finished. The animatic scrubbing through finished frames. Caption: *Muse Image finishes every frame · from the scan's own photographs*. | Then Muse Image finishes each frame. It starts from the measured render and the scan's own photographs of that angle. The same room. These people. Labelled a render, with the measured frame one toggle away. |
+| 8 | 1:38 | The measured frame, then the same frame finished. Caption: *Muse Image finishes every frame · Muse Spark reviews each one beside its render*. | Then Muse Image finishes each frame. It starts from the measured render and the scan's own photographs of that angle. The same room. These people. And Muse Spark checks every finished frame against the render: the head count, a seat under anyone sitting, the framing. What the painter invented goes back for a second pass. |
+| 8b | 1:57 | The film: every finished frame in shot order with its slate (shot, lens, size, subject, clock) and the line under it, a slow push on each. Caption: *the scene as the plan plays it · every shot finished, in order*. | Here is the scene as the plan plays it. Every shot in order, finished, with its slate. This is what the director sees before the location is booked. |
 | 9 | 1:53 | The studio: the bunk bed lifted out of the scan; nudged half a metre toward the wall, the shot table's sentence; pulled into the room, the sentence again. The plan shows it in amber. Caption: *lift a thing out of the scan and move it · the room is swept again as dressed*. | The furniture is real too. Lift the bunk bed out of the scan. Push it half a metre toward the wall, and the room is swept again as dressed: a hundred and seventy-six more clear camera setups. Pull it into the room instead, and it loses two thousand seven hundred. Every frame downstream follows it. |
 | 10 | 2:09 | SAM 3.1's mask, the piece alone as a solid, turning. The body from one photograph. Caption: *SAM 3.1 masks it · SAM 3D Objects lifts it · SAM 3D Body stands a person up*. | SAM 3.1 masks it in the frame that saw it best. SAM 3D Objects lifts it into a solid at its measured size. SAM 3D Body stands a person up from one photograph, at their height. |
 | 11 | 2:22 | Date and hour typed. The time-lapse: sixty views finished by Muse Image. Then standing on the photographs, one after another. Caption: *the room on the shoot day · sixty views finished for that hour, painted onto the measured room*. | And the shoot day itself. Fourteen November, twenty to five. Sixty views are finished by Muse Image with the sun where it will be, through that window, and painted back onto the measured room. Walk in. Stand where a view was finished and the photograph fades in. |

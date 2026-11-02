@@ -127,6 +127,11 @@ Meta key or a deployed Modal endpoint yet:
 | **SAM 3D Objects and SAM 3D Body deployed on Modal** (L40S / L4); the chair lifted from the dorm scan to a 263k-gaussian textured splat on its measured footprint in 87 s; a body to an 18k-vertex mesh in 84 s | `locaish/meta/modal_app.py`, `meta/sam3d.py`, `product/stage.py` | **live 1 Nov**, eight deploys to get the images to build (see commit b747cb2) |
 | Demo video tooling: script, DevTools screencast/poll recorder, ffmpeg assembler with cards and captions, Jamie (Premium) narration | `docs/demo/` | built 1 Nov; the cut is assembled from `docs/demo/timeline.json` |
 
+| Muse Spark reviews every finished frame beside its render (head count, a seat under anyone seated, the framing, the furniture) and a rejected frame is finished again with the correction; a seated person is told which seat | `locaish/meta/finish.py` | done 2 Nov, 3 tests; the dorm's eleven frames re-finished through it |
+| The dorm (IMG_6208) staged end to end: 18 labels, 8-beat scene, 11 finished frames, the operator's move, the bunk bed lifted by SAM 3D (479k gaussians) and moved (0.5 m north gains 176 clear setups, 0.5 m south loses 2,706), the world at 16:40 on 14 Nov | `twins/studio/511430a1306a`, `docs/demo/shoot.py` | done 2 Nov |
+| Demo v4: the film walked shot by shot with slates, labels on the photographs, the move, the grid of sixty views; Samantha narration | `docs/demo/timeline4.json`, `docs/demo/film.py`, `docs/demo/script.md` | cut 2 Nov, 3:02 |
+| Hosted dorm for judges: the showcase image with the staged room, the Meta key and the SAM 3D endpoint set on the service | `deploy/deploy.sh`, `deploy/ctx` | staged 2 Nov; deploy with `./deploy/deploy.sh <project>` |
+
 ### 1 November: the world, and why it is baked rather than trained
 
 The first world trained a fresh splat (Brush, 6000 steps) on the sixty finished

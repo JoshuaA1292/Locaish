@@ -397,7 +397,8 @@ def test_sequence_prompt_says_pose_business_eyeline_expression_composition_hour_
     meta = _staged_meta(0, (0.28, -0.12, 1.55), (-1.5, -1.4, 1.52), "15:00:04")
     p = F.build_sequence_prompt(meta=meta, cast=_cast(), headshot_index={}, light=F.frame_light(meta))
     assert "Maya" in p and "hands in pockets" in p and "looking at Theo, not at the camera" in p
-    assert "SITTING down, typing at the laptop, looking at the desk" in p
+    assert "SITTING on the desk chair at the desk, their full weight on it" in p and "never floating" in p
+    assert "typing at the laptop, looking at the desk" in p
     assert "asking a question" in p and "listening to Maya" in p
     assert "standing exactly where the figure is" not in p, "a staged person is not the passport sentence"
     assert "Maya sits on the left third of the frame" in p and "room in front of Maya on the right" in p
@@ -420,7 +421,7 @@ def test_anchor_rides_in_every_later_frame_with_the_nearest_neighbour_and_one_ho
         aim = (-1.5, -1.4, 1.52) if i < 3 else (1.0, 0.2, 1.52)
         frames.append((f"frame_{i:04d}.png", _frame_png(), _staged_meta(i, cam, aim, f"15:00:{i:02d}", speaker="Maya" if i < 3 else "Theo")))
     out = F.finish_sequence(frames, client=fake, cast=_cast(), headshots={"Theo": _png(8, 8)}, out_dir=tmp_path / "fin",
-                            workers=2, room_refs=lambda m: [b"\xff\xd8\xff1", b"\xff\xd8\xff2"])
+                            workers=2, room_refs=lambda m: [b"\xff\xd8\xff1", b"\xff\xd8\xff2"], review=False)
     assert len(out) == 6 and fake.calls == 6
     first = fake.log[0]["prompt"]
     assert "first photograph of this scene" not in first and "previous finished frame" not in first
@@ -461,7 +462,7 @@ def test_anchor_survives_a_failed_first_frame(tmp_path):
     fake = Flaky(image=_png())
     frames = [(f"frame_{i:04d}.png", _frame_png(), _staged_meta(i, (0.28, -0.12, 1.55), (-1.5, -1.4, 1.52), f"15:00:{i:02d}"))
               for i in range(4)]
-    out = F.finish_sequence(frames, client=fake, cast=_cast(), headshots={}, out_dir=tmp_path / "fin", workers=2)
+    out = F.finish_sequence(frames, client=fake, cast=_cast(), headshots={}, out_dir=tmp_path / "fin", workers=2, review=False)
     assert [f.name for f in out] == ["frame_0001.png", "frame_0002.png", "frame_0003.png"]
     # The failed call is not logged: log[0] is frame 1, which became the anchor.
     assert "first photograph" not in fake.log[0]["prompt"], "frame 1 became the anchor"

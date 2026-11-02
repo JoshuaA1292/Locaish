@@ -1,0 +1,237 @@
+{
+ "width": 1920,
+ "height": 1080,
+ "fps": 30,
+ "xfade": 0.4,
+ "segments": [
+  {
+   "video": "build/phone_6x.mp4",
+   "seconds": 8.0,
+   "caption": "one phone \u00b7 one walk through the room",
+   "caption_at": [
+    0.6,
+    7.4
+   ],
+   "voice": "build/voice4/01.wav",
+   "voice_at": 0.6
+  },
+  {
+   "card": {
+    "title": "Locaish",
+    "sub": "Meta's models, inside a measured room"
+   },
+   "seconds": 6.5,
+   "voice": "build/voice4/02.wav",
+   "voice_at": 0.3
+  },
+  {
+   "video": "build/labels_f/clip.mp4",
+   "seconds": 15.5,
+   "in": 0.0,
+   "caption": "Muse Spark reads the room \u00b7 every name checked against the geometry",
+   "caption_at": [
+    0.5,
+    17.0
+   ],
+   "voice": "build/voice4/03.wav",
+   "voice_at": 0.3
+  },
+  {
+   "video": "build/package_a/clip.mp4",
+   "seconds": 15.5,
+   "in": 0.5,
+   "caption": "the room is swept before anyone writes a shot \u00b7 9,666 camera positions, each one tested",
+   "caption_at": [
+    0.5,
+    17.0
+   ],
+   "voice": "build/voice4/04.wav",
+   "voice_at": 0.3
+  },
+  {
+   "video": "build/scene_log/clip_crop.mp4",
+   "seconds": 9.0,
+   "in": 0.0,
+   "speed": 6.0,
+   "caption": "Muse Spark breaks the scene into shots \u00b7 the room checks every one",
+   "caption_at": [
+    0.4,
+    9.0
+   ],
+   "voice": "build/voice4/05.wav",
+   "voice_at": 0.3
+  },
+  {
+   "image": "build/shots/shots_full.png",
+   "seconds": 9.0,
+   "zoom": 1.07,
+   "caption": "shot 1: no camera position with a clear sightline \u00b7 shot 8: Theo crosses in front of Maya at 9.8 s",
+   "caption_at": [
+    0.3,
+    11.0
+   ]
+  },
+  {
+   "video": "build/film/clip.mp4",
+   "seconds": 4.0,
+   "in": 12.0,
+   "label": "a render"
+  },
+  {
+   "video": "build/operator2/clip_crop.mp4",
+   "seconds": 14.0,
+   "in": 12.0,
+   "speed": 9.0,
+   "caption": "Muse Wonder operates the camera \u00b7 Muse Spark reviews every frame as a DP",
+   "caption_at": [
+    0.4,
+    15.5
+   ],
+   "voice": "build/voice4/07.wav",
+   "voice_at": 0.3
+  },
+  {
+   "video": "build/frames/clip.mp4",
+   "seconds": 18.5,
+   "in": 4.0,
+   "caption": "Muse Image finishes every frame \u00b7 Muse Spark reviews each one beside its render",
+   "caption_at": [
+    0.4,
+    18.0
+   ],
+   "voice": "build/voice4/08.wav",
+   "voice_at": 0.3,
+   "label": "a render"
+  },
+  {
+   "video": "build/film/clip.mp4",
+   "seconds": 22.0,
+   "in": 0.0,
+   "caption": "the scene as the plan plays it \u00b7 every shot finished, in order",
+   "caption_at": [
+    0.4,
+    24.0
+   ],
+   "voice": "build/voice4/08b.wav",
+   "voice_at": 0.4,
+   "label": "a render"
+  },
+  {
+   "video": "build/move/clip_crop.mp4",
+   "seconds": 17.0,
+   "in": 2.0,
+   "speed": 2.1,
+   "caption": "lift a thing out of the scan and move it \u00b7 the room is swept again as dressed",
+   "caption_at": [
+    0.4,
+    19.5
+   ],
+   "voice": "build/voice4/09.wav",
+   "voice_at": 0.3
+  },
+  {
+   "image": "build/sam3d_5114/mask.png",
+   "seconds": 4.5,
+   "zoom": 1.06,
+   "caption": "SAM 3.1 masks it in the frame that saw it best",
+   "caption_at": [
+    0.3,
+    4.2
+   ],
+   "voice": "build/voice4/10.wav",
+   "voice_at": 0.3
+  },
+  {
+   "video": "build/bed_turn/clip.mp4",
+   "seconds": 6.0,
+   "in": 0.0,
+   "caption": "SAM 3D Objects lifts it into a solid \u00b7 fitted to its measured 2.24 \u00d7 1.09 \u00d7 1.12 m",
+   "caption_at": [
+    0.3,
+    5.6
+   ],
+   "label": "a render"
+  },
+  {
+   "image": "build/sam3d/body_front.png",
+   "seconds": 4.5,
+   "zoom": 1.05,
+   "caption": "SAM 3D Body \u00b7 a person from one photograph, at their height",
+   "caption_at": [
+    0.3,
+    4.2
+   ],
+   "label": "a render"
+  },
+  {
+   "video": "build/world_grid/clip.mp4",
+   "seconds": 6.0,
+   "in": 0.0,
+   "caption": "14 November, 16:40 \u00b7 sixty views finished by Muse Image with the sun where it will be",
+   "caption_at": [
+    0.3,
+    5.6
+   ],
+   "voice": "build/voice4/11.wav",
+   "voice_at": 0.3,
+   "label": "a render"
+  },
+  {
+   "video": "build/world_walk/clip.mp4",
+   "seconds": 6.0,
+   "in": 0.0,
+   "caption": "painted onto the measured room \u00b7 the walls stay where they were measured",
+   "caption_at": [
+    0.3,
+    12.0
+   ],
+   "label": "a render"
+  },
+  {
+   "video": "build/world_walk/clip.mp4",
+   "seconds": 5.0,
+   "in": 14.2,
+   "label": "a render",
+   "caption": "stand where a view was finished and the photograph fades in",
+   "caption_at": [
+    0.3,
+    5.6
+   ]
+  },
+  {
+   "video": "build/frames/clip.mp4",
+   "seconds": 6.0,
+   "in": 10.0,
+   "caption": "nothing a model says becomes a measurement",
+   "caption_at": [
+    0.4,
+    6.6
+   ],
+   "voice": "build/voice4/12.wav",
+   "voice_at": 0.2,
+   "label": "a render"
+  },
+  {
+   "video": "build/bed_turn/clip.mp4",
+   "seconds": 5.0,
+   "in": 2.5
+  },
+  {
+   "video": "build/world_walk/clip.mp4",
+   "seconds": 3.0,
+   "in": 19.5,
+   "label": "a render"
+  },
+  {
+   "end": {
+    "title": "Locaish",
+    "sub": "the location, before anyone drives there",
+    "lines": [
+     "Muse Spark \u00b7 Muse Wonder \u00b7 Muse Image \u00b7 SAM 3.1 \u00b7 SAM 3D Objects \u00b7 SAM 3D Body",
+     "Meta Global AI Developer Hackathon \u00b7 26 October to 4 November 2026"
+    ]
+   },
+   "seconds": 5.5
+  }
+ ]
+}
