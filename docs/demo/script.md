@@ -28,3 +28,7 @@ finished picture on screen is labelled a render, as it is in the product.
 Locaish
 Muse Spark · Muse Wonder · Muse Image · SAM 3.1
 Built in the Meta Global AI Developer Hackathon, 26 October to 4 November 2026
+
+## Added 1 Nov: SAM 3D (between 6 and 7)
+
+| 6b | 2:35 | The studio: "Lift to 3D" on the chair; SAM 3.1 masks it, SAM 3D Objects returns the splat; the chair alone, textured. | The furniture is real too. SAM 3.1 masks the chair in the frame that saw it best, and SAM 3D Objects lifts it into a solid you can pick up and move, fitted to its measured footprint. |

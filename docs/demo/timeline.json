@@ -1,0 +1,203 @@
+{
+ "width": 1920,
+ "height": 1080,
+ "fps": 30,
+ "xfade": 0.4,
+ "segments": [
+  {
+   "video": "build/phone_8x.mp4",
+   "seconds": 7.0,
+   "caption": "one phone \u00b7 48 seconds",
+   "caption_at": [
+    0.6,
+    6.4
+   ],
+   "voice": "build/voice/01.wav",
+   "voice_at": 0.5
+  },
+  {
+   "card": {
+    "title": "Locaish",
+    "sub": "shoot the scene before you book the room"
+   },
+   "seconds": 3.2
+  },
+  {
+   "video": "build/twin_b/clip.mp4",
+   "seconds": 7.0,
+   "in": 0.3,
+   "caption": "a measured twin \u00b7 every centimetre traceable to the footage",
+   "caption_at": [
+    0.5,
+    6.6
+   ],
+   "voice": "build/voice/02.wav",
+   "voice_at": 0.3
+  },
+  {
+   "video": "build/world_a/clip.mp4",
+   "seconds": 10.0,
+   "in": 7.8,
+   "caption": "Muse Spark names every object \u00b7 checked against the geometry",
+   "caption_at": [
+    0.4,
+    9.5
+   ]
+  },
+  {
+   "video": "build/scene_run/clip.mp4",
+   "seconds": 11.0,
+   "in": 0.0,
+   "speed": 6.0,
+   "caption": "Muse Spark breaks the scene into beats \u00b7 placed from the measured shot table",
+   "caption_at": [
+    0.5,
+    10.5
+   ],
+   "voice": "build/voice/03.wav",
+   "voice_at": 0.3
+  },
+  {
+   "video": "build/scene_run/clip.mp4",
+   "seconds": 8.0,
+   "in": 200.0,
+   "speed": 4.0,
+   "caption": "bodies at their real heights \u00b7 the shoot day against the sun",
+   "caption_at": [
+    0.4,
+    7.6
+   ]
+  },
+  {
+   "video": "build/sim_a/clip.mp4",
+   "seconds": 8.5,
+   "in": 2.5,
+   "caption": "a camera move keyed on a real rig, in the measured room",
+   "caption_at": [
+    0.4,
+    8.0
+   ],
+   "voice": "build/voice/04.wav",
+   "voice_at": 0.3
+  },
+  {
+   "video": "build/operator/clip.mp4",
+   "seconds": 8.5,
+   "in": 0.0,
+   "speed": 8.0,
+   "caption": "Muse Wonder operates the camera \u00b7 Muse Spark reviews as a DP",
+   "caption_at": [
+    0.4,
+    8.0
+   ]
+  },
+  {
+   "video": "build/sim_a/clip.mp4",
+   "seconds": 6.5,
+   "in": 9.0,
+   "caption": "when a dolly does not fit, the room says so",
+   "caption_at": [
+    0.4,
+    6.0
+   ]
+  },
+  {
+   "video": "build/scene_run/clip.mp4",
+   "seconds": 9.0,
+   "in": 420.0,
+   "speed": 10.0,
+   "caption": "Muse Image finishes every frame from the scan's own photographs",
+   "caption_at": [
+    0.4,
+    8.6
+   ],
+   "voice": "build/voice/05.wav",
+   "voice_at": 0.3
+  },
+  {
+   "video": "build/scene_frames/clip.mp4",
+   "seconds": 8.0,
+   "in": 0.0,
+   "caption": "a render \u00b7 the measured frame one toggle away",
+   "caption_at": [
+    0.4,
+    7.6
+   ]
+  },
+  {
+   "video": "build/world_build2/clip.mp4",
+   "seconds": 9.0,
+   "in": 0.0,
+   "speed": 60.0,
+   "caption": "pick the date and the hour \u00b7 sixty views finished with the sun where it will be",
+   "caption_at": [
+    0.4,
+    8.6
+   ],
+   "voice": "build/voice/06.wav",
+   "voice_at": 0.3
+  },
+  {
+   "video": "build/world_a/clip.mp4",
+   "seconds": 16.0,
+   "in": 0.0,
+   "caption": "walk into the location as it will be on the day",
+   "caption_at": [
+    0.4,
+    15.6
+   ]
+  },
+  {
+   "video": "build/lift3d/clip_zoom.mp4",
+   "seconds": 9.0,
+   "in": 2.0,
+   "speed": 14.0,
+   "caption": "SAM 3.1 masks it \u00b7 SAM 3D Objects lifts it \u00b7 fitted to the measured footprint",
+   "caption_at": [
+    0.4,
+    7.6
+   ],
+   "voice": "build/voice/06b.wav",
+   "voice_at": 0.3
+  },
+  {
+   "image": "build/sam3d/chair_alone_0.png",
+   "seconds": 4.0,
+   "zoom": 1.08,
+   "caption": "the real chair, as a solid you can move",
+   "caption_at": [
+    0.3,
+    3.7
+   ],
+   "label": "a render"
+  },
+  {
+   "video": "build/twin_b/clip.mp4",
+   "seconds": 6.0,
+   "in": 1.0,
+   "caption": "nothing a model says becomes a measurement",
+   "caption_at": [
+    0.4,
+    5.6
+   ],
+   "voice": "build/voice/07.wav",
+   "voice_at": 0.2
+  },
+  {
+   "video": "build/world_a/clip.mp4",
+   "seconds": 6.5,
+   "in": 14.0
+  },
+  {
+   "end": {
+    "title": "Locaish",
+    "sub": "the location, before anyone drives there",
+    "lines": [
+     "Muse Spark \u00b7 Muse Wonder \u00b7 Muse Image \u00b7 SAM 3.1 \u00b7 SAM 3D Objects \u00b7 SAM 3D Body",
+     "Meta Global AI Developer Hackathon \u00b7 26 October to 4 November 2026"
+    ]
+   },
+   "seconds": 7.0
+  }
+ ]
+}

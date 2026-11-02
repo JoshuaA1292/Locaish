@@ -118,15 +118,17 @@ def build_segment(seg: dict, i: int, W: int, H: int, fps: int, root: Path, work:
         vf.append(chain + "[v0]")
     elif "image" in seg:
         src = root / seg["image"]
-        inputs += ["-loop", "1", "-framerate", str(fps), "-t", f"{secs:.3f}", "-i", str(src)]
         z = float(seg.get("zoom", 1.0))
         frames = int(secs * fps)
         if z > 1.0:
-            # a slow push in: scale up then crop a moving window
+            # One input frame; zoompan emits `frames` frames from it with a
+            # slow push in (the window shrinks as `on` runs 0..frames).
+            inputs += ["-i", str(src)]
             vf.append(f"[0:v]scale={W * 2}:{H * 2}:force_original_aspect_ratio=increase,crop={W * 2}:{H * 2},"
-                      f"zoompan=z='1+({z - 1})*on/{frames}':d={frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={W}x{H}:fps={fps},"
-                      f"format=yuv420p[v0]")
+                      f"zoompan=z='1+({z - 1:.4f})*on/{frames}':d={frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={W}x{H}:fps={fps},"
+                      f"trim=duration={secs:.3f},setpts=PTS-STARTPTS,format=yuv420p[v0]")
         else:
+            inputs += ["-loop", "1", "-framerate", str(fps), "-t", f"{secs:.3f}", "-i", str(src)]
             vf.append(f"[0:v]scale={W}:{H}:force_original_aspect_ratio=decrease,pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,format=yuv420p[v0]")
     else:
         src = root / seg["video"]

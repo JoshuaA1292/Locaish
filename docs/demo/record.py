@@ -94,7 +94,8 @@ def ws_url(port: int) -> str:
 
 
 async def run(url: str, out: Path, actions: list[dict], seconds: float, width: int, height: int,
-              headed: bool, port: int, settle: float, quality: int, every_nth: int = 1) -> Path:
+              headed: bool, port: int, settle: float, quality: int, every_nth: int = 1,
+              poll: float = 0.0) -> Path:
     out.mkdir(parents=True, exist_ok=True)
     for f in out.glob("f_*.jpg"):
         f.unlink()
@@ -112,8 +113,14 @@ async def run(url: str, out: Path, actions: list[dict], seconds: float, width: i
             await cdp.call("Page.navigate", url=url)
             await asyncio.sleep(settle)
             frames: list[tuple[float, Path]] = []
-            await cdp.call("Page.startScreencast", format="jpeg", quality=quality, maxWidth=width,
-                           maxHeight=height, everyNthFrame=max(1, int(every_nth)))
+            # Two ways to get frames: the screencast pushes one per compositor
+            # repaint (right for motion); a poll takes a screenshot every
+            # `poll` seconds (right for a time-lapse of a page that barely
+            # repaints, where the screencast goes quiet for minutes).
+            if not poll:
+                await cdp.call("Page.startScreencast", format="jpeg", quality=quality, maxWidth=width,
+                               maxHeight=height, everyNthFrame=max(1, int(every_nth)))
+            next_poll = 0.0
             t0 = time.monotonic()
             todo = sorted(actions, key=lambda a: a["at"])
             holds: list[tuple[float, str]] = []           # (release at, key)
@@ -142,15 +149,30 @@ async def run(url: str, out: Path, actions: list[dict], seconds: float, width: i
                 if "scroll" in a:
                     await cdp.js(f"window.scrollBy({{top:{float(a['scroll'])}, behavior:'smooth'}}); true")
 
+            closed = False
             while True:
                 now = time.monotonic() - t0
+                if pump.done():                      # Chrome went away: keep what was captured
+                    print("chrome closed the connection early; keeping captured frames", file=sys.stderr)
+                    closed = True
+                    break
                 while todo and todo[0]["at"] <= now:
                     a = todo.pop(0)
                     tasks.append(asyncio.create_task(act(a)))
+                tasks = [t for t in tasks if not t.done() or (t.exception() is None)]
                 for rel, k in list(holds):
                     if now >= rel:
                         holds.remove((rel, k))
                         tasks.append(asyncio.create_task(cdp.js(f"keys.delete({json.dumps(k)}); true")))
+                if poll and now >= next_poll:
+                    next_poll = now + poll
+                    try:
+                        shot = await cdp.call("Page.captureScreenshot", format="jpeg", quality=quality)
+                        path = out / f"f_{len(frames):06d}.jpg"
+                        path.write_bytes(base64.b64decode(shot["data"]))
+                        frames.append((time.monotonic() - t0, path))
+                    except Exception as e:  # noqa: BLE001
+                        print("screenshot failed:", e, file=sys.stderr)
                 try:
                     ev = await asyncio.wait_for(cdp.events.get(), timeout=0.05)
                 except asyncio.TimeoutError:
@@ -163,7 +185,11 @@ async def run(url: str, out: Path, actions: list[dict], seconds: float, width: i
                     await cdp.call("Page.screencastFrameAck", sessionId=p["sessionId"])
                 if now >= seconds:
                     break
-            await cdp.call("Page.stopScreencast")
+            if not closed and not poll:
+                try:
+                    await cdp.call("Page.stopScreencast")
+                except Exception:  # noqa: BLE001
+                    pass
             for t in tasks:
                 try:
                     await t
@@ -206,12 +232,13 @@ def main() -> None:
     ap.add_argument("--settle", type=float, default=4.0, help="seconds to wait after navigation before recording")
     ap.add_argument("--quality", type=int, default=90)
     ap.add_argument("--every-nth", type=int, default=1, help="keep every nth repaint (time-lapses)")
+    ap.add_argument("--poll", type=float, default=0.0, help="screenshot every N seconds instead of the screencast")
     a = ap.parse_args()
     actions = json.loads(Path(a.actions).read_text()) if a.actions else []
     if shutil.which("ffmpeg") is None:
         sys.exit("ffmpeg is needed")
     asyncio.run(run(a.url, Path(a.out), actions, a.seconds, a.width, a.height, a.headed, a.port, a.settle, a.quality,
-                    a.every_nth))
+                    a.every_nth, a.poll))
 
 
 if __name__ == "__main__":
