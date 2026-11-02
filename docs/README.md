@@ -10,4 +10,4 @@
 - [BUILD_OPENMVS_MACOS.md](BUILD_OPENMVS_MACOS.md), [GCP_GPU_DENSE.md](GCP_GPU_DENSE.md): dense stereo on a Mac and on a GPU box.
 - [PHASE1_SPEC.md](PHASE1_SPEC.md): the original module contracts for the twin (historical).
 - [BOTTLENECK_RESEARCH.md](BOTTLENECK_RESEARCH.md): what stands between the product and revenue.
-- [demo/](demo/): the demo film's tooling; `demo/script5.md` is the current cut.
+- [demo/](demo/): the demo film: `demo/script5.md` and `demo/timeline5.json` are the current cut, `demo/v5/` its renderers, `demo/assemble.py` and `demo/record.py` the tools; earlier cuts in `demo/archive/`.
